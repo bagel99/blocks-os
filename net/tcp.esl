@@ -1,0 +1,635 @@
+/*
+ * TCP implementation.
+ * Very, very incomplete.
+ *
+ * References:
+ *  1. RFC 793.  Transmission Control Protocol
+ *  2. Zaghal and Khan, EFSM/SDL modeling of the original TCP standard (RFC793)
+ *    and the Congestion Control Mechanism of TCP Reno.
+ *
+ * Copyright (c) 2011, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+import mbuf;
+import block;
+import inet;
+import comm;
+
+package tcp
+{
+    if !_defined(db) then
+    {   if _defined(debug.db_tcp) then
+	    alias debug.db_tcp as db;
+	else
+	    const db = 0;
+    }
+
+    alias inet.Net32 as Net32;
+    alias inet.Net16 as Net16;
+    alias inet.Proto as Proto;
+    alias inet.ULHeader as ULHeader;
+    alias inet.pULHeader as pULHeader;
+    alias event.pEvent as pEvent;
+    alias mbuf.pMBuf as pMBuf;
+    alias block.BlockID as BlockID;
+    alias block.Block as Block;
+    alias block.pBlock as pBlock;
+
+    type TCPControl:		// TCP header control word
+    {   offs: 0..15;			// in units of 32-bit words
+	_:    0..7;			// reserved;
+	ns:   boolean;
+	cwr:  boolean;
+	ece:  boolean;
+	urg:  boolean;
+	ack:  boolean;
+	psh:  boolean;
+	rst:  boolean;
+	syn:  boolean;
+	fin:  boolean;
+    }: packed, msb;
+
+    type Header:		// Definition of the wire protocol
+    {   srcport: Net16;
+	dstport: Net16;
+	seqno:   Net32;
+	ackno:   Net32;
+	cntl:    TCPControl: be;
+	window:  Net16;
+	chksum:  _uint16;
+	urgptr:  Net16;
+    };
+    type pHeader: @Header;
+
+    type TCPOptions:
+    (   EOL,    NOOP,   MSS,    WSCALE, SACKOK, SACK,   ECHO,   ECHOREPLY,
+	TIMESTAMP,		CC=11,  CCNEW,  CCECHO
+    );
+
+    // NOTE: In our event driven world, we don't have a CLOSE_WAIT state,
+    // we go directly to LAST_ACK
+    type TCPState:
+    (   CLOSED,		LISTEN,		SYN_SENT,	SYN_RECV,
+	ESTAB,		FIN_WAIT_1,	FIN_WAIT_2,	/*CLOSE_WAIT,*/
+	CLOSING,	LAST_ACK,	TIME_WAIT
+    );
+
+    // The Upper Endpoint holds all the state and "socket" information
+    type Upper:
+    {   next:     @Upper;
+	rmtaddr:  [16]_byte;
+	lclport:  inet.Port;
+	rmtport:  inet.Port;
+	info:     inet.ULInfo;
+	bid:      BlockID;
+	tag:      _uint8;
+	state:    TCPState;
+	senduna:  _uint32;      // send unacked seqno
+	sendnxt:  _uint32;      // send next seqno
+	sendwnd:  _uint16;      // send window
+	recvwnd:  _uint16;
+	recvnxt:  _uint32;
+	recvooq:  pMBuf;	// received out of order segments
+	sendreq:  pMBuf;	// re-send segments
+	sendq:    pMBuf;	// never been sent segments
+	flags:
+	{   passive: boolean;   // active or passive open
+	};
+    };
+    type pUpper: @Upper;
+
+    type Lower:
+    {   bid:    BlockID;
+	isup:   boolean;
+	hdr:    _uint8;
+	trl:    _uint8;
+	mtu:    _uint16;
+    };
+
+    type TCPBlock(Block):
+    {   lower4: Lower;		// only two lowers: IPv4 and/or IPv6
+	lower6: Lower;
+	upper:  pUpper;		// list of uppers
+    };
+    type pTCPBlock: @TCPBlock;
+
+
+    proc (up:pUpper) FlushQ(pq: @pMBuf)
+    {   var mb, next: pMBuf;
+
+	mb = pq@;
+	while mb != 0 do
+	{   next= mb.GetNext();
+	    mbuf.Free(mb);
+	    mb = next;
+	}
+	pq@ = 0;
+    }
+
+    proc (up:pUpper) FlushAllQ()
+    {
+	up.FlushQ(up.recvooq);
+	up.FlushQ(up.sendreq);
+	up.FlushQ(up.sendq);
+    }
+
+    // BEGIN DEBUG
+    proc DebugCntl(cntl: TCPControl)
+    {
+	if cntl.rst then debug.str("RST ");
+	if cntl.syn then debug.str("SYN ");
+	if cntl.fin then debug.str("FIN ");
+	if cntl.psh then debug.str("PSH ");
+	if cntl.ack then debug.str("ACK ");
+    }
+
+    const statenames: [TCPState]@[]_byte =
+    {   "CLOSED",	"LISTEN",	"SYN_SENT",	"SYN_RECV",
+	"ESTAB",	"FIN_WAIT_1",	"FIN_WAIT_2",	/*CLOSE_WAIT,*/
+	"CLOSING",	"LAST_ACK",	"TIME_WAIT"
+    };
+    proc DebugState(state: TCPState)::inline
+    {
+	debug.str(statenames[state]);
+    }
+    // END DEBUG
+
+    // Send a TCP segment
+    // The TCP header is at the head of the MBuf..
+    proc (tb: pTCPBlock) SendCommon(up:pUpper, mb: pMBuf)
+    {   var uh4: inet.pULHeader4;
+	var uh6: inet.pULHeader6;
+	var bid: BlockID;
+	var len: _uint;
+
+	len = mb.Size();
+if db > 2 then {
+var tp: pHeader;
+tp = pHeader(mb.Data());
+debug.str("tcp.SendCommon: len="); debug.uint(len);
+debug.str(" cntl="); DebugCntl(tp.cntl);
+debug.str(" sn="); debug.hex32(tp.seqno);
+debug.str(" an="); debug.hex32(tp.ackno);
+debug.nl(); }
+	// Create checksum header
+	if up.info.isipv6 then
+	{   uh6 = inet.pULHeader6(mb.GrowHead(inet.ULHeader6?size));
+	    uh6.dstaddr = up.rmtaddr;
+	    uh6.len = len;
+	    uh6.proto = Proto.TCP;
+	    uh6.zeros = 0;
+	    uh6.info = up.info;
+	    bid = tb.lower6.bid;
+	}
+	else
+	{   uh4 = inet.pULHeader4(mb.GrowHead(inet.ULHeader4?size));
+	    uh4.dstaddr = up.rmtaddr;
+	    uh4.len = len;
+	    uh4.proto = Proto.TCP;
+	    uh4.info = up.info;
+	    bid = tb.lower4.bid;
+	}
+	mb.code = SEND;
+	bid.Send(mb);	
+    }
+
+    proc (tb: pTCPBlock) SendCntl(up: pUpper, cntl: TCPControl)
+    {   var mb: pMBuf;
+	var tp: pHeader;
+	var len, hdrlen, hdroff: _uint;
+	var op: @_memory;
+
+	if up.info.isipv6 then hdroff = tb.lower6.hdr;
+	else		       hdroff = tb.lower4.hdr;
+if db > 3 then {debug.str("tcp.SendCntl cntl="); DebugCntl(cntl);
+debug.str(" hdr="); debug.uint(hdroff); debug.nl();}
+	mb = mbuf.Alloc(512, hdroff);       // FIXME: use a real size
+	tp = pHeader(mb.GrowTail(Header?size));
+	hdrlen = Header?size;
+	tp.seqno = up.sendnxt;
+	if cntl.syn then    // initial handshake, send options, bump seqno
+	{   op = mb.GrowTail(4);    // just MSS option, for now
+	    op[0:4] = { _uint8(TCPOptions.MSS), 4, (1460>>8), (1460&0xFF) };
+	    hdrlen += 4;
+	    up.sendnxt += 1;
+	} else if cntl.fin then
+	    up.sendnxt += 1;
+	cntl.offs = hdrlen/4;
+	len = hdrlen;
+	tp.cntl = cntl;
+	tp.srcport = up.lclport;
+	tp.dstport = up.rmtport;
+	if cntl.ack then tp.ackno = up.recvnxt; else tp.ackno = 0;
+	tp.window = up.recvwnd;
+	tp.urgptr = 0;
+	tb.SendCommon(up, mb);
+    }
+
+    proc (up: pUpper) SetAddrPort(uh: pULHeader, port: inet.Port)
+    {   var uh4: inet.pULHeader4;
+	var uh6: inet.pULHeader6;
+
+if db > 2 then {debug.str("tcp.SetAddrPort ifn="); debug.uint8(uh.info.ifn);
+debug.str(" isipv6="); debug.uint8(_uint8(uh.info.isipv6)); debug.nl();}
+	if uh.info.isipv6 then
+	{   uh6 = inet.pULHeader6(uh);
+	    up.rmtaddr[0:inet.IPv6AddrLen] = uh6.srcaddr;
+	}
+	else
+	{   uh4 = inet.pULHeader4(uh);
+	    up.rmtaddr[0:inet.IPv4AddrLen] = uh4.srcaddr;
+	}
+	up.info = uh.info;
+	up.rmtport = port;
+    }
+
+    proc (up: pUpper) Closed()
+    {
+	if up.flags.passive then up.state = LISTEN;
+			    else up.state = CLOSED;
+	up.rmtport = 0;
+    }
+
+    // Data has arrived to be delivered to an Upper Endpoint
+    proc (tb: pTCPBlock) URecv(up:pUpper, mb: pMBuf, tp: pHeader, uh: pULHeader)
+    {   var len: _uint;
+	var ok: boolean;
+
+	len = mb.Size() - (tp.cntl.offs * 4);
+if db > 2 then {debug.str("tcp.URecv: state="); DebugState(up.state);
+debug.str(" len=");  debug.uint(len);
+var cntl: TCPControl;  cntl = tp.cntl;
+debug.str(" ctl="); DebugCntl(cntl);
+debug.str(" sn="); debug.hex32(tp.seqno);
+debug.str(" an="); debug.hex32(tp.ackno);
+debug.nl();}
+	if up.state
+	is CLOSED then
+	{   up.SetAddrPort(uh, tp.srcport);      // need something to reply to
+	    if tp.cntl.ack then
+	    {   up.sendnxt = tp.seqno + len;
+		tb.SendCntl(up, {.rst=true, .ack=true});
+	    }
+	    else
+	    {   up.sendnxt = 0;
+		tb.SendCntl(up, {.rst=true});
+	    }
+	}
+	is LISTEN then
+	{   up.SetAddrPort(uh, tp.srcport);     // need something to reply to
+	    if !tp.cntl.rst then		    // ignore RST
+	    {   if tp.cntl.ack then
+		{   up.sendnxt =  tp.ackno;
+		    tb.SendCntl(up, {.rst=true});
+		}
+		else if tp.cntl.syn then
+		{   up.recvnxt = tp.seqno + 1;
+		    // choose random initial send sequence number
+		    up.senduna = 0x4834154b;		// FIXME: call some RNG
+		    up.sendnxt = up.senduna+1;		// FIXME: +1??
+		    tb.SendCntl(up, {.syn=true, .ack=true});    // send SYN,ACK
+		    up.state = SYN_RECV;
+		}
+	    }
+	}
+	is SYN_SENT then
+	{
+	}
+	else
+	{   // First, check for acceptable segment
+if db > 3 then {debug.str("TCPSeqOK: recvnxt="); debug.hex32(up.recvnxt);
+debug.str(" recvwnd="); debug.hex16(up.recvwnd);}
+	    if up.recvwnd == 0 then
+		ok = len == 0 && tp.seqno == up.recvnxt;
+	    else    // recvwnd != 0
+	    {   ok = up.recvnxt <= tp.seqno && tp.seqno < up.recvnxt + up.recvwnd;
+		if ok && len > 0 then
+		    ok = up.recvnxt <= tp.seqno + len -1 &&
+			 tp.seqno + len -1 < up.recvnxt + up.recvwnd;
+	    }
+if db > 3 then {debug.str(" ok="); debug.uint8(_uint8(ok)); debug.nl();}
+	    if ok then
+	    {   // Second, check the RST bit
+		if tp.cntl.rst then
+		{   if up.state
+		    is SYN_RECV then
+		    {   up.FlushQ(up.sendreq);
+			if up.flags.passive then
+			    up.state = LISTEN;
+			else    // connection refused
+			{   // FIXME: notify the upper layer
+			    up.state = CLOSED;
+			}
+		    }
+		    is ESTAB, FIN_WAIT_1, FIN_WAIT_2 then
+		    {   up.FlushAllQ();
+			// FIXME: notify upper layer
+			up.state = CLOSED;
+		    }
+		    is CLOSING, LAST_ACK, TIME_WAIT then
+		    {
+			up.state = CLOSED;
+		    }
+		    mbuf.Free(mb);
+		    return;
+		}
+		// Fourth check the SYN bit. (Third doesn't apply to us.)
+		// The SYN must be in the window otherwise the ok check
+		// would have failed, but it is still an error.
+		if tp.cntl.syn then
+		{   up.FlushAllQ();
+		    tb.SendCntl(up, {.rst=true});
+		    // FIXME: notify the upper layer
+		    up.state = CLOSED;
+		    mbuf.Free(mb);
+		    return;
+		}
+		// Fifth, check the ACK bit.  There must be one, else an error.
+		if !tp.cntl.ack then
+		{   mbuf.Free(mb);
+		    return;
+		}
+if db > 3 then {debug.str("TCPAckOK: senduna="); debug.hex32(up.senduna);
+debug.str(" sendnxt="); debug.hex32(up.sendnxt);}
+		ok = up.senduna <= tp.ackno && tp.ackno <= up.sendnxt;
+if db > 3 then {debug.str(" ok="); debug.uint8(_uint8(ok)); debug.nl();}
+		if up.state
+		is SYN_RECV then
+		{   if ok then
+		    {   up.senduna = tp.ackno;
+			up.state = ESTAB;
+			// continue, could have data
+		    }
+		    else
+		    {
+			tb.SendCntl(up, {.rst=true});
+			mbuf.Free(mb);
+			return;
+		    }
+		}
+		is ESTAB, FIN_WAIT_1, FIN_WAIT_2, CLOSING then
+		{   if ok then
+		    {   if tp.ackno > up.senduna then    // new ACK
+			{   // window update
+			    // lots to do
+			    up.senduna = tp.ackno;
+			}
+		    }
+		    else
+		    {   // could be a dup ACK or bad ACK, ignore dup
+			if tp.ackno > up.sendnxt then   // bad
+			{
+			    tb.SendCntl(up, {.ack=true});
+			    mbuf.Free(mb);
+			    return;
+			}
+		    }
+		}
+		is LAST_ACK then
+		{   up.Closed();
+		    mbuf.Free(mb);
+		    return;
+		}
+		is TIME_WAIT then
+		{
+		}        
+		// Sixth, check the URG bit.
+		// Seventh, process the data
+		if len > 0 then
+		{   if tp.seqno == up.recvnxt then   // in order
+		    {
+			up.recvnxt = tp.seqno + len;
+			tb.SendCntl(up, {.ack=true});
+			mb.ShrinkHead(tp.cntl.offs*4);
+			mb.tag = up.tag;
+			up.bid.Send(mb);
+		    }
+		    else    // out of order
+		    {
+		    }
+		}
+		// FIXME - mb may have be sent off, need copies of stuff
+		// Eighth, check the FIN bit.
+		if tp.cntl.fin then
+		{
+		    up.recvnxt = tp.seqno+1;
+		    tb.SendCntl(up, {.ack=true, .fin=true});
+		    // tell upper layer DOWN
+		    up.state = LAST_ACK;
+		}        
+	    }
+	    else    // segment not ok
+	    {   if !tp.cntl.rst then
+		{
+			tb.SendCntl(up, {.ack=true});
+		}
+	    }
+	}
+    }
+
+    // Find a matching Upper Endpoint
+    // FIXME - should match on address if bound
+    proc (tb: pTCPBlock) FindUpper(dp: pHeader, uh: pULHeader): pUpper
+    {   var up: pUpper;
+
+	up = tb.upper;
+	while up != 0 && (up.lclport != dp.dstport ||
+	       (up.rmtport != 0 && up.rmtport != dp.srcport)) do
+	    up = up.next;
+	return up;
+    }
+
+    // Process packet received from Lower Block
+    proc (tb: pTCPBlock) LRecv(mb: pMBuf)
+    {   var tp: pHeader;
+	var uh: pULHeader;
+	var up: pUpper;
+	var ulhlen: _uint;
+	var chksum: _uint16;
+	var info: inet.ULInfo;
+
+	uh = inet.pULHeader(mb.Data());
+if db > 1 then {debug.str("tcp.LRecv: size="); debug.uint(mb.Size());
+debug.str(" length="); debug.uint32(uh.len);}
+	if uh.info.isipv6 then
+	    ulhlen = inet.ULHeader6?size;
+	else
+	    ulhlen = inet.ULHeader4?size;
+	info = uh.info;
+	uh.info = inet.InfoZero;		// for checksumming
+	chksum = inet.Checksum(mb.Data(), uh.len + ulhlen);
+	uh.info = info;
+	tp = pHeader(mb.ShrinkHead(ulhlen));	// Skip over ULHeader
+if db > 1 then {debug.str(" chksum="); debug.hex16(chksum);
+debug.str(" srcport="); debug.hex16(tp.srcport);
+debug.str(" dstport="); debug.hex16(tp.dstport);
+debug.nl();}
+	// Find Upper Endpoint, if any
+	up = tb.FindUpper(tp, uh);
+	if up != 0 then
+	    tb.URecv(up, mb, tp, uh);
+	else
+	    mbuf.Free(mb);
+    }
+
+    // Process packet send by Upper Block
+    proc (tb: pTCPBlock) USend(mb: pMBuf)
+    {   var tp: pHeader;
+	var len: _uint;
+	var up: pUpper;
+	var uh: pULHeader;
+
+	up = tb.upper;
+	while up != 0 && up.tag != mb.tag do
+	    up = up.next;
+	if up != 0 then
+	{
+	    len = mb.Size();
+if db > 2 then {debug.str("tcp.USend: state="); DebugState(up.state);
+debug.str(" len=");  debug.uint(len); debug.nl(); }
+	    tp = pHeader(mb.GrowHead(Header?size));
+	    tp.cntl = {.offs=Header?size/4, .ack=true, .psh=true};
+	    tp.srcport = up.lclport;
+	    tp.dstport = up.rmtport;
+	    tp.seqno = up.sendnxt;
+	    tp.ackno = up.recvnxt;     // ACK always true for data segments
+	    tp.window = up.recvwnd;
+	    tp.urgptr = 0;
+	    up.sendnxt += len;
+	    tb.SendCommon(up, mb);
+	}
+	else
+	    mbuf.Free(mb);
+    }
+
+    proc (tb: pTCPBlock) Open(up: pUpper, addr:@[]_byte, port: inet.Port): boolean
+    {
+if db > 2 then {debug.str("tcp.Open: state="); DebugState(up.state);
+debug.str(" lclport="); debug.uint16(port); debug.nl();}
+	if up.state > LISTEN then return false;
+	if addr == 0 then  // passive
+	{   if up.state != CLOSED then return false;
+	    up.lclport = port;
+	    up.rmtport = 0;
+	    up.flags.passive = true;
+	    up.state = LISTEN;
+	}
+	else		// active
+	{   up.lclport = port;
+	    up.flags.passive = false;
+	    // FIXME: copy in addr and port
+	    // choose random initial send sequence number
+	    up.senduna = 1;		    // FIXME: call some RNG
+	    up.sendnxt = up.senduna+1;      // FIXME +1??
+	    tb.SendCntl(up, {.syn=true});       // send SYN
+	    up.state = SYN_SENT;
+	}
+	return true;
+    }
+
+    proc (tb: pTCPBlock) Close(up: pUpper, abort: boolean): boolean
+    {   var error: boolean;
+
+        error = false;
+	if up.state
+	is CLOSED then ;
+	is LISTEN then error = up.recvooq != 0;
+	is SYN_SENT then error = up.recvooq != 0 || up.sendreq != 0;
+	is SYN_RECV then
+	{   if abort then
+	    {   tb.SendCntl(up, {.rst=true});	// send RST
+		error = up.recvooq != 0 || up.sendreq != 0;
+	    }
+	    else
+	    {   if up.sendq == 0 then
+		{   tb.SendCntl(up, {.fin=true});   // send FIN
+		    up.state = FIN_WAIT_1;
+		}
+		else
+		{   // FIXME
+		}
+	    }
+	}
+	// FIXME: flush queues, freeing MBufs
+	return error;
+    }
+
+    proc Run(b: pBlock, e: pEvent)
+    {   var mb: pMBuf;
+	var tb: pTCPBlock;
+
+if db > 1 then {debug.str("tcp.Run ");  debug.uint8(_uint8(e.code));
+debug.chr(','); debug.uint8(e.tag); debug.nl();}
+        tb = pTCPBlock(b);
+        if e.code
+        is RCVD then
+        {   tb.LRecv(pMBuf(e));
+	}
+	is SEND then
+	{   tb.USend(pMBuf(e));
+	}
+	is OPEN then
+	{
+	}
+	is CLOSE then
+	{
+	}
+	is UP then
+	{   var li: comm.pLinkInfo;
+	    li = comm.pLinkInfo(e);
+if db > 1 then {debug.str("tcp.NetworkUp: net=");
+debug.uint8(li.tag); debug.chr(':');
+debug.uint8(li.hdr); debug.chr(',');
+debug.uint8(li.trl); debug.chr(',');
+debug.uint16(li.mtu); debug.nl(); }
+	    if li.tag == 0 then     // IPv4
+	    {   tb.lower4.hdr = li.hdr;
+		tb.lower4.trl = li.trl;
+	    }
+	    else		    // IPv6
+	    {   tb.lower6.hdr = li.hdr;
+		tb.lower6.trl = li.trl;
+	    }
+	}
+	is DOWN then
+	{
+	}
+	is CONNECT then
+	{   var ce: event.pConnEvent;
+	    ce = event.pConnEvent(e);
+	    if ce.type == UPPER then
+	    {   var up: pUpper;
+		up = _new(Upper);
+		_zero(up);
+		up.bid = ce.tag;
+		up.tag = ce.chan;
+		up.lclport = ce.info;
+		up.recvwnd = 4096;  // FIXME - what should this be?
+		up.flags.passive = true;
+		up.state = LISTEN;  // FIXME
+		up.next = tb.upper;
+		tb.upper = up;
+	    }
+	    _delete(ce);
+	}
+    }
+
+
+    proc NewBlock(id: BlockID): pBlock
+    {   var tb: pTCPBlock;
+	var i: _uint;
+
+	tb = _new(TCPBlock);
+	_zero(tb);
+if db > 0 then {debug.str("tcp.NewBlock ");
+debug.uint8(id); debug.chr(' ');
+debug.hex(_uint(tb)); debug.nl(); }
+	tb.BlockInit(id, Run);
+	if _defined(IPv4ID) then tb.lower4.bid = IPv4ID;
+	if _defined(IPv6ID) then tb.lower6.bid = IPv6ID;
+	return tb;
+    }
+}
+// vim: ts=8 sw=4 noet nowrap
+

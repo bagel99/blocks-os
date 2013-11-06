@@ -1,0 +1,148 @@
+/*
+ * Support the standard part of PHY chips.
+ *
+ * Copyright (c) 2009-2011, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+package phy
+{
+    const mask2 = 0xFFF0;	// mask off revision pard of ident2
+    alias eth.Speed as Speed;
+    alias eth.Duplex as Duplex;
+
+    // Standard register set
+    const BMCR   = 0;
+    const BMSR   = 1;
+    const IDR1   = 2;
+    const IDR2   = 3;
+    const ANAR   = 4;
+    const ANLPAR = 5;
+    const ANER   = 6;
+    const ANNPTR = 7;
+
+    // registers are 16-bits wide, described big-endian
+    type BMCR_REG:      // Basic Mode Control Register
+    {   reset:	boolean;
+	loopbk: boolean;
+	speed:  Speed;
+	an_enbl:boolean;
+	powerdn:boolean;
+	isolate:boolean;
+	an_strt:boolean;
+	duplex: Duplex;
+	colltst:boolean;
+	_:      0..0b111_1111;
+    }: packed, msb;
+    type BMSR_REG:      // Basic Mode Status Register
+    {   b100t4: boolean;        // 100BASE-T4 capable
+        b100fd: boolean;        // 100BASE-TX full duplex capable
+        b100hd: boolean;        // 100BASE-TX half duplex capable
+        b10fd:  boolean;        // 10BASE-T full duplex capable
+        b10hd:  boolean;        // 10BASE-T half duplex capable
+        _:      0..0b1111;
+        mfpas:  boolean;        // mgmt trans with preamble suppress capable
+        an_done:boolean;        // auto-negotiation complete
+        rmtflt: boolean;        // remote fault condition detected
+        an_able:boolean;        // auto-negotiation capable
+        link_up:boolean;        // valid link established
+        jabber: boolean;        // jabber condition detected
+        ext_reg:boolean;        // extended register capable
+    }: packed, msb;
+    type IDR2_REG:      // PHY Indentifier Register #2
+    {   oui_lsb:0..0b111111;    // bits 19-24 of the OUI
+        model:  0..0b111111;    // vendor model number
+        rev:    0..0b1111;      // vendor revision number
+    }: packed, msb;
+    type ANAR_REG:      // Auto-Negotiation Advertisement Register
+    {   np:     boolean;        // next page transfer desired
+        _:      0..1;
+        rf:     boolean;        // remote fault
+        _:      0..1;
+        asm_dir:boolean;        // asymmetric PAUSE supported
+        pause:  boolean;        // PAUSE for full duplex supported
+        b100t4: boolean;        // 100BASE-T4 supported
+        b100fd: boolean;        // 100BASE-TX full duplex supported
+        b100hd: boolean;        // 100BASE-TX half duplex supported
+        b10fd:  boolean;        // 10BASE-T full duplex supported
+        b10hd:  boolean;        // 10BASE-T half duplex supported
+        proto:  0..0b11111;     
+    }: packed, msb;
+    type ANLPAR_REG:    // Auto-Negotiation Advertisement Register
+    {   np:     boolean;        // next page transfer desired
+        ack:    boolean;	// link partner acknowledges
+        rf:     boolean;        // remote fault
+        _:      0..1;
+        asm_dir:boolean;        // asymmetric PAUSE supported
+        pause:  boolean;        // PAUSE for full duplex supported
+        b100t4: boolean;        // 100BASE-T4 supported
+        b100fd: boolean;        // 100BASE-TX full duplex supported
+        b100hd: boolean;        // 100BASE-TX half duplex supported
+        b10fd:  boolean;        // 10BASE-T full duplex supported
+        b10hd:  boolean;        // 10BASE-T half duplex supported
+        proto:  0..0b11111;     
+    }: packed, msb;
+
+    const PhyRSTTimeout = 0xFFFFF;
+
+    proc PhyInit(en: eth.Enet): boolean
+    {
+    	var to: _uint32: in, out;
+	var pv, id1, id2: _uint16;
+	var ok: boolean;
+	var i: _uint;
+
+/*
+	if sys.PhyAddr == 0 then	    // not specified, seach for a PHY
+	{   i = 1;
+	    while i < 32 do
+	    {   sys.PhyAddr = i;
+		id1, ok = en.PhyRead(IDR1);
+		id2, ok = en.PhyRead(IDR2);
+	      exit ok && id1 == sys.PhyId1 && (id2&mask2) == sys.PhyId2;
+	        i += 1;
+	    }
+	    if i > 31 then
+	    {   sys.PhyAddr = 0;
+		return false;
+	    }
+	}
+	else
+*/
+	{   id1, ok = en.PhyRead(IDR1);
+	    id2, ok = en.PhyRead(IDR2);
+	    if !ok || id1 != sys.PhyId1 || (id2&mask2) != sys.PhyId2 then
+		return false;
+	}
+	// Reset PHY and wait for reset bit to clear
+	en.PhyWrite(BMCR, _uint16(BMCR_REG{.reset=true})); // reset PHY chip
+	to = PhyRSTTimeout;
+	while to > 0 do
+	{   pv, ok = en.PhyRead(BMCR);
+	  exit ok && (pv & 0x8000) == 0;
+	    to -= 1;
+	}
+	return true;
+    }
+
+    proc SetMode(en: eth.Enet, speed: Speed, duplex: Duplex): boolean
+    {
+	return en.PhyWrite(BMCR,
+		_uint16(BMCR_REG{.speed=speed, .duplex=duplex}));
+    }
+
+    proc SetAuto(en: eth.Enet): boolean
+    {
+	return en.PhyWrite(BMCR,
+		_uint16(BMCR_REG{.an_enbl=true, .an_strt=true}));
+    }
+
+    proc GetLinkState(en: eth.Enet): boolean
+    {   var bmsr: BMSR_REG;
+	var ok: boolean;
+
+	bmsr, ok = en.PhyRead(BMSR);
+	return ok && bmsr.link_up;
+    }
+}
+

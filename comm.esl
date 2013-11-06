@@ -1,0 +1,30 @@
+/*
+ * Communication events.
+ *
+ * Copyright (c) 2012, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+import event;
+
+package comm
+{
+    type LinkType: (UNKN, ENET, PPP);
+
+    type LinkInfo(event.Event):
+    {   info:      _uint16;
+    	type:      LinkType;
+    	_:         _uint8;
+	hdr: 	   _uint8;	// header offset
+	trl:       _uint8;	// trailer offset
+	mtu:       _uint16;	// maximum transmission unit
+	id:       [16]_byte;	// link/interace identifiers
+    };
+    type pLinkInfo: @LinkInfo;
+
+    type OpenInfo(event.Event):
+    {	data  :   [32]_byte;	// large enough for inet.AddrInfo
+    };
+    type pOpenInfo: @OpenInfo;
+}
+

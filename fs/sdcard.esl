@@ -1,0 +1,487 @@
+/*
+ * Support for SD cards and (possibly) MMC
+ *
+ * Copyright (c) 2012, Brian G. Lucas.  See LICENSE file.
+ * $Id: sdcard.esl 348 2012-03-07 22:47:59Z bgl $
+ */
+
+import spi;
+
+import crc7;
+import crc16_sdcard; alias crc16_sdcard as crc16;
+
+package sdcard
+{
+    const db = 1;	// debugging level
+    type CardType: (NONE, MMC, MMCHC, SDV1, SDV2, SDHC, SDXC);
+    type SDCommands:
+    (   GO_IDLE_STATE,
+	SEND_OP_COND,
+	SEND_IF_COND,
+	SEND_CSD,
+	SEND_CID,
+	STOP_TRANSMISSION,
+	SEND_STATUS,
+	SET_BLOCKLEN,
+	READ_BLOCK,
+	READ_MULTIPLE_BLOCK,
+	WRITE_BLOCK,
+	WRITE_MULTIPLE_BLOCK,
+	PROGRAM_CSD,
+	SET_WRITE_PROT,
+	CLR_WRITE_PROT,
+	SEND_WRITE_PROT,
+	ERASE_START_ADDR,
+	ERASE_END_ADDR,
+	ERASE,
+	APP_CMD,
+	GEN_CMD,
+	READ_OCR,
+	CRC_ON_OFF,
+	ACMD41
+    );
+    // Marker tokens
+    const BUSY:     _uint8 = 0x00;
+    const STARTBLK: _uint8 = 0xFE;
+    // Response messages
+    type SDResponseT: ( R1, R1b, R2, R3, R7 );
+    type R1T:
+    {   zero:     0..1;	    // .7 - always zero
+	parmerr:  boolean;  // .6 - parameter error
+	addrerr:  boolean;  // .5 - address error
+	eraseerr: boolean;  // .4 - erase seq error
+	crcerr:   boolean;  // .3 - com CRC error
+	comderr:  boolean;  // .2 - illegal command
+	eraserst: boolean;  // .1 - erase was reset
+	idle:     boolean;  // .0 - in idle state
+    }: packed, msb;
+    type R2T:
+    {   rangeerr: boolean;  // .7 - out of range, CSD overwrite
+	eraseparm:boolean;  // .6 - invalid sector for erase
+	WPviolate:boolean;  // .5 - write to WP block
+	ECCfail:  boolean;  // .4 - uncorrectable error
+	CCerr:    boolean;  // .3 - internal card control error
+	error:    boolean;  // .2 - unclassified error
+	WPskip:   boolean;  // .1 - partial erase due to WP blocks
+	locked:   boolean;  // .0 - card is locked
+    };
+    const RespIdle:R1T =  { .zero=0, .idle=true };
+    const RespReady:R1T = { .zero=0, .idle=false };
+    type OCR:
+    {   ready:    boolean;  // .31 - finished reset
+	ccs:      boolean;  // .30 - true if HC or XC
+	_:        0..0x1F;  // .29-25
+	s18a:     boolean;  // .24 - ok to switch to 1.8 volts
+	v3_56:    boolean;  // .23 - 3.5-3.6 volts ok
+	v3_45:    boolean;  // .22
+	v3_34:    boolean;  // .21
+	v3_23:    boolean;  // .20
+	v3_12:    boolean;  // .19
+	v3_01:    boolean;  // .18
+	v2_90:    boolean;  // .17
+	v2_89:    boolean;  // .16
+	v2_78:    boolean;  // .15
+	_:        0..0x7FFF;// .14-00
+    }: packed, msb, be;
+    type CSDw0:
+    {   ver:     0..0b11;	// .31-30: 0=>version 1, 1=>version 2
+	_:       0..0x3F;
+	taac:    0..0xFF;
+	nsac:    0..0xFF;
+	speed:   0..0xFF;
+    }: packed, msb;
+    type CSDw3:
+    {   wpgrpenb:boolean;
+	_:       0..0b11;
+	wrspdf:  0..0b111;
+	wrblklen:0..0xF;
+	wrpart:  boolean;
+	_:       0..0x1F;
+	ffmtgrp: boolean;
+	copyflag:boolean;
+	wpperm:  boolean;
+	wptemp:  boolean;
+	filefmt: 0..0b11;
+	_:       0..0b11;
+	crc:     0..0x7F;
+	one:     0..1;
+    }: packed, msb;
+    type CSD1:	// CSD version 1
+    {   w0:      CSDw0: be;
+	w1:
+	{   ccc:     [12]boolean: packed,msb;	// .31-20
+	    rdblklen:0..0xF;			// .19-16
+	    rdpart:  boolean;			// .15
+	    wrnoalgn:boolean;			// .14
+	    rdnoalgn:boolean;			// .13
+	    hasdsr:  boolean;			// .12
+	    _:       0..0b11;			// .11-10
+	    sizehi:  0..0x3FF;			// .09-00
+	}: packed, msb, be;
+	w2:
+	{   sizelo:  0..0b11;			// .31-30
+	    rdcurmin:0..0b111;			// .29-27
+	    rdcurmax:0..0b111;			// .26-24
+	    wrcurmin:0..0b111;			// .23-21
+	    wrcurmax:0..0b111;			// .20-18
+	    sizemult:0..0b111;			// .17-15
+	    eroneblk:boolean;			// .14
+	    secsize: 0..0x7F;			// .13-07
+	    wprszie: 0..0x7F;			// .06-00
+	}: packed, msb, be;
+	w3:      CSDw3;
+    };
+    type CSD2:	// CSD version 2
+    {   w0:      CSDw0: be;
+	w1:
+	{   ccc:     [12]boolean: packed,msb;	// .31-20
+	    rdblklen:0..0xF;			// .19-16
+	    rdpart:  boolean;			// .15
+	    wrnoalgn:boolean;			// .14
+	    rdnoalgn:boolean;			// .13
+	    hasdsr:  boolean;			// .12
+	    _:       0..0x3F;			// .11-06
+	    sizehi:  0..0x3F;			// .05-00
+	}: packed, msb, be;
+	w2:
+	{   sizelo:  0..0xFFFF;			// .31-16
+	    _:       0..1;			// .15
+	    eroneblk:boolean;			// .14
+	    secsize: 0..0x7F;			// .13-07
+	    wprszie: 0..0x7F;			// .06-00
+	}: packed, msb, be;
+	w3:      CSDw3: be;
+    };	    
+	
+    type SDArgT: ( NONE, BLOCKLEN, ADDRESS, BOOLEAN, MISC, DUMMY );
+    type IFArg:
+    {   _:   0..0xFFFF_F;   // .31-
+    }: packed, msb;
+    type ACMD41Arg:
+    {   busy:  0..1;	    // .31 - set to zero
+	hc:    boolean;     // .30 - true if SDHC or SDXC supported
+	fb:    0..1;	    // .29
+	xpc:   boolean;     // .28 - SDXC power control
+	_:     0..0b111;    // .27-25
+	s18r:  boolean;     // .24 - switch to 1.8V
+	ocr:   0..0xFF;     // .23-08
+	_:     0..0xF;      // .07-00
+    }: packed, msb;
+    type SDComdInfo:
+    {   comd:  _uint8;
+        resp:  SDResponseT;
+        arg:   SDArgT;
+    }: packed;
+    const SDCommand: [SDCommands]SDComdInfo =
+    {   { 0x40, R1, NONE },     // GO_IDLE_STATE
+	{ 0x41, R1, NONE },     // SEND_OP_COND
+	{ 0x48, R7, MISC },     // SEND_IF_COND
+	{ 0x49, R1, NONE },     // SEND_CSD
+	{ 0x4A, R1, NONE },     // SEND_CID     
+	{ 0x4C, R1b,NONE },     // STOP_TRANSMISSION
+	{ 0x4D, R2, NONE },     // SEND_STATUS
+	{ 0x50, R1, BLOCKLEN }, // SET_BLOCKLEN
+	{ 0x51, R1, ADDRESS },  // READ_BLOCK
+	{ 0x52, R1, ADDRESS },  // READ_MULTIPLE_BLOCK
+	{ 0x58, R1, ADDRESS },  // WRITE_BLOCK
+	{ 0x59, R1, ADDRESS },  // WRITE_MULTIPLE_BLOCK
+	{ 0x5B, R1, NONE },     // PROGRAM_CSD
+	{ 0x5C, R1b,ADDRESS },  // SET_WRITE_PROT
+	{ 0x5D, R1b,ADDRESS },  // CLR_WRITE_PROT
+	{ 0x5E, R1, ADDRESS },  // SEND_WRITE_PROT
+	{ 0x60, R1, ADDRESS },  // ERASE_START_ADDR
+	{ 0x61, R1, ADDRESS },  // ERASE_END_ADDR
+	{ 0x62, R1b,DUMMY },    // ERASE
+	{ 0x77, R1, NONE },     // APP_CMD
+	{ 0x78, R1, NONE },     // GEN_CMD
+	{ 0x7A, R3, NONE },     // READ_OCR
+	{ 0x7B, R1, BOOLEAN },  // CRC_ON_OFF
+	{ 0x69, R1, ADDRESS }   // ACMD41
+    };
+
+    type State:
+    {   spi:      spi.Spi;		// SPI device
+	cs:       gpio.PortDesc;	// chip select pin
+	cardtype: CardType;
+
+    };
+    type sdc: @State;
+
+
+    const IdentificationFrequency = 400_000;    // 400KHz
+    const OperationalFrequency =  4_000_000;	//
+    const how: spi.CR1 =
+    {   .master=true,
+	.duplex=FULL,
+	.size=B8,
+	.mode=MODE0,
+	.ssm=true,
+	.format=MSB,
+	.brdiv=7
+    };
+
+    proc (sd: sdc) CardPresent(): boolean
+    {
+	return gpio.Tst(sd.cs);
+    }
+
+    proc (sd: sdc) Power(on: boolean)
+    {
+	// FIXME: do nothing but delay 1mS
+    }
+
+    proc (sd: sdc) Transfer(ch: _uint8): _uint8
+    {   var b: _uint8;
+
+	sd.spi.Send(ch);
+	b = sd.spi.Recv();
+if db > 2 then {debug.hex8(ch);debug.chr(':');debug.hex8(b);debug.nl();}
+	return b;
+    }
+
+    proc (sd: sdc) ChipSelect(assert: boolean)
+    {
+	if assert then
+	{
+if db > 2 then {debug.str("L\n");}
+	    gpio.Clr(sd.cs);			// set output to low
+	    sd.spi.Send(0xFF);			// send timing pad
+	}
+	else
+	{
+	    gpio.Set(sd.cs);			// set output to high
+if db > 2 then {debug.str("H\n");}
+	}
+    }
+
+    proc (sd: sdc) ChipSelectInit()
+    {   var portinit: gpio.PortInit;
+
+	portinit = { .conf=GP_PP_50 };
+	portinit.port = sd.cs;
+	gpio.Set(sd.cs);			// set output to high
+	gpio.Init(portinit);      		// configure as output
+    }
+
+    proc (sd: sdc) CommandSub(cmd: SDCommands, data: _uint32): R1T
+    {
+	var i: _uint;
+	var b: _uint8;
+	var buf: [6]_uint8;
+        const RespWait = 9;
+
+	buf[0] = SDCommand[cmd].comd;
+	buf[1] = _uint8(data >> 24);
+	buf[2] = _uint8(data >> 16);
+	buf[3] = _uint8(data >> 8);
+	buf[4] = _uint8(data);
+	buf[5] = (crc7.calc(buf, 5) << 1) | 0x01;
+	i = 0;
+	sd.ChipSelect(true);
+	while i < 6 do
+	{   sd.Transfer(buf[i]);
+	    i += 1;
+	}
+	// wait for response
+	i = RespWait;
+	loop
+	{   b = sd.Transfer(0xFF);
+//	  exit b != 0xFF;
+	  exit b & 0x80 == 0x00;	// hi bit is zero
+	    i -= 1;
+	  exit i == 0;
+	}
+	if i == 0 then
+	{   sd.ChipSelect(false);
+	    return R1T(_uint8?max);	// the zero bit will not be zero
+	}
+	return R1T(b);
+    }
+
+    proc (sd: sdc) Command1n(cmd: SDCommands): R1T
+    {   var r1: R1T;
+
+	r1 = sd.CommandSub(cmd, 0);
+	sd.ChipSelect(false);
+	return r1;
+    }
+
+    proc (sd: sdc) Command1d(cmd: SDCommands, data: _uint32): R1T
+    {   var r1: R1T;
+
+	r1 = sd.CommandSub(cmd, data);
+	sd.ChipSelect(false);
+	return r1;
+    }
+
+    proc (sd: sdc) Command3(cmd: SDCommands, data: _uint32): R1T, _uint32
+    {   var r1: R1T;
+	var rv: _uint32;
+
+	r1 = sd.CommandSub(cmd, data);
+	rv = sd.Transfer(0xFF) << 24;
+	rv = rv | (sd.Transfer(0xFF) << 16);
+	rv = rv | (sd.Transfer(0xFF) << 8);
+	rv = rv | sd.Transfer(0xFF);
+	sd.ChipSelect(false);
+	return r1, rv;
+    }
+
+    proc (sd: sdc) GetCapacity(): _uint32, _uint32
+    {   var r1: R1T;
+	var i: _uint;
+	var buf: [CSD2?size]_byte;
+	type pCSD1: @CSD1;
+	type pCSD2: @CSD2;
+	var csd1: pCSD1;
+	var csd2: pCSD2;
+	var size: _uint32;
+
+	r1 = sd.CommandSub(SEND_CSD, 0);
+	// FIXME check for errors
+	// wait for data token
+	while sd.Transfer(0xFF) != 0xFE do {}
+	i = 0;
+	while i < 16 do
+	{   buf[i] = sd.Transfer(0xFF);
+	    i += 1;
+	}
+	sd.ChipSelect(false);
+	csd2 = pCSD2(buf[0:]);
+	size = 0;
+	if csd2.w0.ver == 1 then	// version 2
+	    size = (((csd2.w1.sizehi << 16) | csd2.w2.sizelo) + 1) * 1024;
+	else	// assume version 1
+	{   csd1 = pCSD1(csd2);	// recast to v1
+	    // size = FIXME
+	}
+	return size, 512;	// blocksize is always 512
+    }
+
+    proc (sd: sdc) Read(blk: _uint32, buf: @[512]_byte)
+    {   var r1: R1T;
+	var tok: _uint8;
+	var crc: _uint16;
+	var i: _uint;
+
+	r1 = sd.CommandSub(READ_BLOCK, blk);
+	// FIXME check for errors
+	// wait for data token
+	while sd.Transfer(0xFF) != STARTBLK do {}
+	// read data block
+	i = 0;
+	while i < 512 do
+	{   buf[i] = sd.Transfer(0xFF);
+	    i += 1;
+	}
+	// read CRC
+	crc = sd.Transfer(0xFF);
+	crc = (crc << 8) | sd.Transfer(0xFF);
+	sd.ChipSelect(false);
+    }
+
+    proc (sd: sdc) Write(blk: _uint32, buf: @[512]_byte)
+    {   var r1: R1T;
+	var tok: _uint8;
+	var crc: _uint16;
+	var i: _uint;
+
+	crc = crc16.calc(buf, 512);
+	r1 = sd.CommandSub(WRITE_BLOCK, blk);
+	// FIXME check for errors
+	sd.Transfer(0xFF);	// pad 8 clocks
+	// send start block token
+	sd.Transfer(STARTBLK);
+	// send data block
+	i = 0;
+	while i < 512 do
+	{   sd.Transfer(buf[i]);
+	    i += 1;
+	}
+	// send CRC
+	sd.Transfer(_uint8(crc >> 8));
+	sd.Transfer(_uint8(crc));
+	// read data response
+	do
+	    tok = sd.Transfer(0xFF);
+	while tok != 0xFF;
+	if tok & 0b00011111
+	is 0b00010101 then {}	// OK
+	is 0b00011011 then {}	// CRC error
+	is 0b00011101 then {}	// Write error	
+	// wait while card is busy
+	while sd.Transfer(0xFF) == BUSY do
+	    {}
+	sd.ChipSelect(false);
+		
+    }
+
+    proc (sd: sdc) Init(spinum: _uint, cspin: gpio.PortDesc): boolean
+    {
+	var i: _uint;
+	var r1: R1T;
+	var sts: _uint32;
+	var ocr: OCR;
+	var ct: CardType;
+
+if db > 0 then debug.str("Init\n");
+	// initialize state
+	sd.cs = cspin;
+	// initialize the SPI device
+	sd.spi = spi.Init(spinum, how, 0x7);
+	// initialize the media
+	if !sd.CardPresent() then
+	{   sd.Power(false);     // turn off power
+	    return false;
+	}
+	sd.spi.SetFrequency(IdentificationFrequency);
+	sd.spi.Enable(true);
+	sd.Power(true);
+	sd.ChipSelectInit();
+if db > 1 then debug.str("I2\n");
+	i = 10;     // wait 74 clock cycles, 10*8 = 80 cycles
+	while i > 0 do
+	{   sd.Transfer(0xFF);
+	    i -= 1;
+	}
+if db > 1 then debug.str("I3\n");
+	sd.ChipSelect(true); sd.Transfer(0xFF); sd.Transfer(0xFF);
+	// reset the card
+	r1 = sd.Command1n(GO_IDLE_STATE);
+	if r1 != RespIdle then
+	    return false;
+if db > 1 then debug.str("I4\n");
+	ct = SDV1;      // assume this until we know better
+	r1,sts = sd.Command3(SEND_IF_COND, 0x0000_01AA);
+	if r1 == RespIdle then ct = SDV2;
+	i = 0;
+if db > 1 then debug.str("I5\n");
+	while i < 1000 do
+	{
+	    if ct >= SDV1 then
+	    {   r1 = sd.Command1n(APP_CMD); // escape for App cmd that follows
+		if !r1.comderr then        
+		    r1 = sd.Command1d(ACMD41, 0x4000_0000);
+		else
+		    ct = MMC;
+	    }
+	    else
+		r1 = sd.Command1n(SEND_OP_COND);
+	  exit r1 == RespReady;
+	    i += 1;
+	}
+	if i == 0 then return false;
+if db > 1 then debug.str("I5\n");
+	if ct >= SDV2 then
+	{   r1,sts = sd.Command3(READ_OCR, 0);
+	    if r1 == RespReady then
+	    {   ocr = OCR(sts);
+		if ocr.ccs then ct = SDHC;
+	    }
+	}
+	sd.cardtype = ct;
+	sd.spi.SetFrequency(OperationalFrequency);
+	return true;
+    }
+}
+

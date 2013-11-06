@@ -1,0 +1,74 @@
+/*
+ * Event is the basic unit of communication and control.
+ *
+ * Copyright (c) 2012, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+package event
+{
+    type Code:
+    (	_,
+	CONNECT,
+	START,
+    	STOP,
+    	TSTART,		// start timer in ticks
+    	TDONE,		// timer done
+    	TSTOP,		// stop timer
+    	TSTOPPED,	// timer has stopped
+	OPEN,		// from top to bottom requesting start
+	CLOSE,		// from top to bottom requesting stop
+	UP,		// from bottom to top indicating e.g., link is up
+	DOWN,		// from bottom to top indicating e.g., link is down
+	SEND,		// from top to bottom requesting transmission of data
+	RCVD		// from bottom to top indicating data received
+    );
+
+    if _uint?size == 8 then
+	type SizeT: _uint32;	// 64-bit machines
+    else
+	type SizeT: _uint16;
+
+    type EventTag: _uint8;
+    type Event:
+    {   next:  @Event;		// for linked lists
+	code:  Code: bits(8);
+	tag:   EventTag;	// source block, or protocol flow
+	xsize: SizeT;		// extended size, not including this header
+    };
+    type pEvent: @Event;
+
+    type ConnectT: (LOWER, UPPER);
+    type ConnEvent(Event):
+    {   info:  _uint16;
+	chan:  _uint8;
+	type:  ConnectT: bits(8);
+    };
+    type pConnEvent: @ConnEvent;
+
+
+    // Methods
+    proc (e: pEvent) GetNext(): pEvent : inline
+    {
+	return e.next;
+    }
+
+    proc (e: pEvent) SetNext(nexte: pEvent): : inline
+    {
+	e.next = nexte;
+    }
+
+    proc Alloc(code: Code): pEvent: inline
+    {   var e: pEvent;
+
+	e = _new(Event);
+	e.code = code;
+	return e;
+    }
+
+    proc Free(e: pEvent):: inline
+    {
+	_delete(e);
+    }	
+}
+

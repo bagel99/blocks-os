@@ -1,0 +1,171 @@
+/*
+ * USB OHCI Host Adapter
+ *
+ * Copyright (c) 2013, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+package usb_ohci
+{
+    // Open Host Controller Interface (OHCI)
+
+    type BP: @[]_byte;
+
+    type ErrorCode:
+    (   NoError,       CRC,                 BitStuffing,     DataToggleMismatch,
+	Stall,         DeviceNotResponding, PIDCheckFailure, UnexpectedPID,
+	DataOverrun,   DataUnderrun,        _,               _,
+	BufferOverrun, BufferUnderrun,      NotAccessed0,    NotAccessed1
+    );
+
+    // Transfer Descriptor (TD)
+    type TD:
+    {   Info:
+	{   _:      0..0x3_FFFF;
+	    R:      boolean;			// Buffer Rounding
+	    DP:     (SETUP, OUT, IN, _);	// Direction/PID
+	    DI:     0..0b111;			// Delay Interrupt
+	    T:      0..0b11;			// Data Toggle
+            EC:     0..3;			// Error Count
+	    CC:     ErrorCode;			// Condition Code
+	}: packed, lsb;
+	CBP:        BP;				// Current Buffer Pointer
+	NextTD:     @TD;			// Next TD
+	BE:         BP;				// Buffer End
+    }; //align(16)
+
+    // Endpoint Descriptor (ED)
+    type ED:
+    {   Info:
+	{   FA:     0..0b1111111;		// Function Address
+	    EN:     0..0b1111;			// Endpoint Number
+	    D:      (USE_TD, OUT, IN, _);	// Direction
+	    S:      (FULL, LOW);		// Speed
+	    K:      boolean;			// Skip
+	    F:      (NORMAL, ISOCH);		// Format
+	    MPS:    0..2047;			// Maximum Packet Size
+	    _:      0..0b11111;
+	}: packed, lsb;
+	TailP:      @TD;			// TD Queue Tail Pointer
+	HeadP:      @TD;			// TD Queue Head Pointer
+	NextED:     @ED;			// Next Endpoint Descripton
+    }; //align(16)
+
+    // Host Controller Communications Area
+    type HCCA:
+    {   InterruptTable: [32] @ED;
+	FrameNumber:    0..0xFFFF;
+	Pad1:           0..0xFFFF;
+	DoneHead:       @TD;
+	reserved:	[120] _byte;		// Reserved for use by HC
+    };
+
+    const NDP = 2;
+
+    type EnableT: (disable, enable);
+
+    type IntrT:		// bits in interrupt registers
+    {   SO:	boolean;
+	WDH:	boolean;
+	SF:	boolean;
+	RD:	boolean;
+	UE:	boolean;
+	FNO:	boolean;
+	RHSC:	boolean;
+	_:	0..0x7F_FFFF;
+	OC:	boolean;
+	MIE:	boolean;
+    }: packed, lsb;
+
+    type PortStatusT:
+    {   CCS:	    boolean;
+	PES:	    boolean;
+	PSS:	    boolean;	    
+	POCI:	    boolean;
+	PRS:	boolean;
+	_:		    0..0b111;
+	PPS:	    boolean;
+	LSDA:	    boolean;
+	_:		    0..0b11_1111;
+	CSC:	    boolean;
+	PESC:	    boolean;
+	PSSC:	    boolean;
+	OCIC:	    boolean;
+	PRSC:	    boolean;
+	_:		    0..0x7FF;
+    }: packed, lsb;
+
+    // The Host Controller Registers
+    type HC:
+    {   Revision:							// 0x00
+	{   REV:	    0..0xFF;
+	    _:		    0..0xFF_FFFF;
+        }: packed, lsb, ro;
+	Control:							// 0x04
+	{   CBSR:	    (ratio1, ratio2, ratio3, ratio4);
+	    PLE:	    EnableT;
+	    IE:		    EnableT;
+	    CLE:	    EnableT;
+	    BLE:	    EnableT;
+	    HCFS:	    (Reset, Resume, Operational, Suspend);
+	    IR:		    (Normal, SMI);
+	    RWC:	    EnableT;
+	    RWE:	    EnableT;
+	    _:		    0..0x1F_FFFF;
+	}: packed, lsb;
+	CommandStatus:							// 0x08
+	{   HCR:	    boolean;
+	    CLF:	    boolean;
+	    BLF:	    boolean;
+	    OCR:	    boolean;
+	    _:		    0..0xFFF;
+	    SOC:	    0..0b11;
+	    _:		    0..0x3FFF;
+	}: packed, lsb;
+	InterruptStatus:    IntrT;					// 0x0C
+	InterruptEnable:    IntrT;					// 0x10
+	InterruptDisable:   IntrT;					// 0x14
+	HCCA:		    @HCCA;					// 0x18
+	PeriodCurrentED:    @EP: ro;					// 0x1C
+	ControlHeadED:	    @EP;					// 0x20
+	ControlCurrentED:   @EP;					// 0x24
+	BulkHeadED:	    @EP;					// 0x28
+	BulkCurrentED:	    @EP;					// 0x2C
+	DoneHead:	    @EP: ro;					// 0x30
+	FmInterval:							// 0x34
+	{   FI:		    0..0xFFFF;			// low 14 bits
+	    FSMPS:	    0..0x7FFF;
+	    FIT:	    0..1;
+	}: packed, lsb;
+	FmRemaining:	    0..0xFFFF_FFFF;		// low 14 bits	// 0x38
+	FmNumber:	    0..0xFFFF_FFFF: ro;	// low 16 bits	// 0x3C
+	PeriodicStart:	    0..0xFFFF_FFFF;		// low 14 bits	// 0x40
+	LSThreshold:	    0..0xFFFF_FFFF;		// low 11 bits	// 0x44
+	RhDescriptorA:							// 0x48
+	{   NDP:	    0..0xFF;
+	    PSM:	    (all, each);
+	    NPS:	    (switched, always);
+	    DT:		    boolean;
+	    OCPM:	    (all, each);
+	    NOCP:	    (all, none);
+	    _:		    0..0x7FF;
+	    POTPGT:	    0..0xFF;
+	}: packed, lsb;
+	RhDescriptorB:							// 0x4C
+	{   DR:		    [16] boolean: packed, lsb;
+	    PPCM:	    [16] boolean: packed, lsb;
+	}: packed, lsb;
+	RhStatus:							// 0x50
+	{   LPS:	    (on, off);
+	    OCI:	    boolean;
+	    _:		    0..0x1FFF;
+	    DRWE:	    boolean;
+	    LPSC:	    boolean;
+	    CCIC:	    boolean;
+	    _:		    0..0x1FFF;
+	    CRWE:	    boolean;
+	}: packed, lsb;
+	RhPortStatus:	    [NDP] PortStatusT;				// 0x54
+    };
+}
+

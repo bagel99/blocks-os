@@ -1,0 +1,75 @@
+/*
+ * ICMP for IPv4
+ * Only does echo reply for pings.
+ *
+ * Copyright (c) 2009-2011, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+package ipv4
+{
+    type ICMPProtocols:
+    (   EchoReply=0,
+	DestinationUnreachable=3,
+	SourceQuench=4,
+	Redirect=5,
+	EchoRequest=8,
+	TimeExceeded=11,
+	ParameterProblem=12,
+	TimestampRequest=13,
+	TimestampReply=14,
+	Expansion=0xFF
+    );
+    type ICMPHeader:
+    {   type:	ICMPProtocols;
+	code:	_uint8;
+	chksum:	Net16;
+    };
+    type pICMPHeader: @ICMPHeader;
+
+    type EchoPacket(ICMPHeader):
+    {   ident:  Net16;
+	seqno:  Net16;
+	data:   []_uint8;
+    };
+
+    // Turn packet around using same mbuf, interface number is in tag
+    proc (ib: pIPv4Block) SendEchoReply(mb: pMBuf)
+    {   var up: pULHeader;
+	var cp: pICMPHeader;
+	var addr: inet.IPv4Addr;
+
+	cp = pICMPHeader(mb.Data());
+	cp.type = EchoReply;
+	cp.chksum += 0x0800;		// incremental checksum
+	up = pULHeader(mb.GrowHead(ULHeader?size));
+	addr = up.srcaddr;		// swap source and dest address
+	up.srcaddr = up.dstaddr;
+	up.dstaddr = addr;
+	ib.USend(mb);
+    }
+
+    proc (ib: pIPv4Block) ICMPRecv(mb: pMBuf)
+    {   var up: pULHeader;
+	var cp: pICMPHeader;
+	var chksum: _uint16;
+
+	up = pULHeader(mb.Data());
+	cp = pICMPHeader(mb.ShrinkHead(ULHeader?size));	// mb.OffsetHead?
+	chksum = inet.Checksum(_address(cp), up.len);
+if db > 1 then {debug.str("icmpv4.Recv: size="); debug.uint32(_uint32(mb.Size()));
+debug.str(" length="); debug.uint32(up.len);
+debug.str(" chksum="); debug.hex16(chksum);
+debug.nl();}
+	if chksum == 0 then
+	{   if cp@.type
+	    is EchoRequest then
+	    {   ib.SendEchoReply(mb);
+	    	return;
+	    }
+	    // FIXME: handle more
+	}
+	mbuf.Free(mb);
+    }
+}
+

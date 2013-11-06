@@ -1,0 +1,250 @@
+/*
+ * UDP and UDP-Lite implementation.
+ * Somewhat incomplete.
+ *
+ * Copyright (c) 2011-12, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+import mbuf;
+import block;
+import inet;
+
+package udp
+{
+    if !_defined(db) then
+    {   if _defined(debug.db_udp) then
+	    alias debug.db_udp as db;
+	else
+	    const db = 0;
+    }
+
+    alias inet.Net32 as Net32;
+    alias inet.Net16 as Net16;
+    alias inet.Proto as Proto;
+    alias inet.UDPHeader as Header;
+    alias inet.pUDPHeader as pHeader;
+    alias inet.ULHeader as ULHeader;
+    alias inet.pULHeader as pULHeader;
+    alias event.pEvent as pEvent;
+    alias mbuf.pMBuf as pMBuf;
+    alias block.BlockID as BlockID;
+    alias block.Block as Block;
+    alias block.pBlock as pBlock;
+
+    type Upper:
+    {   next:     @Upper;
+	port:     _uint16;	 // local port
+	bid:      BlockID;
+	tag:      _uint8;
+	ispassive:boolean;
+	islite:   boolean;
+    };
+    type pUpper: @Upper;
+
+    type Lower:
+    {   bid:    BlockID;
+	isup:   boolean;
+	hdr:    _uint8;
+	trl:    _uint8;
+	mtu:    _uint16;
+    };
+
+    type UDPBlock(Block):
+    {   lower4: Lower;		// only two lowers: IPv4 and/or IPv6
+	lower6: Lower;
+	upper:  pUpper;		// list of uppers
+    };
+    type pUDPBlock: @UDPBlock;
+
+    proc (ub: pUDPBlock) LRecv(mb: pMBuf)
+    {   var dp: pHeader;
+	var uh: pULHeader;
+	var uh4: inet.pULHeader4;
+	var uh6: inet.pULHeader6;
+	var up: pUpper;
+	var uhlen, chksumlen: _uint;
+	var chksum: _uint16;
+	var info: inet.ULInfo;
+	var port: inet.Port;
+	var addr: inet.IPv6Addr;
+	var pa: inet.pAddrInfo;
+
+	uh = inet.pULHeader(mb.Data());
+if db > 1 then {debug.str("udp.Recv: size="); debug.uint(mb.Size());
+debug.str(" len="); debug.uint32(uh.len);}
+	if uh.info.isipv6 then
+	{   uhlen = inet.ULHeader6?size;
+	    uh6 = inet.pULHeader6(uh);
+	    addr = uh6.srcaddr;
+	}
+	else
+	{   uhlen = inet.ULHeader4?size;
+	    uh4 = inet.pULHeader4(uh);
+	    addr = uh4.srcaddr[0:4];
+	}
+	dp = pHeader(mb.Offset(uhlen));
+	info = uh.info;
+	uh.info = inet.InfoZero;	// for checksumming
+	chksumlen = uh.len + uhlen;     // default to checksum everything
+	if uh.proto == UDPLite then
+	{   if dp.len < Header?size &&  // at minimum, checksum the header
+	       dp.len != 0 then	    // but zero means everything
+	    {   mbuf.Free(mb);      // otherwise invalid, discard
+		return;
+	    }
+	}
+	chksum = inet.Checksum(mb.Data(), chksumlen);
+	uh.info = info;
+	port = dp.srcport;
+if db > 1 then {debug.str(" cksum="); debug.hex16(chksum);
+debug.str(" sport="); debug.uint16(dp.srcport);
+debug.str(" dport="); debug.uint16(dp.dstport);
+debug.nl();}
+	up = ub.upper;
+	while up != 0 do
+	{
+	    if up.port == dp.dstport then
+	    {   pa = inet.pAddrInfo(mb.ShrinkHead(
+		    uhlen + Header?size - inet.AddrInfo?size));
+		if info.isipv6 then pa.af = inet.AFNum.IPV6;
+			       else pa.af = inet.AFNum.IPV4;
+		pa.ifn = info.ifn;
+		pa.port = port;
+		pa.addr = addr;
+		mb.tag = up.tag;
+		up.bid.Send(mb);
+		return;
+	    }
+	    up = up.next;
+	}
+	mbuf.Free(mb);	// Bad, or no-one interested, discard.	
+    }
+
+    // Process packet send by Upper Block
+    proc (ub: pUDPBlock) USend(mb: pMBuf)
+    {   var dp: pHeader;
+	var len: _uint;
+	var uh4: inet.pULHeader4;
+	var uh6: inet.pULHeader6;
+	var bid: BlockID;
+	var conn: inet.AddrInfo;
+	var pconn: inet.pAddrInfo;
+	var up: pUpper;
+
+	up = ub.upper;
+	while up != 0 && up.tag != mb.tag do
+	    up = up.next;
+	if up == 0 then
+	{   mbuf.Free(mb);
+	    return;
+	}
+	// copy connection info and then discard
+	pconn = inet.pAddrInfo(mb.Data());
+	conn = pconn@;
+	mb.ShrinkHead(inet.AddrInfo?size);
+	// create UDP header
+	dp = pHeader(mb.GrowHead(Header?size));
+	len = mb.Size();    // includes head and data
+	dp.srcport = up.port;
+	dp.dstport = conn.port;
+	dp.len = len;
+	// Create checksum header
+	if conn.af == IPV6 then
+	{   uh6 = inet.pULHeader6(mb.GrowHead(inet.ULHeader6?size));
+	    uh6.dstaddr = conn.addr[0:inet.IPv6AddrLen];
+	    uh6.len = len;
+	    uh6.proto = Proto.UDP;
+	    uh6.zeros = 0;
+	    uh6.info = inet.InfoZero;
+	    bid = ub.lower6.bid;
+	}
+	else
+	{   uh4 = inet.pULHeader4(mb.GrowHead(inet.ULHeader4?size));
+	    uh4.dstaddr = conn.addr[0:inet.IPv4AddrLen];
+	    uh4.len = len;
+	    uh4.proto = Proto.UDP;
+	    uh4.info = inet.InfoZero;
+	    bid = ub.lower4.bid;
+	}
+	mb.code = SEND;
+	bid.Send(mb);
+    }
+
+    proc (ub: pUDPBlock) Open(po: comm.pOpenInfo)
+    {   var up: pUpper;
+	var pa: inet.pAddrInfo;
+
+	pa = inet.pAddrInfo(po.data[0:inet.AddrInfo?size]);
+	// check to make sure its not open
+	
+	up = _new(Upper);
+	_zero(up);
+//	up.bid = po.to;
+//	up.tag = po.tag;
+	up.port = pa.port;
+	up.next = ub.upper;
+	ub.upper = up;
+	_delete(po);     // FIXME
+    }
+
+    proc Run(b: pBlock, e: pEvent)
+    {   var ub: pUDPBlock;
+
+if db > 1 then {debug.str("udp.Run ");  debug.uint8(_uint8(e.code));
+debug.chr(','); debug.uint8(e.tag); debug.nl();}
+        ub = pUDPBlock(b);
+        if e.code
+        is RCVD then
+        {   ub.LRecv(pMBuf(e));
+	}
+	is SEND then
+	{   ub.USend(pMBuf(e));
+	}
+	is OPEN then
+	{   // This is a Unix-style bind()
+	    ub.Open(comm.pOpenInfo(e));
+	}
+	is CLOSE then
+	{
+	}
+	is UP then
+	{
+	}
+	is DOWN then
+	{
+	}
+	is CONNECT then
+	{   var ce: event.pConnEvent;
+	    ce = event.pConnEvent(e);
+	    if ce.type == UPPER then
+	    {   var up: pUpper;
+		up = _new(Upper);
+		_zero(up);
+		up.bid = ce.tag;
+		up.tag = ce.chan;
+		up.port = ce.info;
+		up.next = ub.upper;
+		ub.upper = up;
+	    }
+	    _delete(ce);
+	}
+    }
+
+
+    proc NewBlock(id: BlockID): pBlock
+    {   var ub: pUDPBlock;
+
+	ub = _new(UDPBlock);
+	_zero(ub);
+if db > 0 then {debug.str("udp.NewBlock ");
+debug.uint8(id); debug.chr(' ');
+debug.hex(_uint(ub)); debug.nl(); }
+	ub.BlockInit(id, Run);
+	if _defined(IPv4ID) then ub.lower4.bid = IPv4ID;
+	if _defined(IPv6ID) then ub.lower6.bid = IPv6ID;
+	return ub;
+    }
+}
+// vim: ts=8 sw=4 noet nowrap
+

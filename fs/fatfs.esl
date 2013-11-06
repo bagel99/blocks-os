@@ -1,0 +1,377 @@
+ /*
+ * Support for FAT file systems
+ *
+ * Copyright (c) 2012, Brian G. Lucas.  See LICENSE file.
+ * $Id: fatfs.esl 339 2012-03-01 18:56:09Z bgl $
+ */
+
+package fatfs
+{
+    type Char: _uint8;
+    type Word16: _uint16: le;	// all integers are little endian
+    type Word32: _uint32: le;	// ditto
+    type UTF16:  _uint16: le;	// characters are UTF16
+
+    type FSType: (UNKNOWN, FAT12, FAT16, FAT32);
+    const FAT16Min = 0xFF6;
+    const FAT32Min = 0xFFF6;
+
+    const SectorSize = 512;
+
+    // At offset 0 in the partition is the BootBlock
+    type BootBlock:
+    {   jump:   [3]_uint8;	//  00 - jump instruction
+	oemname:[8]Char;	//  03
+	bytesec:Word16:align(1);//  0B (unaligned) - bytes per sector
+	seccls: 1..128;		//  0D - sectors per cluster
+	rsvdsec:Word16;		//  0E - reserved sectors
+	numfat: _uint8;		//  10 - number of fats
+	numroot:Word16:align(1);//  11 (unaligned) - number of root dirs
+	totsec1:Word16:align(1);//  13 (unaligned) - if!=0 total sectors
+	media:  _uint8;		//  15 - media descriptor
+	fatsz16:Word16;		//  16 sectors per fat (not FAT32)
+	sectrk: Word16;		//  18 sectors per track
+	heads:  Word16;		//  1A heads per disk
+	hidden: Word32;		//  1C sectors preceeding this partion
+	totsec2:Word32;		//  20 total sectors if totsec1==0
+    }: nopad;
+
+    // This is common to FAT16 and FAT32 but at different offsets
+    type BootInfo:
+    {   drive:  _uint8;		//  24,40
+	rsvd:   _uint8;		//  25,41
+	xsign:	_uint8;		//  26,42
+	volid:  [4]_uint8;	//  27,43
+	label:	[11]Char;	//  2B,47
+	fstype: [8]Char;	//  36,52
+    }: nopad;
+
+    // For FAT16 (and FAT12) the above boot block is extended as follows
+    type BootFAT16(BootBlock):
+    {   info:   BootInfo;	//  24
+	code:   [448]_uint8;	//  3E - boot code
+	sign:   [2]_uint8;	// 1FE - 0x55,0xAA
+    }: nopad;
+
+    // For FAT32 the boot block is extended as follows
+    type BootFAT32(BootBlock):
+    {   fatsz32:Word32;		//  24 - sectors per fat
+	flags:  Word16;		//  28
+	version:Word16;		//  2A - version is zero
+	rootcls:Word32;		//  2C - cluster of root directory
+	fssec:  Word16;		//  30 - sector of FS (typically 1)
+	cpsec:  Word16;		//  32 - sector of first FAT copy (typically 6)
+	zeros1: [12]_uint8;	//  34 - reserved, must be 0
+	info:   BootInfo;	//  40
+	code:   [420]_uint8;	//  5A - boot code
+	sign:   [2]_uint8;	// 1FE - 0x55,0xAA
+    }: nopad;
+
+    // FAT32 has a FS Info sector
+    type FS32Info:
+    {   sign1:    [4]Char;	//  00 - "RRaA"
+	rsvd1:    [480]_uint8;	//  04 - should be 0s
+	sign2:    [4]Char;	// 1E4 - "rrAa"
+	freecls:  Word32;	// 1E8 - number of free clusters
+	lastcls:  Word32;	// 1EC - most recently allocated cluster
+	rsvd2:    [12]_uint8;	// 1F0 - should be 0s
+	sign3:    [4]_uint8;	// 1FC - 0x00,0x00,0x55,0xAA
+    };
+
+    type FileAttr:
+    {   ReadOnly: boolean;
+	Hidden:   boolean;
+	System:   boolean;
+	VolLabel: boolean;
+	SubDir:   boolean;
+	Archive:  boolean;
+	Device:	  boolean;	// never used on disk
+	_:        boolean;
+    }: packed, lsb;
+    const LFN: FileAttr =
+	{.ReadOnly=true, .Hidden=true, .System=true, .VolLabel=true};
+
+    type MiscAttr:
+    {   _:      0..0b111;
+	baselc: boolean;	// DOS base name is lower case
+	extlc:  boolean;	// DOS extension is lower case
+	_:      0..0b111;
+    }: packed, lsb;
+
+    type Time:
+    {   sec2:   0..29;	// seconds/2
+	min:    0..59;	// minutes
+	hour:   0..23;	// hours
+    }: packed, lsb, le;
+
+    type Date:
+    {   day:    0..31;	// (1-31)
+	month:  0..12;	// (1-12)
+	year:   0..127;	// (0=1980)
+    }: packed, lsb, le;
+
+    type DirEntry:
+    {   name:	[8]Char;	// 00 - file base name, first byte is special
+	ext:	[3]Char;	// 08 - file extension
+	attr:	FileAttr;	// 0B - file attributes
+	rsvd1:  MiscAttr;	// 0C - for compatiblity, always write 0x00
+	ctms:   _uint8;		// 0D - create time 10mS units
+	ctime:  Time;		// 0E - create time
+	cdate:  Date;		// 10 - create date
+	adate:  Date;		// 12 - access date
+	clsthi: Word16;		// 14 - hi part of cluster (FAT32 only)
+	mtime:  Time;		// 16 - modification time
+	mdate:  Date;		// 18 - modification date
+	clstlo:	Word16;		// 1A - lo part of cluster
+	size:   Word32;		// 1C - file size
+    };
+
+    type LFNEntry:
+    {   seqno:  _uint8;		// 00 - sequence number, +0x40 if final
+	name1:  [5]UTF16:align(1); // 01 (unaligned) - first part of name
+	attr:   FileAttr;	// 0B - always 0x0F
+	rsvd1:  _uint8;		// 0C - always 0x00
+	chksum: _uint8;		// 0D - checksum of DOS file name
+	name2:  [6]UTF16;	// 0E - second part of name
+	clstlo: Word16;		// 1A - always 0x0000
+	name3:  [2]UTF16;	// 1C - third part of name
+    }: nopad;
+
+    proc LFNChecksum(dosname: @[11]Char): _uint8
+    {   var sum: _uint;
+	var i: _uint;
+
+	sum = 0;
+	i = 11;
+	while i > 0 do
+	{   sum = ((sum & 1) << 7) + (sum >> 1) + dosname[i];
+	    i -= 1;
+	}
+	return _uint8(sum);
+    }
+
+    // Data structure to hold info extracted from boot block
+    type State:
+    {   start:   _uint32;	// first block in file system
+	type:    FSType;
+	secpcls: 1..128;	// sectors per cluster
+	fatoff:  _uint16;	// first FAT sector
+	totlsec: _uint32;	// total sectors
+	dataoff: _uint32;	// first data sector
+	rootdir: _uint32;	// root directory sector
+	rootent: _uint32;	// root directory size (or zero)
+	sector:  _uint32;	// current sector in buf
+	buf:     [512]_byte;
+    };
+    type fsys: @State;
+
+    // FIXME - this needs to be a 'virtual' routine
+    proc (fs: fsys) Read(bn: _uint32)
+    {
+debug.str("Read 0x"); debug.hex32(bn); debug.nl();
+/*
+	if bn != fs.sector then
+	{   sys.lseek(fd, sys.off_t(bn*512), SET);
+	    sys.read(fd, fs.buf, 512);
+	    fs.sector = bn;
+	}
+*/
+	sd.Read(bn + fs.start, fs.buf);
+    }
+
+    type pBootBlock: @BootBlock;
+    type pBootFAT16: @BootFAT16;
+    type pBootFAT32: @BootFAT32;
+
+    const DirEntrysPerSector = 512 / DirEntry?size;
+
+    proc (fs: fsys) NextCluster(this: _uint32): _uint32
+    {
+    }
+
+    proc (fs: fsys) ClusterToSector(clst: _uint32): _uint32: inline
+    {
+	return (clst - 2) * fs.secpcls + fs.dataoff;
+    }
+
+    type DirArray: []DirEntry;
+    type pDirArray: @DirArray;
+
+    // size == 0 only for subdirectorys or FAT32 root directory
+    // in which case the size of the cluster is it
+    proc (fs: fsys) DumpDir(sector: _uint, nsectors: _uint,
+			       usecluster: boolean)
+    {   var i, n, s: _uint;
+	var dirs: pDirArray;
+
+debug.str("DumpDir nsectors="); debug.uint(nsectors); debug.nl();
+	fs.Read(sector);
+	loop					// loop over clusters
+	{
+	    s = 0;
+	    loop				// loop over continguous sectors
+	    {   dirs = pDirArray(fs.buf[0:]);
+		i = 0;
+		while i < DirEntrysPerSector do	// loop over directory entries
+		{
+		    if dirs[i].name[0]
+		    is 0x00, 0xE5 then	// empty or erased
+			;
+		    else
+		    {
+debug.str("\ti="); debug.uint(i);
+debug.str(" attr=0x"); debug.hex8(_uint8(dirs[i].attr));
+			if _uint8(dirs[i].attr) == _uint8(LFN) then
+			{
+debug.nl();
+			}
+		 	else
+			{   var cluster: _uint32;
+debug.str(" name=\""); debug.strn(dirs[i].name[0:8], 8);
+debug.chr('.'); debug.strn(dirs[i].ext[0:3], 3);
+			cluster = (_uint32(dirs[i].clsthi) << 16) + dirs[i].clstlo;
+debug.str("\" clst=0x"); debug.hex32(cluster);
+if cluster != 0 then {
+debug.str(" sector=0x"); debug.hex32(fs.ClusterToSector(cluster));
+}
+debug.str(" size="); debug.uint32(dirs[i].size);
+debug.nl();
+			    if dirs[i].attr.SubDir &&
+			       dirs[i].name[0] != '.' then	// recurse
+			    {
+				fs.DumpDir(fs.ClusterToSector(cluster),
+					   fs.secpcls, true);
+				// recover the sector being processed
+				fs.Read(sector + s);
+			    }
+			}
+		    }
+		    i += 1;
+		}
+		s += 1;
+	      exit s == nsectors;
+		fs.Read(sector + s);
+	    }
+	  exit !usecluster;
+debug.str("TODO - next cluster\n");
+return;
+	}
+    }
+
+    proc (fs: fsys) DumpDir16()
+    {
+	fs.DumpDir(fs.rootdir, fs.rootent / DirEntrysPerSector, false);
+    }
+
+    proc (fs: fsys) DumpDir16Old()
+    {   var i, s, nsectors: _uint;
+	var dirs: pDirArray;
+
+	nsectors = fs.rootent / DirEntrysPerSector;
+debug.str("DumpDir nentries="); debug.uint(fs.rootent);
+debug.str(" nsectors="); debug.uint(nsectors); debug.nl();
+	fs.Read(fs.rootdir);
+	s = 0;
+	loop
+	{   dirs = pDirArray(fs.buf[0:]);
+	    i = 0;
+	    while i < DirEntrysPerSector do
+	    {
+	        if dirs[i].name[0]
+		is 0x00, 0xE5 then	// empty or erased
+		    ;
+		else
+	        {
+debug.str("\ti="); debug.uint(i);
+debug.str(" attr=0x"); debug.hex8(_uint8(dirs[i].attr));
+		    if _uint8(dirs[i].attr) == _uint8(LFN) then
+		    {
+		    }
+		    else
+		    {   var cluster: _uint32;
+debug.str(" name=\""); debug.strn(dirs[i].name[0:8], 8);
+debug.chr('.'); debug.strn(dirs[i].ext[0:3], 3);
+			cluster = (_uint32(dirs[i].clsthi) << 16) + dirs[i].clstlo;
+debug.str("\" clst=0x"); debug.hex32(cluster);
+if cluster != 0 then {
+debug.str(" sector=0x"); debug.hex32(fs.ClusterToSector(cluster));
+}
+debug.str(" size="); debug.uint32(dirs[i].size);
+
+		    }
+debug.nl();
+	        }
+		i += 1;
+	    }
+	    s += 1;
+	  exit s == nsectors;
+	    fs.Read(fs.rootdir + s);
+	}
+    }
+
+    proc (fs: fsys) Init(start: _uint32): boolean
+    {   var b16: pBootFAT16;
+	var b32: pBootFAT32;
+	var numroot: _uint;
+	var numdata: _uint;
+	var numclst: _uint;
+	var fatsize: _uint;
+//	var buf: [512]_byte;
+
+	fs.start = start;	// block 0 of file system
+	fs.type = UNKNOWN;
+	fs.Read(0);
+	b16 = pBootFAT16(fs@.buf[0:]);		// access as if FAT12 or FAT16
+	b32 = pBootFAT32(fs@.buf[0:]);		// access as if FAT32
+	// check for magic signature
+//	if b16.sign != {0x55, 0xAA} then return false;
+	if b16.sign[0] != 0x55 || b16.sign[1] != 0xAA then return false;
+debug.str("Bytes per Sector="); debug.uint(b16.bytesec); debug.nl();
+//debug.str("Media=0x"); debug.hex8(b16.media); debug.nl();
+	// For now, refuse to handle media with sectors != 512 bytes
+	if b16.bytesec != SectorSize || b16.media != 0xF8 then return false;
+	fs.secpcls = b16.seccls;
+debug.str("Sectors per Cluster="); debug.uint8(fs.secpcls); debug.nl();
+	if b16.totsec1 != 0 then
+	    fs.totlsec = b16.totsec1;
+	else
+	    fs.totlsec = b16.totsec2;
+debug.str("Total Sectors="); debug.uint(fs.totlsec); debug.nl();
+	fs.fatoff = b16.rsvdsec;
+	if b16.fatsz16 != 0 then	// FAT12 or FAT16
+	    fatsize = b16.fatsz16;
+	else				// FAT32
+	    fatsize = b32.fatsz32;
+debug.str("Number of FATs="); debug.uint8(b16.numfat); debug.nl();
+debug.str("First FAT sector=0x"); debug.hex16(fs.fatoff); debug.nl();
+debug.str("Number of FAT sectors="); debug.uint(fatsize); debug.nl();
+	numroot = b16.numroot;
+debug.str("Root directory entries="); debug.uint(numroot); debug.nl();
+	fs.dataoff = fs.fatoff + (b16.numfat * fatsize) + numroot;
+	numdata = fs.totlsec - fs.dataoff;
+debug.str("First data sector=0x"); debug.hex32(fs.dataoff); debug.nl();
+debug.str("Number of data sectors="); debug.uint(numdata); debug.nl();
+	numclst = numdata / fs.secpcls;
+debug.str("Number of Clusters="); debug.uint(numclst); debug.nl();
+	if numclst >= FAT32Min then
+	{   fs.type = FAT32;
+	    fs.rootdir = fs.ClusterToSector(b32.rootcls);
+debug.str("RootDir Cluster="); debug.uint(b32.rootcls); debug.nl();
+	    fs.rootent = 0;
+	}
+	else
+	{   if numclst >= FAT16Min then
+	   	fs.type = FAT16;
+	    else
+		fs.type = FAT12;
+	    fs.rootdir = fs.fatoff + (b16.numfat * fatsize);
+	    fs.rootent = numroot / DirEntrysPerSector;
+	}
+debug.str("First root directory sector=0x"); debug.hex32(fs.rootdir); debug.nl();
+debug.str("FSType="); debug.uint8(_uint8(fs.type)); debug.nl();
+	fs.sector = _uint32?max;	// indicate nothing cached
+	return true;
+    }
+
+}
+

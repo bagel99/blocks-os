@@ -1,0 +1,148 @@
+/*
+ * CoAP protocol
+ *
+ * If over UDP, uses port 5683.
+ * References:
+ *   1.  draft-ietf-core-coap-12, 1 Oct 2012.
+ *
+ * Copyright (c) 2012, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+import mbuf;
+
+package coap
+{
+    // Codes
+    type Code:
+    (	// request codes
+	GET=			  1,
+	POST=			  2,
+	PUT=			  3,
+	DELETE=			  4,
+	// response codes, good
+	Created=		 65,
+	Deleted=		 66,
+	Valid=			 67,
+	Changed=		 68,
+	Content=		 69,
+	// response codes, bad
+	BadRequest=		128,
+	Unauthorized=		129,
+	BadOption=		130,
+	Forbidden=		131,
+	NotFound=		132,
+	MethodNotAllowed=	133,
+	NotAcceptable=		134,
+	PreconditionFailed=	140,
+	RequestEntityTooLarge=	141,
+	UnsupportedMediaType=	143,
+	// response codes, ugly
+	InternalServerError=	160,
+	NotImplemented=		161,
+	BadGateway=		162,
+	ServiceUnavailable=	163,
+	GatewayTimeout=		164,
+	ProxyingNotSupported=	165
+    ): bits(8);
+
+    type Type: (CON, NON, ACK, RST);	
+    type Header:
+    {   version: 0..3;
+        type:    Type;
+        optlen:  0..15;
+        code:    Code;
+        msgid:   _uint16: be;
+    }: packed, msb;
+    type pHeader: @Header;
+
+    type OptionID:
+    (
+	IfMatch=		  1,
+	UriHost=		  3,
+	ETag=			  4,
+	IfNoneMatch=		  5,
+	UriPort=		  7,
+	LocationPath=		  8,
+	UriPath=		 11,
+	ContentFormat=		 12,
+	MaxAge=			 14,
+	UriQuery=		 15,
+	Accept=			 16,
+	Token=			 19,
+	LocationQuery=		 20,
+	ProxyUri=		 35
+    );
+    const NumOptionsMax = 32;	// maximum number of options per packet
+
+    type OptHdr:	// first byte of an option
+    {   delta:	0..15;
+    	len:    0..15;
+    }: packed, msb;
+    const OptEnd: OptHdr = { 15, 0 };	// end of options marker
+
+    type MediaType:
+    (
+	TextPlain=		  0,	// text/plain;charset=utf-8
+	AppLinkFormat=		 40,	// application/link-format
+	AppXML=			 41,	// application/xml
+	AppOctets=		 42,	// application/octet-stream
+	AppExi=			 47,	// application/exi
+	AppJSON=		 50	// application/json
+    );
+
+    alias mbuf.MBuf as MBuf;
+    alias mbuf.pMBuf as pMBuf;
+
+    proc ParseOptions(opt: @[]_byte, nopt: _uint)
+    {   var i, n, delta, len: _uint;
+	var oid: OptionID;
+	var oh: OptHdr;
+   
+	if nopt == 15 then nopt = NumOptionsMax;
+	oid = OptionID(0);		// start with option ID of zero
+	i = 0;
+	n = 0;
+	while n < nopt-1 do
+	{   oh = OptHdr(opt[i]);
+	  exit oh == OptEnd;
+	    delta = oh.delta;
+	    len = oh.len;
+	    if delta == 15 then		// special, e.g. jumps
+	    {   if len
+	    	is 1 then delta = 15;
+	    	is 2 then delta = (opt[i+1] + 2) * 8;
+	    	is 3 then delta = ((opt[i+1])<<8 + opt[i+2] + 258) * 8;
+	    	else return; 	// error, do something
+	    	i += oh.len;
+	    }
+	    oid = OptionID(_uint8(oid) + delta);
+	    if len == 15 then		// extended length
+	    {
+	    }
+	}
+    }
+
+    proc Recv(mb: pMBuf)
+    {   var ph: pHeader;
+
+	ph = pHeader(mb.Data());
+	if ph.type
+	is ACK then
+	{
+//	    Remove(ph.msgid);
+	}
+	is RST then
+	{
+//	    Remove(ph.msgid);
+	}
+	is NON then
+	{
+	}
+	is CON then
+	{
+	}
+	
+    }  
+}
+

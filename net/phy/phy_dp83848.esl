@@ -1,0 +1,58 @@
+/*
+ * Support the NS DP83848 Ethernet PHY chip.
+ *
+ * Copyright (c) 2009-2011, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+import phy_standard;
+
+package phy
+{
+    // Extended register set
+    const PHYSTS  = 16;
+    const MICR    = 17;
+    const MISR    = 18;
+    const FCSCR   = 20;
+    const RECR    = 21;
+    const PCSR    = 22;
+    const RBR     = 23;
+    const LEDCR   = 24;
+    const PHYCR   = 25;
+    const BT10SCR = 26;
+    const CDCTRL1 = 27;
+    const EDCR    = 29;
+
+    // EXTENDED REGISTERS
+    type PHYSTS_REG:	// PHY Status Registers
+    {   _:      boolean;
+	mdiswap:boolean;	// true if MDI pairs are swapped
+	rerr:   boolean;	// receive error latch
+	polinv: boolean;	// true if polarity is inverted
+	fcarsns:boolean;	// true if false carrier event has occurred
+	sigdet: boolean;
+	desclk: boolean;
+	lnkpage:boolean;
+	_:      boolean;
+	rmtflt: boolean;
+	jabber: boolean;
+	an_done:boolean;	// auto-negotiation complete
+	loopbk: boolean;	// true if loopback enabled
+	duplex: Duplex;		// .02 0=half, 1=full
+	speed:  (S100,S10);	// .01 0=100, 1=10
+        link_up:boolean;        // .00 1=valid link established
+    }: packed, msb;
+
+    proc GetLinkSpeed(en: eth.Enet): Speed, Duplex
+    {   var pv: _uint16;
+	var ok: boolean;
+	var physts: PHYSTS_REG;
+	var speed: Speed;
+
+	pv, ok = en.PhyRead(PHYSTS);
+	physts = PHYSTS_REG(pv);
+	speed = Speed(_uint8(physts.speed)^1);	// chip is backwards
+	return speed, physts.duplex;
+    }
+}
+

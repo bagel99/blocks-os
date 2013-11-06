@@ -1,0 +1,188 @@
+/*
+ * MBufs are the basic container for data, they are an extension of Event.
+ *
+ * Copyright (c) 2009-2011, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+import event;
+
+package mbuf
+{
+    alias event.Event as Event;
+
+    type MBuf(Event):		// Built on Event
+    {	info:   _uint16;	// additional info, e.g. protocol number
+	tlen:   _uint16;	// total length of buf
+	head:	_uint16;	// offset to the current head of buffer
+	tail:	_uint16;	// offset to the current tail of buffer
+	buf:	[]_byte;	// data
+    };
+    type pMBuf: @MBuf;
+
+    // Methods - FIXME - move to event
+    proc (mb: pMBuf) GetNext(): pMBuf : inline
+    {
+	return pMBuf(mb.next);
+    }
+
+    proc (mb: pMBuf) SetNext(nextmb: pMBuf): : inline
+    {
+	mb.next = nextmb;
+    }
+
+    // Methods
+    proc (mb: pMBuf) Data(): @_memory: inline
+    {
+	return mb.buf[mb.head:];
+    }
+
+    proc (mb: pMBuf) Size(): _uint: inline
+    {
+	return mb.tail - mb.head;
+    }
+
+    proc (mb: pMBuf) GetHeadMax(): _uint: inline
+    {
+	return mb.head;
+    }
+
+    proc (mb: pMBuf) GetTailMax(): _uint: inline
+    {
+	return mb.tlen - mb.tail;
+    }
+
+    proc (mb: pMBuf) GrowHead(n: _uint): @_memory : inline
+    {
+	if n > mb.head then
+	    return 0;
+	mb.head -= n;
+	return mb.buf[mb.head:];
+    }
+
+    proc (mb: pMBuf) ShrinkHead(n: _uint): @_memory : inline
+    {
+	mb.head += n;
+	return mb.buf[mb.head:];
+    }
+
+    proc (mb: pMBuf) Offset(n: _uint): @_memory : inline
+    {
+	return mb.buf[mb.head+n:];
+    }
+
+    proc (mb: pMBuf) GrowTail(n: _uint): @_memory: inline
+    {   var pm: @_memory;
+
+	if n > mb.tlen - mb.tail then
+	   return 0;
+	pm = mb.buf[mb.tail:];
+	mb.tail += n;
+	return pm;
+    }
+
+    proc (mb: pMBuf) ShrinkTail(n: _uint): @_memory: inline
+    {
+	mb.tail -= n;
+	return mb.buf[mb.tail:];
+    }
+
+    proc (mb: pMBuf) CopyInHead(fmmb: pMBuf)
+    {   var n: _uint16;
+
+	n = fmmb.Size();
+	if n <= mb.head then
+	{   mb.head -= n;
+	    mb.buf[mb.head:n] = fmmb.buf[fmmb.head:n];
+	}
+    }
+
+    proc (mb: pMBuf) CopyInTail(fmmb: pMBuf)
+    {   var n: _uint16;
+
+	n = fmmb.Size();
+	if n <= mb.tlen - mb.tail then
+	{
+	    mb.buf[mb.tail:n] = fmmb.buf[fmmb.head:n];
+	    mb.tail += n;
+	}
+    }
+
+    proc (mb: pMBuf) CopyIn(buf: _address, len: _uint)
+    {
+	if len <= mb.tlen - mb.tail then
+	{
+	    mb.buf[mb.tail:len] = buf[0:len];
+	    mb.tail += len;
+	}
+    }
+
+if _defined(debug) then {
+    proc (mb: pMBuf) Dump(all: boolean)
+    {
+	debug.str("DumpMB: adr=");  debug.hex(_uint(mb));
+	debug.str(" tlen=");  debug.uint16(mb.tlen);
+	debug.str(" head="); debug.uint16(mb.head);
+	debug.str(" tail="); debug.uint16(mb.tail);
+	debug.str(" data="); debug.hex(_uint(mb.Data()));
+	debug.chr('\n');
+	if all then debug.dumpb("", mb.Data(), mb.Size());
+    }
+}
+
+    // Procedures
+    proc Alloc(size: _uint, offs: _uint): pMBuf
+    {   var mb: pMBuf;
+	var tsize: _uint;
+
+	tsize = size + offs;	// offs followed by size
+	mb = _new(MBuf(tsize));
+ 	if mb != 0 then
+	{   mb.code = 0;
+	    mb.next = 0;
+	    mb.tlen = tsize;
+	    mb.head = offs;
+	    mb.tail = offs;
+	}
+	return mb;
+    }
+
+    proc Free(mb: pMBuf)
+    {
+	_delete(mb(mb.tlen));
+    }	
+
+    proc Combine(mb1: pMBuf, mb2: pMBuf): pMBuf
+    {   var size1, size2, head: _uint;
+	var mb3: pMBuf;
+
+	size1 = mb1.Size();
+	size2 = mb2.Size();
+	// try to append mb2 to mb1
+	if size2 <= mb1.GetTailMax() then
+	{   mb1.CopyInTail(mb2);
+	    Free(mb2);
+	    return mb1;
+	}
+	// try to prepend mb1 to mb2
+	if size1 <= mb2.GetHeadMax() then
+	{   mb2.CopyInHead(mb1);
+	    Free(mb1);
+	    return mb2;
+	}
+	// no room in either, allocate a new one
+	// FIXME - what should the head/tail room be?
+	// for now, keep mb1 head
+	head = mb1.GetHeadMax();
+	mb3 = Alloc(head+size1+size2, head);
+	if mb3 != 0 then
+	{   mb3.CopyInTail(mb1);
+	    Free(mb1);
+	    mb3.CopyInTail(mb2);
+	    Free(mb2);
+	}
+	return mb3;	
+    }
+
+}
+

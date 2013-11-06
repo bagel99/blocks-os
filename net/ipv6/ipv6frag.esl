@@ -1,0 +1,177 @@
+/*
+ * Fragmentation support for IPv6
+ *
+ * Copyright (c) 2009-2011, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+package ipv6	// extends the package
+{
+    type FragHeader:
+    {   proto:   Proto;		// 8-bit next header type
+	_:	_uint8;
+	info:
+	{   offset:  0..0x1FFF;
+	    _:	     0..3;
+	    more:    boolean;
+	}: packed, msb, be;
+	ident:  _uint32: be;	// perhaps order doesn't matter?
+    };
+    type pFragHeader: @FragHeader;
+
+    type FragEntry:
+    {	next:	@FragEntry;
+	frags:	pMBuf;		// ordered by offset
+	iphdr:	pHeader;
+	ident:  _uint32;
+	length: _uint16;	// total length of reassembled packet
+	age:	_uint8;		// for timing out reassembly
+    };
+    type pFrag: @FragEntry;
+
+// DEBUG STUFF
+    proc (ib: pIPv6Block) FragListDump()
+    {	var fp: pFrag;
+	var mb: pMBuf;
+	var fh: pFragHeader;
+	var ip: pHeader;
+
+debug.str("\nFrag List Dump:\n");
+	fp = ib.fraghead;
+	while fp != 0 do
+	{   ip = fp.iphdr;
+debug.str("\nsrcaddr="); AddrPrint(ip.srcaddr);
+debug.str("\ndstaddr="); AddrPrint(ip.dstaddr);
+debug.str("\nident="); debug.uint32(fp.ident);
+	    mb = fp.frags;
+	    while mb != 0 do
+	    {   fh = pFragHeader(mb.Data());
+debug.str("\n\toffset="); debug.uint32(fh.info.offset * 8);
+debug.str(" length="); debug.uint32(fh.ident);
+debug.str(" more="); debug.uint8(_uint8(fh.info.more));
+		mb = mb.GetNext();
+	    }
+debug.nl();
+	    fp = fp.next;
+	}
+    }
+
+    proc (ib: pIPv6Block) RemoveFrags(fp: pFrag)
+    {   var pfp: pFrag;
+	var mb, nxtmb: pMBuf;
+
+	// Discard fragments
+	mb = fp.frags;
+	while mb != 0 do
+	{   nxtmb = mb.GetNext();
+	    mbuf.Free(mb);		// free memory
+	    mb = nxtmb;
+	}
+	// Remove Frag Header from Frag List
+	if fp == ib.fraghead then
+	    ib.fraghead = fp.next;
+	else
+	{   pfp = ib.fraghead;
+		while pfp != 0 && pfp.next != fp do
+		    pfp = pfp.next;
+		pfp.next = fp.next;
+	}
+	_delete(fp);	// free memory
+    }
+
+    proc (ib: pIPv6Block) TryReassemble(fp: pFrag)
+    {   var mb, newmb: pMBuf;
+	var fh: pFragHeader;
+	var length: _uint32;
+	var ip: pHeader;
+
+if db > 2 then {debug.str("TryReassemble\n");}
+	length = 0;
+	mb = fp.frags;
+	while mb != 0 do
+	{   fh = pFragHeader(mb.Data());
+	  exit fh.info.offset * 8 > length;		// exit if a gap
+	    length = fh.info.offset * 8 + fh.ident;	// new offset
+	  exit !fh.info.more;		// exit if more flag not set
+	    mb = mb.GetNext();
+	}
+if db > 2 then {debug.str("\tlength: have=");
+debug.uint32(length);
+debug.nl();}
+	if fh != 0 && !fh.info.more then		// we got everything
+	{   // Get a new mbuf and copy in, freeing the old fragments
+	    newmb = mbuf.Alloc(length + Header?size, 0);
+	    ip = pHeader(newmb.Data());
+	    ip@ = fp.iphdr@;		// copy IPv6 header
+	    ip.length = _uint16(length);
+	    newmb.GrowTail(Header?size);
+	    mb = fp.frags;
+	    while mb != 0 do		// FIXME: adjust for overlap
+	    {	mb.ShrinkHead(FragHeader?size);
+		newmb.CopyInTail(mb);
+		mb = mb.GetNext();
+	    }
+if db > 2 then {debug.str("\tsuccess\n");}
+	    ib.RemoveFrags(fp);
+	    // Delivery the reassembled packet
+	    ib.Deliver(newmb, ip);
+	}
+    }
+
+    proc (ib: pIPv6Block) RecvFrag(ip: pHeader, mb: pMBuf): Proto
+    {   var newfh, oldfh: pFragHeader;
+	var oldmb, prvmb: pMBuf;
+	var fp: pFrag;
+	var ident, length, offset: _uint32;
+
+	newfh = pFragHeader(mb.ShrinkHead(Header?size));
+	ident = newfh.ident;
+	offset = newfh.info.offset * 8;
+	length = mb.Size() - FragHeader?size;
+if db > 2 then {debug.str("RecvFrag\n\toffset=");
+debug.uint32(offset); debug.str(" length=");
+debug.uint32(length); debug.nl();}
+	// search for any current frags related this this one
+	fp = ib.fraghead;
+	while fp != 0 && (ident != fp.ident ||
+	     !AddrSame(ip.srcaddr, fp.iphdr.srcaddr) ||
+	     !AddrSame(ip.dstaddr, fp.iphdr.dstaddr)) do
+	    fp = fp.next;
+	newfh.ident = length; // reuse ident field to save fragment size
+	if fp == 0 then		// first fragment on list
+	{   fp = _new(FragEntry);
+	    fp.iphdr = ip;
+	    fp.ident = ident;
+	    fp.frags = mb;
+	    ib.fraghead = fp;
+	}
+	else
+	{   prvmb = 0;
+	    oldmb = fp.frags;
+	    // insert on list ordered by offset
+	    while oldmb != 0 do
+	    {
+		oldfh = pFragHeader(oldmb.Data());
+	      exit offset < oldfh.info.offset * 8;
+		prvmb = oldmb;
+		oldmb = oldmb.GetNext();
+	    }
+	    mb.SetNext(oldmb);
+	    if prvmb == 0 then
+		fp.frags = mb;
+	    else
+		prvmb.SetNext(mb);
+	}
+	if offset == 0 then		// if first fragment, use its IP header
+	{   fp.iphdr = ip;
+	    fp.iphdr.proto = newfh.proto;	// next protocol
+	}
+	if !newfh.info.more then 	// if final fragment, calculate length
+	    fp.length = _uint16((newfh.info.offset * 8) + newfh.ident);
+//ib.FragListDump();
+	if fp.length != 0 then		// see if we have all the fragments
+	    ib.TryReassemble(fp);
+	return NONEv6;
+    }
+}
+

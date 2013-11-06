@@ -1,0 +1,106 @@
+/*
+ * Definitions for USB Mass Storage Controller
+ *
+ * References:
+ * 1. Universal Serial Bus, Mass Storage Class, Bulk-Only Transport
+ *    rev 1.0, Sep 31, 1999
+ * 2. Universal Serial Bus, Mass Storage Class
+ *
+ * Copyright (c) 2013, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+import usb;
+
+package usb	// extends package
+{
+  package msc
+  {
+    const CBWSignature: _uint32 = 0x43425355;
+    type CBW:
+    {   sign:     _uint32: le;	// 00
+	tag:      _uint32: le;	// 04
+	datalen:  _uint32: le;	// 08
+    	flags:			// 0C
+    	{   dir:    (OUT,IN);
+    	    _:      0..0x7F;
+    	}: packed, lsb;
+    	lun:      _uint8;	// 0D: only low 4-bits used
+    	comdlen:  _uint8;	// 0E
+    	comdpkt:  [16]_byte;	// 0F-1E: not aligned
+    }: nopad;
+    const CBWSize = 31;
+
+    const CSWSignature: _uint32 = 0x53425355;
+    type CSWStatus: (PASSED, FAILED, PHASE, _=0xFF);
+    type CSW:
+    {   sign:     _uint32: le;	// 00
+	tag:      _uint32: le;	// 04
+	residue:  _uint32: le;	// 08
+	status:   CSWStatus;	// 0C
+    }: nopad;
+    const CSWSize = 13;
+
+    type UFIComd:
+    (   TestUnitReady=	0x00,
+    	Rezero=		0x01,
+    	RequestSense=	0x03,
+    	FormatUnit=	0x04,
+    	Inquiry=	0x12,
+    	ModeSelect6=	0x15,
+    	ModeSense6=	0x1A,
+    	StartStopUnit=	0x1B,
+    	SendDiagnostic=	0x1D,
+    	MediumRemoval=	0x1E,
+    	ReadFmtCap=	0x23,
+    	ReadCapacity=	0x25,
+    	Read10=		0x28,
+    	Write10=	0x2A,
+    	Seek10=		0x2B,
+    	WriteVerify=	0x2E,
+    	Verify=		0x2F,
+    	ModeSelect10=	0x55,
+    	ModeSense10=	0x5A,
+    	Read12=		0xA8,
+    	Write12=	0xAA,
+    	_=		0xFF
+    );
+    type SenseKey:
+    (   NoSense=	0x0,
+    	RecoveredError=	0x1,
+    	NotReady=	0x2,
+    	MediumError=	0x3,
+    	HardwareError=	0x4,
+    	IllegalRequest=	0x5,
+    	UintAttention=	0x6,
+    	DataProtect=	0x7,
+    	BlankCheck=	0x8,
+    	Vendor=		0x9,
+    	_=		0xA,
+    	AbortedCommand=	0xB,
+    	_=		0xC,
+    	VolumeOverflow=	0xD,
+    	Miscompare=	0xE,
+    	_=		0xF
+    );
+    type SenseCode:		// not all of them, just the ones we use
+    (   NoCode=		0x00,
+	ParmListLength=	0x1A,
+    	InvalidCommand=	0x20,
+    	AddressRange=	0x21,
+    	InvalidField=	0x24,
+    	InvalidParm=	0x26,
+    	MediumChange=	0x28,
+    	MediumMissing=	0x3A
+    );
+
+    // The UFI data is in big-endian
+    type ReadCapacityData:
+    {	lastblkadr:  _uint32: be;
+    	blksize:     _uint32: be;
+    };
+
+    type States: (IDLE, DATAOUT, DATAIN, INLAST, INCSW);
+  }
+}
+

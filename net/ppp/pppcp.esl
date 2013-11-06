@@ -1,0 +1,334 @@
+/*
+ * PPP Basic Link Control
+ * The LCP and NCPs for IPv4 and IPv6 are extensions to this.
+ *
+ * References:
+ *  1. Carlson, James; PPP Design and Debugging
+ *  2. RFC 1661
+ *
+ * Copyright (c) 2012, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+import block;
+import timer;
+import mbuf;
+
+package pppcp
+{
+    if _defined(debug) then
+    {   if _defined(debug.db_ppp) then
+	    alias debug.db_ppp as db;
+	else
+	    const db = 3;
+    }
+    else
+	const db = 0;
+
+    alias block.Block as Block;
+
+    /*
+     * LCP and NCP control packet codes
+     */
+    type ControlCode:
+    (   VENDOR,
+	CONF_REQ, CONF_ACK, CONF_NAK, CONF_REJ,
+	TERM_REQ, TERM_ACK,
+	CODE_REJ, PROT_REJ,
+	ECHO_REQ, ECHO_REP,
+	DISC_REQ,
+	END=255
+    );
+    type Header:
+    {   code:  ControlCode;
+        seqno: _uint8;
+        len:   _uint16: be;     // big-endian
+    }: align(1);    // worst case alignment is byte
+    type pHeader: @Header;
+    type ProtoHdr: _uint16: be, align(1);   // big-endian, unaligned
+    type pProtoHdr: @ProtoHdr;
+    type CPFrame:		// FIXME - remove
+    {   proto: _uint16: be;     // big-endian
+	code:  ControlCode;
+        seqno: _uint8;
+        len:   _uint16: be;     // big-endian
+    }: align(1);    // worst case alignment is byte
+    type pCPFrame: @CPFrame;    // FIXME - remove
+
+    type LinkEvents:
+    (   LinkUp, LinkDn,		// indications from lower level driver
+	Open, Close,		// request from upper level
+	Retry,			// timeout and retry count != 0
+	Timeout,		// timeout and retry count == 0
+	ConfReqOK,		// received good configuration request
+	ConfReqBad,		// received bad configuration request
+	ConfAck,		// received configuration ACK
+	ConfRej,		// received configuration REJ
+	ConfNak,		// received configuration NAK
+	TermReq,		// received termination request
+	TermAck			// received termination reply
+    );
+    type LinkState:
+    (   Down, Start,				// Dead phase
+	Closed, Stopped, Closing, Stopping,	// Terminate phase
+	ReqSent, AckRcvd, AckSent,		// Establish phase
+	Opened					// Open for network traffic
+    );
+const StateName: [LinkState]@[]_byte =
+{   "Down", "Start", "Closed" , "Stopped",
+    "Closing", "Stopping", "ReqSent", "AckRcvd",
+    "AckSent", "Opened"
+};
+
+    type TimerAction: (NONE, STOP, SHORT, LONG);
+    type SendAction: (NONE, TR, CR);
+    type NotifyAction: (NONE, UPPER, LOWER);
+    type CPAction:
+    {   next:   LinkState;
+	iid:    boolean;	// increment id sequence number
+	send:   SendAction;
+	timer:  TimerAction;
+	infmup: NotifyAction;	// inform upper that we are up/down
+	infmdn: NotifyAction;	// inform lower that we are up/down
+    }:packed;
+
+    const CPTable: [LinkState][LinkEvents]CPAction =
+    {   [Down]=
+        {   [LinkUp]=     {.next=Closed},
+	    [LinkDn]=     {.next=Down},
+	    [Open]=       {.next=Start, .infmup=LOWER},
+	    [Close]=      {.next=Down},
+	    [Retry]=      {.next=Down},
+	    [Timeout]=    {.next=Down},
+	    [ConfReqOK]=  {.next=Down},
+	    [ConfReqBad]= {.next=Down},
+	    [ConfAck]=    {.next=Down},
+	    [ConfRej]=    {.next=Down},
+	    [ConfNak]=    {.next=Down},
+	    [TermReq]=    {.next=Down},
+	    [TermAck]=    {.next=Down}
+	},
+	[Start]=
+        {   [LinkUp]=     {.next=ReqSent, .iid=true, .send=CR, .timer=LONG},
+	    [LinkDn]=     {.next=Down},
+	    [Open]=       {.next=Start, .infmup=LOWER},
+	    [Close]=      {.next=Closed, .infmdn=LOWER},
+	    [Retry]=      {.next=Start},
+	    [Timeout]=    {.next=Start},
+	    [ConfReqOK]=  {.next=Start},
+	    [ConfReqBad]= {.next=Start},
+	    [ConfAck]=    {.next=Start},
+	    [ConfRej]=    {.next=Start},
+	    [ConfNak]=    {.next=Start},
+	    [TermReq]=    {.next=Start},
+	    [TermAck]=    {.next=Start}
+	},
+	[Closed]=
+        {   [LinkUp]=     {.next=Closed},
+	    [LinkDn]=     {.next=Down},
+	    [Open]=       {.next=ReqSent, .iid=true, .send=CR, .timer=LONG},
+	    [Close]=      {.next=Closed},
+	    [Retry]=      {.next=Closed},
+	    [Timeout]=    {.next=Closed},
+	    [ConfReqOK]=  {.next=Closed},
+	    [ConfReqBad]= {.next=Closed},
+	    [ConfAck]=    {.next=Closed},
+	    [ConfRej]=    {.next=Closed},
+	    [ConfNak]=    {.next=Closed},
+	    [TermReq]=    {.next=Closed},
+	    [TermAck]=    {.next=Closed}
+	},
+	[Stopped]=
+        {   [LinkUp]=     {.next=Stopped},
+	    [LinkDn]=     {.next=Start, .infmup=LOWER},
+	    [Open]=       {.next=Stopped},
+	    [Close]=      {.next=Closed},
+	    [Retry]=      {.next=Stopped},
+	    [Timeout]=    {.next=Stopped},
+	    [ConfReqOK]=  {.next=AckSent, .iid=true, .send=CR, .timer=LONG},
+	    [ConfReqBad]= {.next=ReqSent, .iid=true, .send=CR, .timer=LONG},
+	    [ConfAck]=    {.next=Stopped},
+	    [ConfRej]=    {.next=Stopped},
+	    [ConfNak]=    {.next=Stopped},
+	    [TermReq]=    {.next=Stopped},
+	    [TermAck]=    {.next=Stopped}
+	},
+	[Closing]=
+        {   [LinkUp]=     {.next=Closing},
+	    [LinkDn]=     {.next=Down},
+	    [Open]=       {.next=Stopping},
+	    [Close]=      {.next=Closing},
+	    [Retry]=      {.next=Closing, .send=TR},
+	    [Timeout]=    {.next=Closed, .infmdn=LOWER},
+	    [ConfReqOK]=  {.next=Closing},
+	    [ConfReqBad]= {.next=Closing},
+	    [ConfAck]=    {.next=Closing},
+	    [ConfRej]=    {.next=Closing},
+	    [ConfNak]=    {.next=Closing},
+	    [TermReq]=    {.next=Closing},
+	    [TermAck]=    {.next=Closed, .infmdn=LOWER}
+	},
+	[Stopping]=
+        {   [LinkUp]=     {.next=Stopping},
+	    [LinkDn]=     {.next=Start},
+	    [Open]=       {.next=Stopping},
+	    [Close]=      {.next=Closing},
+	    [Retry]=      {.next=Stopping, .send=TR},
+	    [Timeout]=    {.next=Stopped, .infmdn=LOWER},
+	    [ConfReqOK]=  {.next=Stopping},
+	    [ConfReqBad]= {.next=Stopping},
+	    [ConfAck]=    {.next=Stopping},
+	    [ConfRej]=    {.next=Stopping},
+	    [ConfNak]=    {.next=Stopping},
+	    [TermReq]=    {.next=Stopping},
+	    [TermAck]=    {.next=Stopped, .infmdn=LOWER}
+	},
+	[ReqSent]=
+        {   [LinkUp]=     {.next=ReqSent},
+	    [LinkDn]=     {.next=Start},
+	    [Open]=       {.next=ReqSent},
+	    [Close]=      {.next=Closing, .iid=true, .send=TR, .timer=SHORT},
+	    [Retry]=      {.next=ReqSent, .send=CR},
+	    [Timeout]=    {.next=Stopped, .infmdn=LOWER},
+	    [ConfReqOK]=  {.next=AckSent},
+	    [ConfReqBad]= {.next=ReqSent},
+	    [ConfAck]=    {.next=AckRcvd, .timer=LONG},
+	    [ConfRej]=    {.next=ReqSent},
+	    [ConfNak]=    {.next=ReqSent, .iid=true, .send=CR, .timer=LONG},
+	    [TermReq]=    {.next=ReqSent},
+	    [TermAck]=    {.next=ReqSent}
+	},
+	[AckRcvd]=
+        {   [LinkUp]=     {.next=AckRcvd},
+	    [LinkDn]=     {.next=Start},
+	    [Open]=       {.next=AckRcvd},
+	    [Close]=      {.next=Closing, .iid=true, .send=TR, .timer=SHORT},
+	    [Retry]=      {.next=ReqSent, .send=CR},
+	    [Timeout]=    {.next=Stopped, .infmdn=LOWER},
+	    [ConfReqOK]=  {.next=Opened, .timer=STOP, .infmup=UPPER},
+	    [ConfReqBad]= {.next=AckRcvd},
+	    [ConfAck]=    {.next=Opened, .timer=STOP, .infmup=UPPER},
+	    [ConfRej]=    {.next=AckRcvd},
+	    [ConfNak]=    {.next=ReqSent, .iid=true, .send=CR, .timer=LONG},
+	    [TermReq]=    {.next=ReqSent},
+	    [TermAck]=    {.next=ReqSent}
+	},
+	[AckSent]=
+        {   [LinkUp]=     {.next=AckSent},
+	    [LinkDn]=     {.next=Start},
+	    [Open]=       {.next=AckSent},
+	    [Close]=      {.next=Closing, .iid=true, .send=TR, .timer=SHORT},
+	    [Retry]=      {.next=AckSent, .send=CR},
+	    [Timeout]=    {.next=Stopped, .infmdn=LOWER},
+	    [ConfReqOK]=  {.next=AckSent},
+	    [ConfReqBad]= {.next=ReqSent},
+	    [ConfAck]=    {.next=Opened, .timer=STOP, .infmup=UPPER},
+	    [ConfRej]=    {.next=AckSent},
+	    [ConfNak]=    {.next=AckSent, .iid=true, .send=CR, .timer=LONG},
+	    [TermReq]=    {.next=ReqSent},
+	    [TermAck]=    {.next=AckSent}
+	},
+	[Opened]=
+        {   [LinkUp]=     {.next=Opened},
+	    [LinkDn]=     {.next=Start, .infmdn=UPPER},
+	    [Open]=       {.next=Opened},
+	    [Close]=      {.next=Closing, .iid=true, .send=TR, .timer=SHORT, .infmdn=UPPER},
+	    [Retry]=      {.next=Opened},
+	    [Timeout]=    {.next=Opened},
+	    [ConfReqOK]=  {.next=AckSent, .send=CR, .infmdn=UPPER},
+	    [ConfReqBad]= {.next=ReqSent, .send=CR, .infmdn=UPPER},
+	    [ConfAck]=    {.next=ReqSent, .send=CR, .infmdn=UPPER},
+	    [ConfRej]=    {.next=Opened},
+	    [ConfNak]=    {.next=ReqSent, .iid=true, .send=CR, .infmdn=UPPER},
+	    [TermReq]=    {.next=Stopping, .timer=STOP, .infmdn=UPPER},
+	    [TermAck]=    {.next=ReqSent, .send=CR, .infmdn=UPPER}
+	}
+    };
+
+    const LongTimeout = 10;	// 10 retries
+    const ShortTimeout = 2;	// 2 retries
+    const InitialTimeout = 2;   // 2 seconds
+
+    type PPPCPBlock(Block):
+    {   state:    LinkState;
+	seqno:    _uint8;
+        retry:    _uint8;
+        tout:     _uint8;
+	hdr:      _uint8;
+        trl:      _uint8;
+        mtu:      _uint16;
+	timer:    block.BlockID;
+	lower:    block.BlockID;    // LCP and NCPs have one lower
+    };
+    type pPPPCPBlock: @PPPCPBlock;
+	 
+    proc (pb: pPPPCPBlock) TimerStop()
+    {   var te: timer.pTimerEvent;
+
+	te = _new(timer.TimerEvent);
+	te.code = TSTOP;
+	te.tag = pb.id;
+	pb.timer.Send(te);
+    }
+
+    proc (pb: pPPPCPBlock) TimerRestart(te: timer.pTimerEvent)
+    {
+	te.code = TSTART;
+	te.tag = pb.id;
+	te.ticks = timer.SecondsToTicks(pb.tout);
+	pb.timer.Send(te);
+    }
+
+    proc (pb: pPPPCPBlock) TimerStart()
+    {   var te: timer.pTimerEvent;
+
+        pb.tout = InitialTimeout;
+	te = _new(timer.TimerEvent);
+	pb.TimerRestart(te);
+    }
+
+    proc (s: pPPPCPBlock) Timeout(te: timer.pTimerEvent): boolean
+    {
+    	if s.retry == 0 then
+    	{   _delete(te);
+    	    return false;
+    	}
+    	else
+	{   s.retry -= 1;
+	    // FIXME - increase timeout value?
+	    s.TimerRestart(te);
+	    return true;
+	}
+    }
+
+    proc (pb: pPPPCPBlock) PSend(proto: _uint16, mb: mbuf.pMBuf)
+    {   var pp: pProtoHdr;
+
+	pp = pProtoHdr(mb.GrowHead(ProtoHdr?size));
+	pp@ = proto;    
+	mb.code = SEND;
+	pb.lower.Send(mb);
+    }
+
+    proc (pb: pPPPCPBlock) SendTermReq(proto: _uint16)
+    {   var mb: mbuf.pMBuf;
+	var ph: pHeader;
+
+	mb = mbuf.Alloc(ProtoHdr?size+Header?size+pb.trl, pb.hdr+ProtoHdr?size);
+	ph = pHeader(mb.GrowTail(Header?size));
+	ph.code  = TERM_REQ;
+	ph.seqno = pb.seqno;
+	ph.len   = 4;
+	pb.PSend(proto, mb);
+    }
+
+    proc (pb: pPPPCPBlock) Reply(proto: _uint16, code: ControlCode, mb: mbuf.pMBuf)
+    {   var ph: pHeader;
+
+	ph = pHeader(mb.Data());
+	ph.code  = code;
+	pb.PSend(proto, mb);
+    }
+}
+// vim: ts=8 sw=4 noet nowrap
+

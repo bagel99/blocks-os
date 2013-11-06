@@ -1,0 +1,167 @@
+/*
+ * Generic USB definitions.
+ *
+ * Copyright (c) 2012, Brian G. Lucas.  See LICENSE file.
+ * $Id: usb.esl 281 2012-02-02 22:18:13Z bgl $
+ */
+
+package usb
+{
+    type UTF16: _uint16: le;	// string descriptors use 16-bit UNICODE
+    type DeviceClass:
+    (	NONE=0x00,	AUDIO=0x01,	CDC=0x02,       HID=0x03,
+	PHYSICAL=0x05,	IMAGE=0x06,	PRINTER=0x07,	MASS_STORAGE=0x08,
+	HUB=0x09,	CDC_DATA=0x0A,	SMART_CARD=0x0B,SECURITY=0x0D,
+	VIDEO=0x0E,	HEALTHCARE=0x0F,DIAG_DEVICE=0xDC,
+	WIRELESS_CTLR=0xE0,MISC=0xEF,	APPL_SPEC=0xFE,	VEND_SPEC=0xFF
+    );
+
+    type DeviceSubClass: _uint8;	// FIXME
+    type DeviceProtocol: _uint8;	// FIXME
+
+    type ConfigAttributes:
+    {   _:        0..0b11111;
+	RemoteWake: boolean;
+	SelfPower:  boolean;
+	BusPower:   boolean;
+    } : packed, lsb;
+
+    type EPType: (CONTROL, ISOC, BULK, INTR);
+    type SyncType: (NONE, ASYNC, ADAPTIVE, SYNC);	// ISOC only
+    type UsageType: (DATA, FEEDBACK, IMPLICIT, _);	// ISOC only
+
+    type EPAttributes:
+    {   Type:     EPType;
+	SType:    SyncType;
+	Usage:    UsageType;
+	_:        0..0b11;
+    } : packed, lsb;
+
+    type EPAddress:
+    {   Num:      0..15;
+	_:        0..0b111;
+	Dir:      (OUT, IN);
+    } : packed, lsb;
+
+    /*
+     * Descriptor types:
+     * 0ttxxxxx
+     * 0        - must be zero
+     *  tt      - 00 standard, 01 class, 10 vendor, 11 reserved
+     *    xxxxx - descriptor number
+     */
+
+    // Standard descriptor numbers
+    type DescNumber:
+    (	DEVICE=1, CONFIG=2, STRING=3, INTERFACE=4, ENDPOINT=5,
+	QUALIFIER=6, SPEED=7, POWER=8
+    );
+
+    type DescType:
+    {   Number:   DescNumber: bits(5);
+	Type:     (STANDARD, CLASS, VENDOR, RESERVED);
+	_:        0..1;     // must be zero
+    }: packed, lsb, bits(8);
+
+    const DescDevice:DescType =     { DEVICE, STANDARD };
+    const DescConfig:DescType =     { CONFIG, STANDARD };
+    const DescString:DescType =     { STRING, STANDARD };
+    const DescInterface:DescType =  { INTERFACE, STANDARD };
+    const DescEndpoint:DescType =   { ENDPOINT, STANDARD };
+    const DescQualifier:DescType =  { QUALIFIER, STANDARD };
+    const DescSpeed:DescType =      { SPEED, STANDARD };
+    const DescPower:DescType =      { POWER, STANDARD };
+
+    type Descriptor:
+    {
+	Length:   _uint8;						// 0x00
+	Type:     DescType;						// 0x01
+    }: nopad;
+
+    type DeviceDesc(Descriptor):
+    {
+	Release:  _uint16: le;		// BCD				// 0x02
+	Class:    DeviceClass;						// 0x04
+	SubClass: DeviceSubClass;					// 0x05
+	Protocol: DeviceProtocol;					// 0x06
+	MaxSize0: _uint8;						// 0x07
+	Vendor:	  _uint16: le;						// 0x08
+	Product:  _uint16: le;						// 0x0A
+	DevVers:  _uint16: le;		// BCD				// 0x0C
+	ManStr:   _uint8;						// 0x0E
+	ProdStr:  _uint8;						// 0x0F
+	SerNStr:  _uint8;						// 0x10
+	NConfig:  _uint8;						// 0x11
+    };
+
+    type ConfigDesc(Descriptor):
+    {
+	TotLen:   _uint16: le;						// 0x02
+	NIntf:    _uint8;						// 0x04
+	ConfigN:  _uint8;						// 0x05
+	ConfStr:  _uint8;						// 0x06
+	Attr:     ConfigAttributes;					// 0x07
+	MaxPower: _uint8;	// units of 2mA				// 0x08
+    }: nopad;
+
+    type InterfaceDesc(Descriptor):
+    {
+	IntfN:    _uint8;						// 0x02
+	AltN:     _uint8;						// 0x03
+	NEP:      _uint8;						// 0x04
+	Class:    DeviceClass;						// 0x05
+	SubClass: DeviceSubClass;					// 0x06
+	Protocol: DeviceProtocol;					// 0x07
+	IntfStr:  _uint8;						// 0x08
+    }: nopad;
+
+    type EndpointDesc(Descriptor):
+    {
+	Address:  EPAddress;						// 0x02
+	Attr:     EPAttributes;						// 0x03
+	MaxSize:  _uint16: le;						// 0x04
+	Interval: _uint8;						// 0x06
+    }: nopad;
+
+    type StringDesc(Descriptor):
+    {
+	String:   []UTF16;
+    };
+
+    type DeviceQualDesc(Descriptor):    // USB 2.0 High Speed Devices
+    {
+	Release:  _uint16: le;		// BCD				// 0x02
+	Class:    DeviceClass;						// 0x04
+	SubClass: DeviceSubClass;					// 0x05
+	Protocol: DeviceProtocol;					// 0x06
+	MaxSize0: _uint8;						// 0x07
+	NConfig:  _uint8;						// 0x08
+	_:        _uint8;						// 0x09
+    };
+    
+
+    /*
+     * Setup Packets
+     */
+    type StandardRequests:
+    (   GetStatus=0, ClearFeature=1, SetFeature=3, SetAddress=5,
+	GetDescriptor=6, SetDescriptor=7,
+	GetConfiguration=8, SetConfiguration=9,
+	GetInterface=10, SetInferface=11,
+	SyncFrame=12, End=255);
+    type SetupPktType: 
+    {   recip: (Device, Interface, EndPoint, Other, Rsvd=31);
+	stype:  (Standard, Class, Vendor, Rsvd=3);
+	dir:   (OUT, IN);
+    }: packed, lsb;
+    type SetupPkt:
+    {   type:	 SetupPktType;						// 0x00
+	request: _uint8;	// cast to some enumeration		// 0x01
+	value:   _uint16: le;						// 0x02
+	index:   _uint16: le;						// 0x04
+	length:  _uint16: le;						// 0x06
+    };
+    type pSetupPkt: @SetupPkt;
+}
+// vim: ts=8 sw=4 noet nowrap
+

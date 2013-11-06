@@ -1,0 +1,75 @@
+/*
+ * Support the ST STE101P Ethernet PHY chip.
+ *
+ * Copyright (c) 2011, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+import phy_standard;
+
+package phy
+{
+    // Extended register set
+    const XCNTL  = 16;
+    const XCISS  = 17;
+    const XIE    = 18;
+    const CTR100 = 19;
+    const XMC    = 20;
+    const AUXCS  = 24;
+    const AUXSS  = 25;
+    const INRPT  = 26;
+    const AUXM2  = 27;
+    const TSTAT  = 28;
+    const AUXMD  = 29;
+    const AMPHY  = 30;
+    const BTEST  = 31;
+
+    // EXTENDED REGISTERS
+    type XCISS_REG:	// 0x11: Configuration interrupt and status
+    {   _:      0..0b1111;
+	fifo:	boolean;	// FIFO overrun
+	_:	0..1;
+	speed:	Speed;
+	duplex: Duplex;
+	pause:  boolean;	// pause function enables
+	an_done:boolean;	// auto negotiation completed
+	rmtflt: boolean;	// remote fault detected
+	link_dn:boolean;	// link went down
+	linkcw: boolean;	// link code word received
+	pfault: boolean;	// paralled fault detected
+	an_page:boolean;	// auto negotiation page received
+	badpkt: boolean;	// 64K errant packed received		
+    }: packed, msb;
+    type XIE_REG:	// 0x12: Interrupt enable
+    {   _:	0..0b1111_1111_1;
+	an_done:boolean;	// auto negotiation completed	
+	rmtflt: boolean;	// remote fault detected
+	link_dn:boolean;	// link went down
+	linkcw: boolean;	// link code word received
+	pfault: boolean;	// paralled fault detected
+	an_page:boolean;	// auto negotiation page received
+	rxerrb: boolean;	// rx error buffer full
+    }: packed, msb;
+
+
+    proc EnableIntr(en: eth.Enet)
+    {   var pv: _uint16;
+	var ok: boolean;
+
+	en.PhyWrite(XIE,
+		_uint16(XIE_REG{.an_done=true, .link_dn=true}));
+	// Unless we read XCISS here, things don't work
+	pv, ok = en.PhyRead(XCISS);
+    }
+
+    proc GetLinkSpeed(en: eth.Enet): Speed, Duplex
+    {   var pv: _uint16;
+	var ok: boolean;
+	var xciss: phy.XCISS_REG;
+
+	pv, ok = en.PhyRead(XCISS);
+	xciss = XCISS_REG(pv);
+	return xciss.speed, xciss.duplex;
+    }
+}
+

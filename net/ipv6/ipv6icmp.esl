@@ -1,0 +1,429 @@
+/*
+ * ICMP for IPv6
+ * Only does ping responses and some neighbor discovery.
+ *
+ * Copyright (c) 2009-2012, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+package ipv6	// extends the package
+{
+    type ICMPProtocols:
+    (   DestinationUnreachable=1,
+	PacketTooBig=2,
+	TimeExceeded=3,
+	ParameterProblem=4,
+	EchoRequest=128,
+	EchoReply=129,
+	MulticastListenerQuery=130,
+	MulticastListenerReport=131,
+	MulticastListenerDone=132,
+	RouterSolicitation=133,
+	RouterAdvertisement=134,
+	NeighborSolicitation=135,
+	NeighborAdvertisement=136,
+	RedirectMessage=137,
+	RouterRenumbering=138,
+	NodeInformationQuery=139,
+	NodeInformationResponse=140,
+	InverseNeighborDiscoverySolicitation=141,
+	InverseNeighborDiscoveryAdvertisement=142,
+	Version2MulticastListenerReport=143,       
+	HomeAgentAddressDiscoveryRequest=144,
+	HomeAgentAddressDiscoveryReply=145,
+	MobilePrefixSolicitation=146,
+	MobilePrefixAdvertisement=147,
+	CertificationPathSolicitation=148,
+	CertificationPathAdvertisement=149,
+	MulticastRouterAdvertisement=151,
+	MulticastRouterSolicitation=152,
+	MulticastRouterTermination=153,
+	Expansion=255
+    );
+    type ICMPHeader:
+    {   type:	ICMPProtocols;
+	code:	_byte;
+	chksum:	_uint16;
+    };
+    type pICMPHeader: @ICMPHeader;
+    type ICMPNSHeader(ICMPHeader):	// Neighbor Solicitation
+    {   resv: _uint32;
+	tgt:  IPv6Addr;
+	opt:  []_byte;
+    };
+    type pICMPNSHeader: @ICMPNSHeader;
+    type NAFlags:
+    {   R: boolean;		// is router
+	S: boolean;		// was solicited
+	O: boolean;		// override
+	_: 0..0x1FFF_FFFF;
+    }: packed, msb, be;
+    type ICMPNAHeader(ICMPHeader):	// Neighbor Advertisement
+    {   flags: NAFlags;
+	tgt: IPv6Addr;
+	opt: []_byte;
+    };
+    type pICMPNAHeader: @ICMPNAHeader;
+    type ICMPRSHeader(ICMPHeader):	// Router Solicitation
+    {   resv: _uint32;
+	opt:  []_byte;
+    };
+    type pICMPRSHeader: @ICMPRSHeader;
+    type RAFlags:
+    {   M: boolean;		// managed
+	O: boolean;		// other
+	_: 0..0x3F;
+    }: packed, msb, be;
+    type ICMPRAHeader(ICMPHeader):	// Router Advertisement
+    {   hoplimit:  _uint8;
+	flags:     RAFlags;
+	lifetime:  Net16;
+	reachtime: Net32;
+	retrantime:Net32;
+	opt:       []_byte;
+    };
+    type pICMPRAHeader: @ICMPRAHeader;
+
+    // OPTIONS
+    type ICMPOptions:
+    (	SrcLinkAddr=1,
+	TgtLinkAddr=2,
+	PrefixInfo=3,
+	RedirectHdr=4,
+	MTU=5,
+	Expansion=255
+    );
+    type ICMPOpt:
+    {   type:	ICMPOptions;
+	length:	0..255;		// in units of 8 octets
+    };
+    type pICMPOpt: @ICMPOpt;
+    type ICMPOptLinkAddr(ICMPOpt):
+    {   linkaddr: []_byte;
+    };
+    type pICMPOptLinkAddr: @ICMPOptLinkAddr;
+    type ICMPOptPrefix(ICMPOpt):
+    {   pfxlen: 0..255;
+	flags:
+	{   L: boolean;		// on-link
+	    A: boolean;		// autonomous
+	    _: 0..0x3F;
+	}: packed, msb;
+	vlifet: Net32;
+	plifet: Net32;
+	_:      _uint32;	// for alignment
+	prefix: IPv6Addr;
+    };
+    type pICMPOptPrefix: @ICMPOptPrefix;
+    type ICMPOptRedir(ICMPOpt):
+    {   rsvd1: _uint16;
+	rsvd2: _uint32;
+	data:  []_byte;
+    };
+    type ICMPOptMTU(ICMPOpt):
+    {   rsvd:  _uint16;
+	mtu:   Net32;
+    };
+
+    const OptSize = 8;		// spare space for options
+
+
+    proc (intf: pLower) SendICMP(mb: pMBuf, ip: pHeader, ic: pICMPHeader)
+    {
+
+	ip.length = _uint16(mb.Size() - Header?size);
+	ip.vtf = { 0, 0, 0 };
+	ip.hops = _uint8(Proto.ICMPv6);	// for checksumming
+	ip.proto = 0;
+	ic.chksum = 0;
+	ic.chksum = inet.Checksum(mb.Data(), mb.Size());
+	ip.proto = ICMPv6;
+if db > 3 then {debug.str("SendICMP: ifn="); debug.uint8(mb.tag);
+debug.str(" size="); debug.uint32(mb.Size());
+debug.str(" uplen="); debug.uint32(ip.length);
+debug.str(" type="); debug.uint32(_uint32(ic.type));
+debug.str(" code="); debug.hex8(ic.code);
+debug.nl();}
+	intf.ISend(mb, ip);
+    }
+
+    proc (intf: pLower) AddOptionLinkAddr(mb: pMBuf, type: ICMPOptions)
+    {   var optlen: _uint8;
+	var opt: @[]_byte;
+	
+
+	optlen = 8;	// FIXME: must be multiple of 8
+	opt = mb.GrowTail(optlen);
+	opt[0] = _uint8(type);
+	opt[1] = optlen>>3;
+	net.ToMAC(intf.iid, opt[2:6]);
+    }
+
+    proc (intf: pLower) SendNS(src: @IPv6Addr, dst: @IPv6Addr, tgt: @IPv6Addr)
+    {   var mb: pMBuf;
+	var ip: pHeader;
+	var ic: pICMPNSHeader;
+
+	mb = mbuf.Alloc(Header?size + ICMPNSHeader?size + OptSize + intf.hdr,
+		      intf.hdr);
+	ip = pHeader(mb.GrowTail(Header?size));
+	if src != 0 then ip.srcaddr = src@; else ip.srcaddr = UnspecAddr;
+	ip.dstaddr = dst@;
+	ic = pICMPNSHeader(mb.GrowTail(ICMPNSHeader?size));
+	ic.type = NeighborSolicitation;
+	ic.code = 0;
+	ic.resv = 0;	// reserved should be zero
+	ic.tgt = tgt@;
+	if src != 0 then intf.AddOptionLinkAddr(mb, SrcLinkAddr);
+	intf.SendICMP(mb, ip, ic);
+    }
+
+    proc (intf: pLower) SendNA(dst: @IPv6Addr, tgt: @IPv6Addr)
+    {   var mb: pMBuf;
+	var ip: pHeader;
+	var ic: pICMPNAHeader;
+
+	mb = mbuf.Alloc(Header?size + ICMPNAHeader?size + OptSize + intf.hdr,
+		      intf.hdr);
+	ip = pHeader(mb.GrowTail(Header?size));
+	intf.SetLinkLocalAddress(ip);
+	ip.dstaddr = dst@;
+	ic = pICMPNAHeader(mb.GrowTail(ICMPNAHeader?size));
+	ic.type = NeighborAdvertisement;
+	ic.code = 0;
+	ic.flags = { .R=0, .S=1, .O=1 };	// FIXME
+	ic.tgt = tgt@;
+	intf.AddOptionLinkAddr(mb, TgtLinkAddr);
+	intf.SendICMP(mb, ip, ic);
+    }
+
+    proc (intf: pLower) SendRS(dst: @IPv6Addr)
+    {   var mb: pMBuf;
+	var ip: pHeader;
+	var ic: pICMPRSHeader;
+
+	mb = mbuf.Alloc(Header?size + ICMPRSHeader?size + OptSize + intf.hdr,
+		      intf.hdr);
+	ip = pHeader(mb.GrowTail(Header?size));
+	if intf.state == PREFERRED then
+	    intf.SetLinkLocalAddress(ip);
+	else ip.srcaddr = UnspecAddr;
+	if dst != 0 then ip.dstaddr = dst@; else ip.dstaddr = AllRoutersAddr;
+	ic = pICMPRSHeader(mb.GrowTail(ICMPRSHeader?size));
+	ic.type = RouterSolicitation;
+	ic.code = 0;
+	if intf.state == PREFERRED then intf.AddOptionLinkAddr(mb, SrcLinkAddr);
+	intf.SendICMP(mb, ip, ic);
+    }
+
+    proc (intf: pLower) SendRA(src: @IPv6Addr, dst: @IPv6Addr)
+    {
+    }
+
+
+    // Receive Neighbor Solicitation
+    // Upper Layer header still attached
+    proc (ib: pIPv6Block) RecvNS(mb: pMBuf, ip: pHeader, ic: pICMPHeader)
+    {   var nsh: pICMPNSHeader;
+	var optlen: _uint;
+	var intf: pLower;
+
+	intf = ib.GetInterface(mb.tag);
+	if intf != 0 then
+	{   nsh = pICMPNSHeader(ic);
+if db > 2 then {debug.str("RecvNS: ifn="); debug.uint8(mb.tag);
+debug.str(" tgt="); AddrPrint(nsh.tgt); debug.nl();}
+	    optlen = mb.Size() - Header?size - ICMPNSHeader?size;
+	    if optlen > 0 && ICMPOptions(nsh.opt[0]) == ICMPOptions.SrcLinkAddr then
+		intf.NCacheAdd(ip.srcaddr, nsh.opt[2:6]);
+	    intf.SendNA(ip.srcaddr, nsh.tgt);
+	}
+	mbuf.Free(mb);
+    }
+
+    // Receive Neighbor Advertisement
+    // Upper Layer header still attached
+    proc (ib: pIPv6Block) RecvNA(mb: pMBuf, ip: pHeader, ic: pICMPHeader)
+    {   var nah: pICMPNAHeader;
+	var optlen: _uint;
+	var intf: pLower;
+
+	intf = ib.GetInterface(mb.tag);
+	if intf != 0 then
+	{
+	nah = pICMPNAHeader(ic);
+if db > 2 then {debug.str("RecvNA: tgt="); AddrPrint(nah.tgt); debug.nl();}
+	optlen = mb.Size() - Header?size - ICMPNAHeader?size;
+	if optlen > 0 && ICMPOptions(nah.opt[0]) == ICMPOptions.TgtLinkAddr then
+	    intf.NCacheAdd(ip.srcaddr, nah.opt[2:6]);
+	}
+	mbuf.Free(mb);
+    }
+
+    // Receive Router Advertisement
+    // Upper Layer header still attached
+    proc (ib: pIPv6Block) RecvRA(mb: pMBuf, ip: pHeader, ic: pICMPHeader)
+    {   var rah: pICMPRAHeader;
+	var optlen, i: _uint;
+	type pICMPOptPrefix: @ICMPOptPrefix;
+	var intf: pLower;
+
+	intf = ib.GetInterface(mb.tag);
+	if intf != 0 then
+	{
+	rah = pICMPRAHeader(ic);
+if db > 2 then {debug.str("RecvRA:");
+debug.str(" M="); debug.uint8(_uint8(rah.flags.M));
+debug.str(" O="); debug.uint8(_uint8(rah.flags.O));
+debug.str(" hopl="); debug.uint8(rah.hoplimit);
+debug.str(" lifet="); debug.uint16(rah.lifetime);
+debug.str(" reacht="); debug.uint32(rah.reachtime);
+debug.str(" retrant="); debug.uint32(rah.retrantime);
+debug.nl();}
+	optlen = mb.Size() - Header?size - ICMPRAHeader?size;
+	i = 0;
+	while i < optlen do
+	{   if rah.opt[i]
+	    is ICMPOptions.SrcLinkAddr then
+		intf.NCacheAdd(ip.srcaddr, rah.opt[i+2:6]);
+	    is ICMPOptions.PrefixInfo then
+	    {
+		var pop: pICMPOptPrefix;
+		var pp: pIntfAddrEntry;
+
+		pop = pICMPOptPrefix(rah.opt[i:]);
+if db > 2 then {debug.str("\tPrefixInfo: len="); debug.uint8(pop.pfxlen);
+debug.str(" L="); debug.uint8(_uint8(pop.flags.L));
+debug.str(" A="); debug.uint8(_uint8(pop.flags.A));
+debug.str(" vlifet="); debug.uint32(pop.vlifet);
+debug.str(" plifet="); debug.uint32(pop.plifet);
+debug.str("\n\tprefix="); AddrPrint(pop.prefix);
+debug.nl();}
+		if pop.vlifet >= pop.plifet then	// valid
+		{   if pop.flags.L then
+		    {
+		        pp = intf.PfxCacheFind(pop.prefix, pop.pfxlen);
+			if pp == 0 then		// new prefix
+			{   if pop.vlifet != 0 then
+				intf.PfxCacheAdd(pop.prefix, pop.pfxlen, pop.vlifet);
+			}
+			else			// update existing prefix
+			{   if pop.vlifet == 0 then
+				intf.PfxCacheDelete(pp); // remove from cache
+			    else
+				pp.vlifet = pop.vlifet; // update lifetime
+			}
+		    }
+		    if pop.flags.A then
+		    {
+		    }
+		}
+	    }
+	    is ICMPOptions.MTU then
+	    {
+	    }
+	    i += rah.opt[i+1]*8;
+	}
+	}
+	mbuf.Free(mb);
+    }
+
+    // Receive Router Solicitation
+    // Upper Layer header still attached
+    proc (ib: pIPv6Block) RecvRS(mb: pMBuf, ip: pHeader, ic: pICMPHeader)
+    {
+if db > 2 then debug.str("RecvRS\n");
+	if !ib.IsRouter then
+	{   mbuf.Free(mb);
+	    return;
+	}
+	mbuf.Free(mb);	// FIXME
+    }
+
+    // Receive Echo Request
+    // Upper Layer header still attached
+    // Will reuse received buffer for transmit
+    proc (ib: pIPv6Block) RecvEchoReq(mb: pMBuf, ip: pHeader, ic: pICMPHeader)
+    {   var tmp: IPv6Addr;
+	var intf: pLower;
+
+if db > 2 then debug.str("RecvEchoReq\n");
+	intf = ib.GetInterface(mb.tag);
+	if intf != 0 then
+	{   ic.type = EchoReply;
+	    tmp = ip.srcaddr;
+	    ip.srcaddr = ip.dstaddr;
+	    ip.dstaddr = tmp;
+	    intf.SendICMP(mb, ip, ic);
+	}
+	else
+	    mbuf.Free(mb);
+    }
+
+    type ValidCheck:
+    {   code:	boolean;	// check for code=0
+	hops:	boolean;	// check for hops=255
+	local:	boolean;	// check for linklocal srcaddr
+    }: packed;
+    const Local:  ValidCheck = {.code=true, .hops=true, .local=true};
+    const Normal: ValidCheck = {.code=true, .hops=true, .local=false};
+
+    // Some validity checks per RFC 4861
+    proc IsValid(ip: pHeader, ic: pICMPHeader, check: ValidCheck): boolean
+    {
+	if check.code && ic.code != 0 then return false;
+	if check.hops && ip.hops != 255 then return false;
+	if check.local && !IsLinkLocal(ip.srcaddr) then return false;
+	return true;
+    }
+	
+    // FIXME: need to pass the original IPv6 header in order to do validity checks
+    proc (ib: pIPv6Block) ICMPRecv(mb: pMBuf)
+    {   var ip: pHeader;
+	var ic: pICMPHeader;
+	var chksum: _uint16;
+	var hops: _uint8;
+
+	ip = pHeader(mb.Data());
+if db > 2 then {debug.str("ICMPRecv: size="); debug.uint32(mb.Size());
+debug.str(" uplen="); debug.uint32(ip.length); debug.nl();}
+	if ip.length >= ICMPHeader?size then
+	{   // for checksumming, things need to be moved or zero'ed
+	    ip.vtf = { 0, 0, 0 };
+	    hops = ip.hops;	// save, we need it later for checks
+	    ip.hops = _uint8(ip.proto);	// for checksumming
+	    ip.proto = 0;
+	    chksum = inet.Checksum(mb.Data(), ip.length + Header?size);
+	    ip.hops = hops;	// restore
+if db > 3 then {debug.str(" chksum="); debug.hex16(chksum); debug.nl();}
+	    if chksum == 0 then
+	    {	ic = pICMPHeader(mb.Offset(Header?size));
+if db > 3 then {debug.str(" type="); debug.uint32(_uint32(ic.type));
+debug.str(" code="); debug.hex8(ic.code);
+debug.nl();}
+		if ic.type
+		is EchoRequest then
+		    ib.RecvEchoReq(mb, ip, ic);
+		is NeighborSolicitation then
+		    if IsValid(ip, ic, Normal) then
+			ib.RecvNS(mb, ip, ic);
+		is NeighborAdvertisement then
+		    if IsValid(ip, ic, Normal) then
+			ib.RecvNA(mb, ip, ic);
+		is RouterSolicitation then
+		    ib.RecvRS(mb, ip, ic);
+		is RouterAdvertisement then
+		    if IsValid(ip, ic, Local) then
+			ib.RecvRA(mb, ip, ic);
+		else	// ignore
+		{   mbuf.Free(mb);
+		}
+		return;
+	    }
+	}
+if db > 2 then debug.nl();
+	mbuf.Free(mb);	// defective
+    }
+}
+// vim: ts=8 sw=4 noet nowrap
+

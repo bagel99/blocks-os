@@ -1,0 +1,120 @@
+/*
+ * Asynchronous HDLC packing and unpacking.
+ * This needs to be restructured or go someplace else.
+ *
+ * Copyright (c) 2012, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+import fcs16;
+import mbuf;
+
+package ahdlc
+{
+    alias mbuf.pMBuf as pMBuf;
+
+    const HDLC_FLAG:_uint8 = 0x7e;	// flag byte
+    const HDLC_ADDR:_uint8 = 0xff;	// address
+    const HDLC_CNTL:_uint8 = 0x03;	// control
+    const HDLC_ESC:_uint8  = 0x7d;	// transparency escape
+
+    type CharMap: [32] boolean: packed, lsb;
+    type State:
+    {
+	xaccm:  CharMap;	// what we escape when we transmit
+	raccm:  CharMap;	// what we expect escaped when we receive
+    	resc:	_byte;		// 0x20 if last recv char was HDLC_ESC
+    	rsiz:   _uint16;
+    	rlen:   _uint16;
+    	rbuf:   @[]_byte;
+    };
+    type pState: @State;
+
+    proc (s: pState) RecvChar(c: _byte): boolean
+    {
+    	if c
+    	is HDLC_FLAG then
+    	{   // if not frame abort or runt frame then done
+    	    if s.resc == 0 && s.rlen > 4 then return true;
+    	    // otherwise start over
+    	    s.rlen = 0;  
+    	}
+    	is HDLC_ESC then
+    	    s.resc = 0x20;
+    	else	// normal character, ignore if in raccm set
+    	{   if c > 0x20 || !s.raccm[c] then
+    	    {   c = c ^ s.resc;
+    		s.resc = 0;
+    		if s.rlen < s.rsiz then
+    		{   s.rbuf[s.rlen] = c;
+    	            s.rlen += 1;
+    	        }
+    	    }
+    	}
+    	return false;
+    }
+
+    proc (s: pState) NewFrame(mb: pMBuf)
+    {
+	s.rsiz = mb.GetTailMax();
+	s.rbuf = mb.Data();
+	s.rlen = 0;
+    }
+
+    proc (s: pState) CheckFrame(): boolean
+    {
+	if s.rbuf[0] != HDLC_ADDR ||
+	   s.rbuf[1] != HDLC_CNTL then
+	    return false;
+	if fcs16.calc(s.rbuf, s.rlen) != fcs16.GOOD then
+	{
+debug.str("Bad FCS16\n");
+	    return false;
+	}
+	return true;
+    }
+
+    proc (s: pState) XmitEsc(mbi: pMBuf): pMBuf
+    {   var in: @[]_byte;
+	var out: @[]_byte;
+	var mbo: pMBuf;
+	var i, o, n: _uint;
+	var fcs: _uint16;
+	var c: _byte;
+
+	in = mbi.GrowHead(2);	// make room for HDLC overhead
+	in[0] = HDLC_ADDR;
+	in[1] = HDLC_CNTL;
+	fcs = fcs16.calc(in, mbi.Size());
+	in = mbi.GrowTail(2);	// make room for FCS
+	in[0] = fcs & 0xFF;	// low bits first
+	in[1] = fcs >> 8;
+	/*
+	 * Now we must escape everything including HDLC header and FCS.
+	 * At a minimum, HDLC_FLAG and HDLC_ESC in data must be escaped.
+	 * Must get a double size buffer in case everything needs escaping,
+	 * plus room the opening and closing FLAGs.
+	 */
+	in = mbi.Data();
+	n = mbi.Size();
+	mbo = mbuf.Alloc(n*2+2, 0);
+	out = mbo.Data();	
+	out[0] = HDLC_FLAG;
+	o = 1;
+	for i from 0 to n-1 do
+	{   c = in[i];
+	    if c == HDLC_FLAG || c == HDLC_ESC || (c < 0x20 && s.xaccm[c]) then
+	    {   out[o] = HDLC_ESC;
+	    	c = c ^ 0x20;
+	    	o += 1;
+	    }
+	    out[o] = c;
+	    o += 1;
+	}
+	out[o] = HDLC_FLAG;
+	mbo.GrowTail(o+1);
+	mbuf.Free(mbi);
+	return mbo;
+    }
+}
+

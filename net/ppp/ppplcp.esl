@@ -1,0 +1,595 @@
+/*
+ * PPP LCP implementation
+ *
+ * References:
+ *  1. Carlson, James; PPP Design and Debugging
+ *  2. RFC 1661
+ *
+ * Copyright (c) 2012, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+import pppcp;
+import comm;
+import mbuf;
+import timer;
+
+package ppplcp
+{
+/*
+ * PPP link-level protocol numbers
+ * Must be odd
+ * 0001 - 3FFF - network protocols
+ * 8001 - BFFF - network control protocols for above
+ * 4001 - 7FFF - protocols with no control protocol
+ * C001 - CFFF - link control protocols
+ */
+/*
+const IP_NUMBER =       0x0021;	// IPv4
+const TCPC_NUMBER =     0x002d;	// TCP w/ Van J IP Compression
+const TCPU_NUMBER =	0x002f;	// TCP w/o Van J IP Compression
+const IPV6_NUMBER =	0x0057;	// IPv6
+
+const IPCP_NUMBER =	0x8021;	// IPv4 Control Protocol
+const IPV6CP_NUMBER =	0x8057;	// IPv6 Control Protocol
+
+const LCP_NUMBER =	0xc021;	// Link Control Protocol
+const PAP_NUMBER =	0xc023;	// Password Auth Protocol
+const LQR_NUMBER =	0xc025;	// Link Quality Report Protocol
+const CHAP_NUMBER =	0xc223;	// Challenge Handshake Auth Protocol
+*/
+    if _defined(debug) then
+    {   if _defined(debug.db_ppp) then
+	    alias debug.db_ppp as db;
+	else
+	    const db = 3;
+    }
+    else
+	const db = 0;
+
+    alias event.Event as Event;
+    alias event.pEvent as pEvent;
+    alias block.Block as Block;
+    alias block.pBlock as pBlock;
+    alias mbuf.MBuf as MBuf;
+    alias mbuf.pMBuf as pMBuf;
+    alias pppcp.pPPPCPBlock as pPPPCPBlock;
+    alias pppcp.Header as Header;
+    alias pppcp.pHeader as pHeader;
+    alias pppcp.ProtoHdr as ProtoHdr;
+    alias timer.TimerEvent as TimerEvent;
+    alias timer.pTimerEvent as pTimerEvent;
+
+    const LCP_Proto:_uint16 = 0xC021;
+
+    type Options:   // negotiation options
+    (   _,     MRU,   ACCM,  AUTH,  QUAL,  MAGIC, _,      PFC,
+	ACFC,   _,    _,     _,     _,     _,     _,      _
+    );
+    type OptionMap: [Options] boolean: packed;
+    type CharMap:   [32]boolean: packed, lsb;
+
+    type Option:
+    {   code:  Options;
+	len:   _uint8;
+    };
+    type OptMRU(Option):
+    {   mru:   _uint16: be;
+    }: align(1);
+    type pOptMRU: @OptMRU;
+    type OptACCM(Option):
+    {   accm:  _uint32: be;
+    }: align(1), nopad;
+    type pOptACCM: @OptACCM;
+    type OptMagic(Option):
+    {   magic: _uint32;			// endian don't care?
+    }: align(1), nopad;
+    type pOptMagic: @OptMagic;
+
+    type Upper:
+    {   next:  @Upper;
+	bid:   block.BlockID;
+	tag:   _uint8;
+	proto: _uint16;
+    };
+    type pUpper: @Upper;
+
+    type PPPLCPBlock(pppcp.PPPCPBlock):
+    {   loopcnt:  _uint8;		// loop back detection counter
+	xaccm:    CharMap;
+        raccm:    CharMap;
+	options:  OptionMap;
+	roptions: OptionMap;		// their options we've ACKed
+	xmagic:   _uint32;		// magic we send in our ConfReg
+	rmagic:   _uint32;
+        rmru:     _uint16;
+        xmru:     _uint16;
+        upper:    pUpper;		// multiple uppers
+    };
+    type pPPPLCPBlock: @PPPLCPBlock;
+
+    proc (pb: pPPPLCPBlock) MakeMagic()
+    {
+	pb.xmagic = pb.loopcnt + 1;	// FIXME - should be random
+    }
+
+    proc (pb: pPPPLCPBlock) SendConfReq()
+    {   var mb: pMBuf;
+	var dp: @[]_byte;
+	var ph: pHeader;
+	var len: _uint16;
+	var i: _uint;
+
+	len = 0;
+	if pb.options[MRU] then len += OptMRU?size;
+	if pb.options[ACCM] then len += OptACCM?size;
+	if pb.options[MAGIC] then len += OptMagic?size;
+	mb = mbuf.Alloc(Header?size+len+pb.trl, pb.hdr);
+	ph = pHeader(mb.GrowTail(Header?size));
+	ph.code  = CONF_REQ;
+	ph.seqno = pb.seqno;
+	ph.len   = Header?size + len;
+	dp = mb.GrowTail(len);
+	i = 0;
+	if pb.options[MRU] then
+	{   var po1: pOptMRU;
+	    po1 = pOptMRU(dp[i:OptMRU?size]);
+	    po1.code = MRU;
+	    po1.len  = OptMRU?size;
+	    po1.mru  = pb.mtu;
+	    i += OptMRU?size;
+	}
+	if pb.options[ACCM] then
+	{   var po2: pOptACCM;
+	    po2 = pOptACCM(dp[i:OptACCM?size]);
+	    po2.code = ACCM;
+	    po2.len  = OptACCM?size;
+	    po2.accm = _uint32(pb.raccm);
+	    i += OptACCM?size;
+	}
+	if pb.options[MAGIC] then
+	{   var po5: pOptMagic;
+	    po5 = pOptMagic(dp[i:OptMagic?size]);
+	    po5.code = MAGIC;
+	    po5.len  = OptMagic?size;
+	    po5.magic= pb.xmagic;
+	    i += OptMagic?size;
+	}
+	pb.PSend(LCP_Proto, mb);
+    }
+
+    proc (pb: pPPPLCPBlock) InformUpper(isup: boolean)
+    {   var up: pUpper;
+	
+
+if db > 1 then { debug.str("ppplcp.InformUpper ");
+debug.uint8(_uint8(isup)); debug.nl(); }
+	up = pb.upper;
+	while up != 0 do
+	{
+	    if isup then
+	    {   var li: comm.pLinkInfo;
+		li = _new(comm.LinkInfo);
+		li.code = UP;
+		li.hdr = pb.hdr;
+		li.trl = pb.trl;
+		li.mtu = pb.mtu;
+		li.tag = up.tag;
+		up.bid.Send(li);
+	    }
+	    else
+	    {   var e: pEvent;
+		e = _new(Event);
+		e.code = DOWN;
+		e.tag = up.tag;
+		up.bid.Send(e);
+	    }
+	    up = up.next;
+	}
+    }
+
+    proc (pb: pPPPLCPBlock) InformLower(isup: boolean)
+    {   var e: pEvent;
+
+if db > 1 then { debug.str("ppplcp.InformLower ");
+debug.uint8(_uint8(isup)); debug.nl(); }
+	e = _new(Event);
+	if isup then e.code = OPEN; else e.code = CLOSE;
+	e.tag = pb.id;
+	pb.lower.Send(e);
+	
+    }
+
+    proc (s: pPPPLCPBlock) Action(event: pppcp.LinkEvents)
+    {   var action: pppcp.CPAction;
+
+	action = pppcp.CPTable[s.state][event];
+if db > 1 then {debug.str("ppplcp.Action "); debug.uint8(_uint8(event));
+debug.chr(' '); debug.str(pppcp.StateName[s.state]);
+debug.chr(' '); debug.str(pppcp.StateName[action.next]); debug.nl(); }
+	if action.infmdn
+	is UPPER then s.InformUpper(false);
+	is LOWER then s.InformLower(false);
+	if action.iid then
+	    s.seqno += 1;
+	if action.timer
+	is STOP then
+	{   s.retry = 0;
+	    s.TimerStop();
+	}
+	is SHORT then
+	{   s.retry = pppcp.ShortTimeout;
+	    s.TimerStart();
+	}
+	is LONG then
+	{   s.retry = pppcp.LongTimeout;
+	    s.TimerStart();
+	}
+	if action.send
+	is TR then
+	{
+	    s.SendTermReq(LCP_Proto);
+	}
+	is CR then
+	{
+	    s.SendConfReq();
+	}
+	if action.infmup
+	is UPPER then s.InformUpper(true);
+	is LOWER then s.InformLower(true);
+	s.state = action.next;
+	
+    }
+
+    proc (s: pPPPLCPBlock) Timeout(te: pTimerEvent)
+    {
+    	if s.retry == 0 then
+    	{   _delete(te);
+    	    s.Action(Timeout);
+    	}
+    	else
+	{   s.retry -= 1;
+	    // FIXME - increase timeout value?
+	    s.TimerRestart(te);
+	    s.Action(Retry);
+	}
+    }
+
+    /*
+     * Examine a configuration request.
+     * Select one of three options for reply: ACK, NAK, REJ.
+     * Use the same MBuf, as the reply cannot be larger than the request.
+     */
+    proc (pb: pPPPLCPBlock) RecvConfReq(mb: pMBuf, len: _uint): boolean
+    {   var reply, this: pppcp.ControlCode;
+	var i, o, oplen: _uint;
+	var pd: @[]_byte;
+	var ph: pHeader;
+	var opcode: Options;
+
+if db > 1 then { debug.str("ppplcp.RecvConfReq\n"); }
+	ph = pHeader(mb.Data());
+	pd = mb.Data();
+	// Parse options
+	reply = CONF_ACK;
+	o = 4;      // index into reply options
+	i = 4;      // index into recvd options
+	while i < len do
+	{   opcode = Options(pd[i]);    // option code
+	    oplen = pd[i+1];		// length of this option
+if db > 2 then { debug.str("\ti="); debug.uint(i);
+debug.str(" opcode="); debug.uint8(_uint8(opcode));
+debug.str(" oplen="); debug.uint(oplen); }
+	    this = CONF_ACK;	    // assume success
+	    if opcode
+	    is MRU then
+	    {   // FIXME
+	    }
+	    is ACCM then    // accept whatever they want
+	    {   var po2: pOptACCM;
+		po2 = pOptACCM(pd[i:OptACCM?size]);
+		pb.xaccm = po2.accm;
+	    }
+	    is MAGIC then
+	    {   var po5: pOptMagic;
+		var rmagic: _uint32;
+		po5 = pOptMagic(pd[i:OptMagic?size]);
+		rmagic = po5.magic;
+		if rmagic == pb.xmagic then     // possible loopback
+		{   pb.MakeMagic();
+		    po5.magic = pb.xmagic;
+		    this = CONF_NAK;
+		}
+	    }
+	    is PFC then		// reject until we are convinced it doesn't
+		this = CONF_REJ;// destroy alignment
+	    is ACFC then	// accept and note
+		pb.roptions[opcode] = true;
+	    else
+		this = CONF_REJ;
+	    // now copy up rej'ed or nak'ed options
+if db > 2 then { debug.str(" this="); debug.uint8(_uint8(this)); debug.nl(); }
+	    if this
+	    is CONF_REJ then
+	    {   if reply < CONF_REJ then
+		{   // starting new REJ packet, erase any NAK or ACK packet
+		    o = 4;
+		    reply = CONF_REJ;
+		}
+	    }
+	    is CONF_NAK then
+	    {   if reply < CONF_NAK then
+		{   // starting new NAK packet, erase any ACK packet
+		    o = 4;
+		    reply = CONF_NAK;
+		}
+	    }
+if db > 2 then { debug.str("\ti="); debug.uint(i);
+debug.str(" o="); debug.uint(o); debug.nl(); }
+	    // now copy up rej'ed or nak'ed options
+	    if this != CONF_ACK then
+	    {   pd[o:oplen] = pd[i:oplen];
+		o += oplen;
+	    }
+	    i += oplen;
+	}
+	// send reply
+	ph.code  = reply;
+	if reply == CONF_ACK then
+	    ph.len = i;			// send back all options
+	else
+	{   mb.ShrinkTail(i-o);		// delete end of buffer
+	    ph.len = o;
+	}
+	pb.PSend(LCP_Proto, mb);
+	return reply == CONF_ACK;
+    }
+
+    proc (pb: pPPPLCPBlock) RecvConfAck(mb: pMBuf, len: _uint)
+    {
+if db > 1 then { debug.str("ppplcp.RecvConfAck\n");}
+    }
+
+    proc (pb: pPPPLCPBlock) RecvConfNak(mb: pMBuf, len: _uint)
+    {   var pd: @[]_byte;
+	var i, oplen: _uint;
+	var opcode: Options;
+
+if db > 1 then { debug.str("ppplcp.RecvConfNak\n");}
+	pd = mb.Data();
+	// Parse options
+	i = 4;      // index into parse
+	while i < len do
+	{   opcode = Options(pd[i]);    // option code
+	    oplen = pd[i+1];		// length of this option
+	    if opcode
+	    is MRU then
+	    {   var po1: pOptMRU;
+		po1 = pOptMRU(pd[i:OptMRU?size]);
+		pb.rmru = po1.mru;
+	    }
+	    is ACCM then
+	    {
+	    }
+	    else
+		pb.options[opcode] = false;
+	    i += oplen;
+	}
+    }
+
+    proc (pb: pPPPLCPBlock) RecvConfRej(mb: pMBuf, len: _uint)
+    {
+if db > 1 then { debug.str("ppplcp.RecvConfRej\n");}
+    }
+
+    proc (pb: pPPPLCPBlock) RecvFrame(mb: pMBuf)
+    {   var ph: pHeader;
+	var rseqno: _uint8;
+	var len: _uint16;
+
+	ph = pHeader(mb.Data());
+if db > 2 then { debug.str("ppplcp.RecvFrame\n");}
+	if mb.Size() < 4 then return;
+	rseqno = ph.seqno;
+	len = ph.len;
+	if len < 4 then return;
+	if ph.code
+	is CONF_REQ then
+	{   if pb.RecvConfReq(mb, len) then
+		pb.Action(ConfReqOK);
+	    else
+		pb.Action(ConfReqBad);
+	}
+	is CONF_ACK then
+	{   if rseqno == pb.seqno then
+	    {   pb.RecvConfAck(mb, len);
+		pb.Action(ConfAck);
+		// only now set the final XMIT ACCM
+	    }
+	}
+	is CONF_NAK then
+	{   if rseqno == pb.seqno then
+	    {   pb.RecvConfNak(mb, len);
+		pb.Action(ConfNak);
+	    }
+	}
+	is CONF_REJ then
+	{   if rseqno == pb.seqno then
+	    {   pb.RecvConfRej(mb, len);
+		pb.Action(ConfRej);
+	    }
+	}
+	is TERM_REQ then
+	{   pb.Reply(LCP_Proto, TERM_ACK, mb);
+	    pb.Action(TermReq);
+	}
+	is TERM_ACK then
+	{   if rseqno == pb.seqno then
+		pb.Action(TermAck);
+	}
+	is CODE_REJ then
+	{   //FIXME
+	}
+	is PROT_REJ then
+	{   //FIXME - send upper a DOWN event
+	}
+	is ECHO_REQ then
+	{   pb.Reply(LCP_Proto, ECHO_REP, mb);
+	}
+	is ECHO_REP then
+	{
+	}
+	is DISC_REQ then
+	{
+	}
+	else
+	{   // Reply(CODE_REJ, m);
+	}
+    }	
+
+    proc (pb: pPPPLCPBlock) RejectProtocol(rmb: pMBuf)
+    {   var mb: pMBuf;
+	var len: _uint;
+	var dp, buf: @[]_byte;
+	var ph: pHeader;
+
+	// requires unique id
+	pb.seqno += 1;
+	len = rmb.Size();   // length of rejected packet
+	buf = rmb.Data();   // address of rejected packet
+if db > 1 then { debug.str("ppplcp.RejectProtcol len=");
+debug.uint(len); debug.nl();}
+	// allocate a new buffer, probably not enough space at front of rmb
+	mb = mbuf.Alloc(Header?size+len+pb.trl, pb.hdr);
+	ph = pHeader(mb.GrowTail(Header?size));
+	ph.code  = PROT_REJ;
+	ph.seqno = pb.seqno;
+	ph.len   = len;
+	dp = mb.GrowTail(len);
+	dp[0:len] = buf[0:len];
+	pb.PSend(LCP_Proto, mb);
+    }
+
+    proc (pb: pPPPLCPBlock) FindUpper(proto: _uint16): pUpper
+    {   var up: pUpper;
+
+	up = pb.upper;
+	while up != 0 && up.proto != proto do
+	    up = up.next;
+	return up;
+    }
+	
+    proc Run(b: pBlock, e: pEvent)
+    {   var pb: pPPPLCPBlock;
+	var mb: pMBuf;
+	var proto: _uint16;
+	var dp: @[]_byte;
+	var n: _uint;
+	var up: pUpper;
+
+	pb = pPPPLCPBlock(b);
+if db > 1 then { debug.str("ppplcp.Run ");  debug.uint8(_uint8(e.code));
+debug.chr(','); debug.uint8(e.tag); debug.nl();}
+	if e.code
+	is SEND then
+	{   if pb.state == Opened then
+	    {   pb.lower.Send(e);
+	    }
+	    else
+		mbuf.Free(mb);
+	}
+	is RCVD then
+	{   mb = pMBuf(e);
+	    dp = mb.Data();
+	    proto = dp[0];
+	    n = 1;
+	    if proto & 1 == 0 then  // two byte proto
+	    {   proto = (proto<<8) | dp[1];
+		n = 2;
+	    }
+	    if proto == LCP_Proto then
+	    {   mb.ShrinkHead(n);
+		pb.RecvFrame(mb);
+	    }
+	    else
+	    {   if pb.state == Opened then
+		{   up = pb.FindUpper(proto);
+		    if up != 0 then
+		    {   mb.ShrinkHead(n);
+			mb.tag = up.tag;
+			up.bid.Send(mb);
+			return;
+		    }
+		    else
+			pb.RejectProtocol(mb);  // send protocol reject
+		}
+		mbuf.Free(mb);
+	    }
+	}
+	is TDONE then pb.Timeout(pTimerEvent(e));
+	is CONNECT then
+	{   var ce: event.pConnEvent;
+	    ce = event.pConnEvent(e);
+	    if ce.type == LOWER then
+	    {   // assert not a duplicate
+		pb.lower = ce.tag;
+	    }
+	    else        
+	    {   // assert not a duplicate
+		up = _new(Upper);
+		up.next  = pb.upper;
+		up.bid   = ce.tag;
+		up.tag   = ce.chan;
+		up.proto = ce.info;
+		pb.upper = up;
+	    }
+	    _delete(ce);
+	}
+	is OPEN then
+	{   pb.MakeMagic();
+	    pb.Action(Open);
+	    _delete(e);     // FIXME - is this an extended event?
+	}
+	is CLOSE then
+	{   pb.Action(Close);
+	    _delete(e);
+	}
+	is UP then
+	{   var li: comm.pLinkInfo;
+	    li = comm.pLinkInfo(e);
+if db > 2 then { debug.str("ppplcp got UP: ");
+debug.uint8(li.hdr); debug.chr(',');
+debug.uint8(li.trl); debug.chr(',');
+debug.uint16(li.mtu); debug.nl(); }
+	    pb.hdr = li.hdr + 2;    // +2 for protocol code
+	    pb.trl = li.trl;
+	    pb.mtu = li.mtu - 2;
+	    // copy into ACCM
+	    pb.Action(LinkUp);
+	    _delete(li);    // FIXME
+	}
+	is DOWN then
+	{   pb.Action(LinkDn);
+	    _delete(e);
+	}
+    }
+
+
+    proc NewBlock(id: block.BlockID): pBlock
+    {   var b: pPPPLCPBlock;
+
+        b = _new(PPPLCPBlock);
+if db > 0 then { debug.str("ppplcp.NewBlock ");
+debug.uint8(id); debug.chr(' ');
+debug.hex(_uint(b)); debug.nl(); }
+	b.BlockInit(id, Run);
+	b.lower = 0;
+	b.upper = 0;
+	b.timer = TimerID;
+	b.options = {[MRU]=true, [ACCM] = true, [MAGIC] = true};
+	return b;
+    }
+	 
+}
+// vim: ts=8 sw=4 noet nowrap
+

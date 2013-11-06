@@ -1,0 +1,119 @@
+/*
+ * LoWPAN Adaption Layer
+ *
+ * References:
+ *   1. RFC 4944
+ *   2. RFC 6262
+ *
+ * Copyright (c) 2012, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+ 
+package lowpan
+{
+    type HeaderType: (BAD, DISP, MESH, FRAG);
+    type DispatchType:
+    (   IPV6=	0b000001,	// uncompressed IPv6 header follows
+	HC1=	0b000010,	// compressed IPv6 header follows
+	BC0=	0b010000,	// broadcast
+	ESC=	0b111111	// escape to following byte for dispatch type
+    );
+    type FragType:
+    (	FRAG1=	0b000,		// first fragment
+	FRAGN=	0b100		// not the first fragment
+    );
+
+    type Header:		// virtual, everything derived from this
+    {   type:    HeaderType;
+    }: packed, msb, nopad;
+
+    type DispHeader(Header):	// Dispatch Header
+    {   dispatch: DispatchType;
+    }: packed, msb, nopad;
+    
+    type MeshHeader(Header):	// Mesh Header	
+    {	ss:      boolean;	// source address is short
+    	ds:      boolean;	// destination address is short
+    	hops:    0..15;		// 15 => byte follows with hop count
+    }: packed, msb, nopad;
+
+    type FragHeader(Header):	// Fragment Header for FRAG1, FRAGN derived
+    {	subtype: FragType;
+    	size:    0..0x7FF;	// total size
+    	tag:     0..0xFFFF;
+    }: packed, msb, nopad;    	
+
+    type FragNHeader(FragHeader):// Fragment Header for FRAGN, derived from FRAG
+    {	offset:  0..255;	// offset in units of 8 octets
+    }: nopad;
+
+    type HC1Header:
+    {   srcpfx:  boolean;	// false => inline, true => prefix assumed
+        srciid:  boolean;	// false => inline, true => otherwise derived
+        dstpfx:  boolean;	// false => inline, true => prefix assumed
+        dstiid:  boolean;	// false => inline, true => otherwise derived
+        tcflzero:boolean;
+        nexthdr: (NC, UDP, ICMP, TCP);
+        hc2:     boolean;
+    }: packed, msb, nopad;    	
+
+    const mtu = 1280;	// This is for the IPv6 layer
+}
+
+import mbuf;
+
+proc HandleMesh(mb: mbuf.pMBuf): boolean: external;	// FIXME
+proc HandleBroadcast(mb: mbuf.pMBuf):: external;	// FIXME
+
+package lowpan
+{
+    alias mbuf.MBuf as MBuf;
+    alias mbuf.pMBuf as pMBuf;
+
+    type pMeshHeader: @MeshHeader;
+    type pDispHeader: @DispHeader;
+    type pFragHeader: @FragHeader;
+
+    proc Recv(mb: pMBuf)::global	// FIXME
+    {   var mh: pMeshHeader;
+	var dh: pDispHeader;
+	var fh: pFragHeader;
+	var dt: DispHeader;
+
+	/*
+	 * The headers are processed in this order:
+	 * 1. mesh header
+	 * 2. broadcast header
+	 * 3. fragment header
+	 * 4. dispatch header
+	 */
+    	dh = pDispHeader(mb.Data());
+    	dt = dh@;
+    	if dt.type == MESH then
+    	{
+    	    if HandleMesh(mb) then
+    	    	return;		// sent elsewhere, nothing to do locally
+    	    // mesh header stripped, start anew
+    	    dh = pDispHeader(mb.Data());
+    	    dt = dh@;
+    	}
+    	if dt == { DISP, BC0 } then
+    	{
+	    HandleBroadcast(mb);
+    	}
+    	if dt.type == FRAG then
+    	{   fh = pFragHeader(dh);
+	    if fh.subtype
+	    is FRAG1 then	// first fragment
+	    {
+	    }
+	    is FRAGN then	// not first fragment
+	    {
+	    }
+    	}
+    	if dt.type == DISP then
+    	{
+    	}
+    	mbuf.Free(mb);		// not a valid header, ignore
+    }
+}

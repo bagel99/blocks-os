@@ -1,0 +1,824 @@
+/*
+ * IPv6
+ * Needs more work.
+ *
+ * Copyright (c) 2009-2012, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+import ipv6def;
+import timer;
+
+package ipv6	// continue with implementation
+{
+    if !_defined(db) then
+    {   if _defined(debug.db_ipv6) then
+	    alias debug.db_ipv6 as db;
+	else
+	    const db = 0;
+    }
+
+    // The lower level is an IPv6 'interface'.
+
+    const EnetMulticast: [2]_byte = { 0x33, 0x33 };
+
+    // NEIGHBOR CACHE
+    type NCState: (INCOMPLETE, REACHABLE, STALE, DELAY, PROBE);
+    type NCacheEntry:
+    {   addr:	IPv6Addr;
+	next:	@NCacheEntry;
+	queue:	pMBuf;
+	state:	NCState;
+	age:	_uint8;
+	laddr:	net.MAC;
+    }: align(8);
+    type pNCacheEntry: @NCacheEntry;
+    const ReachableTO = 60;
+    const IncompleteTO = 5;
+
+    // PREFIX CACHE
+    type IntfAddrEntry:
+    {   addr:   IPv6Addr;
+	next:   @IntfAddrEntry;
+	vlifet: _uint32;	// lifetime in seconds
+	len:    _uint8;		// prefix length
+	state:  AddrState;
+    }: align(8);
+    type pIntfAddrEntry: @IntfAddrEntry;
+
+
+// BEGIN DEBUG
+    proc DumpIntfID(intf: pLower)
+    {   var i: _uint;
+
+	i = 0;
+	while (i < iidlen) do
+	{   debug.hex8(intf.iid[i]);
+	    i += 1;
+	}
+    }
+
+    proc (intf: pLower) DumpAllAddr()
+    {   var pa: pIntfAddrEntry;
+
+	debug.str("Interface: "); debug.uint(intf.ifn); 
+	debug.str("\nUnicast:\n");
+	pa = intf.prefixes;
+	while pa != 0 do
+	{   AddrPrint(pa.addr); debug.nl();
+	    pa = pa.next;
+	}
+	debug.str("Multicast:\n");   
+	pa = intf.multicast;
+	while pa != 0 do
+	{   AddrPrint(pa.addr); debug.nl();
+	    pa = pa.next;
+	}
+    }
+
+    proc DumpPacket(msg: @[]_byte, mb: pMBuf, ip: pHeader)
+    {
+	debug.str(msg);
+	debug.str(": ifn="); debug.uint8(mb.tag);
+	debug.str(" size="); debug.uint32(_uint32(mb.Size()));
+	debug.str(" length="); debug.uint32(ip.length);
+	debug.str(" proto="); debug.hex8(_uint8(ip.proto));
+	debug.str("\n\tto="); AddrPrint(ip.dstaddr);
+	debug.nl();
+    }
+//END DEBUG
+
+    // forwards
+    proc (intf: pLower) ISend(mb: pMBuf, ip: pHeader);
+    proc (intf: pLower) SendNS(src: @IPv6Addr, dst: @IPv6Addr, tgt: @IPv6Addr);
+    proc (intf: pLower) SendRS(dst: @IPv6Addr);
+    proc (ib: pIPv6Block) Route(mb: pMBuf);
+
+    // NEIGHBOR CACHE SUPPORT
+    proc (intf: pLower) NCacheDump()
+    {   var pnc: pNCacheEntry;
+
+	debug.str("Neighbor Cache:\n");
+	pnc = intf.neighbors;
+	while pnc != 0 do
+	{   debug.hex32(_uint32(pnc));
+	    debug.str(": ");
+	    AddrPrint(pnc.addr);
+	    debug.str("\n\tstate=");
+	    debug.uint8(_uint8(pnc.state));
+	    debug.str(" age=");
+	    debug.uint8(pnc.age);
+	    debug.str(" laddr=");
+	    MACPrint(pnc.laddr);
+	    debug.nl();
+	    pnc = pnc.next;
+	}
+    }
+
+    // Interface numbers (ifn) are 1-based
+    proc (ib: pIPv6Block) GetInterface(ifn: _uint): pLower: inline
+    {
+	ifn -= 1;
+	if ifn < NIPv6Lower then
+	    return ib.lower[ifn];
+	return 0;
+    }
+
+    proc (intf: pLower) SetLinkLocalAddress(ip: pHeader)
+    {
+	ip.srcaddr[0:8] = LinkLocalPrefix;
+	ip.srcaddr[8:8] = intf.iid;
+    }
+
+    proc (intf: pLower) NCacheFind(ipaddr: @IPv6Addr): pNCacheEntry
+    {   var pnc: pNCacheEntry;
+
+if db > 3 then {debug.str("ipv6.NCacheFind: ipaddr="); AddrPrint(ipaddr);}
+	pnc = intf.neighbors;
+	while pnc != 0 && !AddrSame(ipaddr, pnc.addr) do
+	    pnc = pnc.next;
+if db > 3 then {debug.str(" pnc="); debug.hex(_uint(pnc)); debug.nl();}
+	return pnc;
+    }
+
+    proc (intf: pLower) DeleteQueue(pnc: pNCacheEntry)
+    {   var mb, nb: pMBuf;
+
+	mb = pnc.queue;
+	while mb != 0 do
+	{   nb = mb.GetNext();
+	    mbuf.Free(mb);
+	    mb = nb;
+	}
+    }
+
+    proc (intf: pLower) SendQueue(pnc: pNCacheEntry)
+    {   var mb, nb: pMBuf;
+
+	mb = pnc.queue;
+	while mb != 0 do
+	{   nb = mb.GetNext();
+if db > 2 then {debug.str("ipv6.SendQueue\n");}
+	    intf.ISend(mb, pHeader(mb.Data()));
+	    mb = nb;
+	}
+	pnc.queue = 0;
+    }
+
+    proc (intf: pLower) NCacheAdd(ipaddr: @IPv6Addr, linkaddr: @net.MAC): pNCacheEntry
+    {   var pnc: pNCacheEntry;
+	var toaddr, myaddr: IPv6Addr;
+
+if db > 3 then {debug.str("ipv6.NCacheAdd: ipaddr="); AddrPrint(ipaddr); debug.nl();}
+	// First check if already in cache
+	pnc = intf.neighbors;
+	while pnc != 0 && !AddrSame(ipaddr, pnc.addr) do
+	    pnc = pnc.next;
+	if pnc == 0 then
+	{
+if db > 3 then {debug.str("\tnew entry\n");}
+	    pnc = _new(NCacheEntry);
+	    pnc.addr = ipaddr@;
+	    pnc.queue = 0;
+	    pnc.next = intf.neighbors;
+	    intf.neighbors = pnc;
+	}
+	if intf.type == PPP then
+	{   pnc.age = 0;    // infinite
+	    pnc.state = REACHABLE;
+	}
+	else
+	{   if linkaddr != 0 then
+	    {   pnc.laddr = linkaddr@;
+		pnc.age = ReachableTO;
+		pnc.state = REACHABLE;
+if db > 3 then {debug.str("\tlinkaddr="); MACPrint(linkaddr); debug.nl();}
+		if pnc.queue != 0 then intf.SendQueue(pnc);
+	    }
+	    else
+	    {   pnc.age = IncompleteTO;
+		pnc.state = INCOMPLETE;
+		toaddr[0:13] = SolicitedPrefix;
+		toaddr[13:3] = ipaddr[13:3];
+		myaddr[0:8] = LinkLocalPrefix;
+		myaddr[8:8] = intf.iid;
+		intf.SendNS(myaddr, toaddr, ipaddr);
+	    }
+	}
+if db > 5 then {intf.NCacheDump();}	
+	return pnc;
+    }
+
+    /*
+     * Neighbor cache entries are timed out here.
+     * The approach is very simple compared to RFC4861.
+     * We don't implement the states STALE, DELAY, and PROBE;
+     * and we don't take hints from upper levels.
+     * This will result in more NS packets being sent.
+     */
+    proc (intf: pLower) NCacheTimer()
+    {   var pnc, pnp, pnn: pNCacheEntry;
+
+	pnp = 0;
+	pnc = intf.neighbors;
+	while pnc != 0 do
+	{   pnn = pnc.next;
+	    if pnc.age != 0 then    // 0 => infinite
+	    {   pnc.age -=  1;
+		if pnc.age == 0 then
+		{   // send error upward for every item in queue
+		    // FIXME: for now just discard
+		    intf.DeleteQueue(pnc);
+		    // then discard entry
+if db > 3 then {debug.str("ipv6.NCacheTimer discard state=");
+debug.uint8(_uint8(pnc.state));
+debug.str(" queue="); debug.hex(_uint(pnc.queue)); debug.nl(); }
+		    if pnp == 0 then
+			intf.neighbors = pnn;
+		    else
+			pnp.next = pnn;
+		    _delete(pnc);
+		}
+		else if pnc.state == INCOMPLETE then
+		{   // intf.SendNS
+if db > 3 then {debug.str("ipv6.NCacheTimer should send NS\n");}
+	        }
+	    }
+	    pnp = pnc;
+	    pnc = pnn;
+	}
+    }
+
+    // Per interface timer, returns next timeout in seconds
+    proc (intf: pLower) Timer(): _uint
+    {   var nexttime: _uint;
+	var toaddr, myaddr: IPv6Addr;
+
+if db> 4 then { debug.str("ipv6.IntfTimer "); debug.uint8(intf.ifn);
+debug.str(" state="); debug.uint8(_uint8(intf.state)); debug.nl(); }
+	nexttime = 1;   // default
+	if intf.state
+	is DOWN then
+	    nexttime = 0;
+	is TENTATIVE then
+	{   intf.state = WAITDAD;
+	    toaddr[0:13] = SolicitedPrefix;
+	    toaddr[13:3] = intf.iid[5:3];
+	    myaddr[0:8] = LinkLocalPrefix;
+	    myaddr[8:8] = intf.iid;
+	    intf.SendNS(myaddr, toaddr, myaddr);
+	    nexttime = 2;   // FIXME: what is the correct timeout?
+	}
+	is WAITDAD then
+	{   intf.state = PREFERRED;
+	    intf.rsage = 1;
+	}
+	is PREFERRED then
+	{   intf.rsage -= 1;
+	    if intf.rsage == 0 then
+	    {   intf.SendRS(AllRoutersAddr);
+		intf.rsage = RSTimeout;
+	    }
+	    intf.NCacheTimer();
+	}
+	return nexttime;
+    }
+
+
+    // PREFIX CACHE SUPPORT
+    proc (intf: pLower) PfxCacheFind(prefix: @IPv6Addr, len: _uint): pIntfAddrEntry
+    {   var pp: pIntfAddrEntry;
+
+if db > 3 then {debug.str("ipv6.PfxCacheFind: ipaddr=");
+AddrPrint(prefix); debug.nl();}
+	pp = intf.prefixes;
+	while pp != 0 && !Match(prefix, pp.addr, len) do
+	    pp = pp.next;
+	return pp;
+    }
+
+    proc (intf: pLower) PfxCacheAdd(prefix: @IPv6Addr, len: _uint, vlifet: _uint32)
+    {   var pp: pIntfAddrEntry;
+	var n: _uint;
+
+if db > 3 then {debug.str("ipv6.PfxCacheAdd: ipaddr="); AddrPrint(prefix);
+debug.str(" len="); debug.uint32(len);  debug.nl();}
+	// FIXME: what if len is not 64 or even a multiple of 8?
+	n = len/8;
+	// FIXME: should be sorted by length, longest first
+	pp = _new(IntfAddrEntry);
+	pp.addr[0:n] = prefix[0:n];
+	pp.addr[8:8] = intf.iid;
+	pp.len = _uint8(len);
+	pp.vlifet = vlifet;
+	pp.state = TENTATIVE;
+	pp.next = intf.prefixes;
+	intf.prefixes = pp;
+if db > 5 then { intf.DumpAllAddr();}
+    }
+
+    proc (intf: pLower) PfxCacheDelete(pp: pIntfAddrEntry)
+    {   var pn: pIntfAddrEntry;
+
+	pn = intf.prefixes;
+	if pn == pp then	// first on list
+	    intf.prefixes = pp.next;
+	else
+	{   while pn != 0 && pn.next != pp do
+		pn = pn.next;
+	    pn.next = pp.next;
+	}
+	_delete(pp);
+    }
+
+    proc (intf: pLower) AddrAddMulticast(a: @IPv6Addr)
+    {   var pa: pIntfAddrEntry;
+
+	pa = _new(IntfAddrEntry);
+	pa.addr = a@;		// array copy
+	pa.next = intf.multicast;
+	intf.multicast = pa;
+    }
+
+    proc (intf: pLower) OurIID(iid: @[8]_byte): boolean
+    {   var i: _uint;
+
+	i = 0;
+	while i < 8 do
+	{   if intf.iid[i] != iid[i] then return false;
+	    i += 1;
+	}
+	return true;
+    }
+
+    proc (intf: pLower) ToUs(dst: @IPv6Addr): boolean
+    {   var atype: AddrType;
+	var ascope: AddrScope;
+	var pa: pIntfAddrEntry;
+
+	atype, ascope = GetAddrType(dst);
+	if atype
+	is UNICAST then pa = intf.prefixes;
+	is MULTICAST then pa = intf.multicast;
+	while pa != 0 do
+	{   if AddrSame(dst, pa.addr) then return true;
+	    pa = pa.next;
+	}
+	return false;
+    }
+
+    // Routines that already have an IPv6 header attached use this
+    proc (intf: pLower) ISend(mb: pMBuf, ip: pHeader)
+    {   var pnc: pNCacheEntry;
+	var la: pEUI64;
+
+	ip.vtf = {.version=6, .traffic=0, .flow=0};
+	ip.hops = 255;
+	if intf.type != PPP then
+	{   // Build link destination header
+	    la = pEUI64(mb.GrowHead(EUI64?size));
+	    if IsMulticast(ip.dstaddr) then
+	    {   la@[0:2] = EnetMulticast;
+		la@[2:4] = ip.dstaddr[12:4];
+	    }
+	    else
+	    {   pnc = intf.NCacheFind(ip.dstaddr);
+		if pnc == 0 then
+		{   pnc = intf.NCacheAdd(ip.dstaddr, 0);
+		    if pnc != 0 then
+		    {   mb.ShrinkHead(EUI64?size);
+			mb.SetNext(pnc.queue);
+			pnc.queue = mb;
+		    }
+		    return;     // queued until address resolution
+		}
+		la@[0:6] = pnc.laddr[0:6];
+		// FIXME
+	    }
+	}
+if db > 2 then DumpPacket("ipv6.ISend", mb, ip);
+	mb.info = IPv6Type;
+	mb.code = SEND;
+	mb.tag  = intf.ifn;       // tag event with interface number
+	intf.bid.Send(mb);
+    }
+
+    // Select a source address based on destination address
+    // Uses a subset of rules from RFC3484
+    proc (ib: pIPv6Block) SourceAddress(ifn: _uint8, to: @IPv6Addr,
+	/*returned*/ from: @IPv6Addr): _uint8
+    {
+	var intf: pLower;
+
+if db > 3 then { debug.str("SourceAddress: dst="); AddrPrint(to); debug.nl();}
+	intf = ib.lower[0];	// FIXME - assume ifn=1
+	// FIXME - temporary - assume link local
+	from[0:8] = LinkLocalPrefix[0:8];
+	from[8:8] = intf.iid;
+	return intf.ifn;
+    }
+
+    proc (ib: pIPv6Block) Route(mb: pMBuf)
+    {   var ip: pHeader;
+	var intf: pLower;
+
+	ip = pHeader(mb.Data());
+if db > 2 then {debug.str("ipv6.Route: ifn="); debug.uint8(mb.tag); debug.nl();}
+	intf = ib.GetInterface(mb.tag);
+	if intf != 0 then
+	    intf.ISend(mb, ip);
+	else
+	    mbuf.Free(mb);	// no route found, discard
+    }
+}
+
+import ipv6icmp;		// ICMP
+
+package ipv6
+{
+     // Calculate the upper layer checksum for TCP or UDP.
+    proc UChecksum(mb: pMBuf, offset: _uint)
+    {   type puint16: @[]_uint16;
+	var hp: puint16;
+
+	offset = offset / 2;    // bytes to halfwords
+	hp = puint16(mb.Data());
+	hp[offset] = 0;
+	hp[offset] = inet.Checksum(hp, mb.Size());
+    }
+
+    // Handle data from upper protocols
+    proc (ib: pIPv6Block) USend(mb: pMBuf)
+    {   var ip: pHeader;
+	var uh: pULHeader;
+	var proto: Proto;
+	var ifn: _uint8;
+
+	uh = pULHeader(mb.Data());
+	ifn = uh.info.ifn;
+	ifn = ib.SourceAddress(ifn, uh.dstaddr, uh.srcaddr);
+if db > 2 then {debug.str("ipv6.USend: ifn="); debug.uint8(ifn); debug.nl();}
+	proto = uh.proto;
+	/*
+	 * The IP layer and TCP/UDP are joined at the hip through the
+	 * "psuedo-header" influence on the checksum.  Since this includes
+	 * the source address, which is determined in this layer,
+	 * the TCP/UCP checksums can't be calculated until after that.
+	 */
+	uh.info = inet.InfoZero;    // zero for checksum
+	if proto
+	is TCP then UChecksum(mb, ULHeader?size + 16);
+	is UDP then UChecksum(mb, ULHeader?size + 6);
+	// Now discard upper layer header and build IPv6 header,
+	// src/dst addresses already in place
+	ip = pHeader(mb.GrowHead(Header?size - ULHeader?size));
+	ip.length = _uint16(mb.Size() - Header?size);
+	ip.proto = proto;
+	ip.vtf = {.version=6, .traffic=0, .flow=0};
+	ip.hops = 255;
+	mb.info = IPv6Type;
+	mb.tag = ifn;
+	ib.Route(mb);
+    }
+
+    proc (ib: pIPv6Block) RecvFrag(ip: pHeader, mb: pMBuf): Proto;  // forward
+
+    // Hop-by-Hop Header Support
+    type HbHHeader(OptionHeader):
+    {opt:    []_uint8;       // at least 6 bytes present
+    };
+    type pHbHHeader: @HbHHeader;
+    proc (ib: pIPv6Block) RecvHbH(mb: pMBuf): Proto
+    {   var hbh: pHbHHeader;
+	var proto: Proto;
+	var nbytes: _uint;
+
+	hbh = pHbHHeader(mb.Data());
+	proto = hbh.proto;
+	nbytes = (hbh.len + 1) * 8;
+	mb.ShrinkHead(nbytes);
+	return proto;	
+    }
+
+    proc SkipHeader(mb: pMBuf): Proto
+    {   var oh: pOptionHeader;
+	var proto: Proto;
+	var nbytes: _uint;
+
+	oh = pOptionHeader(mb.Data());
+	proto = oh.proto;
+	nbytes = (oh.len + 1) * 8;
+	mb.ShrinkHead(nbytes);
+	return proto;	
+    }
+
+    proc (ib: pIPv6Block) Forward(mb: pMBuf, ip: pHeader)
+    {
+	ip.hops -= 1;
+	if ip.hops > 0 then
+	    ib.Route(mb);
+	else
+	{
+	    // FIXME - send ICMP message
+	    mbuf.Free(mb);      // FIXME
+	}
+    }
+
+    proc (ib: pIPv6Block) Deliver(mb: pMBuf, ip: pHeader)
+    {   var uh: pULHeader;
+	var up: pUpper;
+	var proto: Proto;
+	var len: _uint16;
+
+	proto = ip.proto;
+	len = ip.length;
+if db > 2 then {debug.str("ipv6.Deliver: size="); debug.uint32(mb.Size());
+debug.str(" length="); debug.uint32(len);
+debug.str(" proto="); debug.hex8(_uint8(proto));
+debug.nl();}
+
+	// process headers
+	    while proto != NONEv6 do
+	    {   if proto
+		is HOPv6 then    proto = ib.RecvHbH(mb);
+		is DSTOPTv6 then proto = SkipHeader(mb);	// FIXME: not handled
+		is ROUTEv6 then	 proto = SkipHeader(mb);	// FIXME: not handled
+		is FRAGv6 then   proto = ib.RecvFrag(ip, mb);
+		is CRYPTv6 then  proto = NONEv6;		// FIXME: not handled
+		is AUTHv6 then   proto = NONEv6;		// FIXME: not handled
+		else	// some higher protocol
+		{
+		    if proto == ICMPv6 then
+			ib.ICMPRecv(mb); // FIXME: need to pass the IPv6 header
+		    else
+		    {   uh = pULHeader(mb.ShrinkHead(Header?size - ULHeader?size));
+			// src/dst addresses already in place
+			uh.info = { .isipv6=true, .ifn=mb.tag };
+			uh.proto = proto;
+			uh.len = len;
+			uh.zeros = 0;
+			up = ib.upper;
+			while up != 0 && up.proto != proto do
+			    up = up.next;
+			if up != 0 then
+			    up.bid.Send(mb);
+			else
+			    mbuf.Free(mb);	// ignore
+		    }
+		    return;
+		}
+	    }
+    }
+}
+
+import ipv6frag;		// Fragmentation support
+
+package ipv6
+{
+    // Handle data from lower endpoints
+    proc (ib: pIPv6Block) Recv(mb: pMBuf)
+    {   var ip: pHeader;
+	var intf: pLower;
+
+	ip = pHeader(mb.Data());
+	if mb.Size() >= Header?size && ip.vtf.version == 6 then
+	{
+if db > 1 then DumpPacket("ipv6.Recv", mb, ip);
+	    intf = ib.GetInterface(mb.tag);
+	    if intf != 0 then   // valid interface
+	    {   if intf.ToUs(ip.dstaddr) then
+		{   ib.Deliver(mb, ip);
+		    return;
+		}
+if db > 3 then { debug.str("ipv6.ToUs fail\n"); }
+		if ib.IsRouter then
+		{   ib.Forward(mb, ip);
+		    return;
+		}
+	    }
+	}
+	mbuf.Free(mb);		// Defective, or not willing/able to route.
+    }
+
+    proc (ib: pIPv6Block) NewInterface(ifn: _uint, to: BlockID)
+    {   var intf: pLower;
+
+if db > 1 then {debug.str("ipv6.NewInterface: "); debug.uint(ifn);
+debug.nl();}
+	ifn -= 1;
+	if ifn < NIPv6Lower then
+	{   intf = _new(Lower);  _zero(intf);
+	    ib.lower[ifn] = intf;
+	    intf.ifn = ifn+1;
+	    intf.bid = to;
+	    intf.AddrAddMulticast(AllNodesAddr);	// multicast all nodes
+	}
+	else
+	{
+debug.str("ipv6: Interface number out of range\n");
+	}
+    }
+
+    proc (ib: pIPv6Block) InterfaceUp(li: comm.pLinkInfo)
+    {   var intf: pLower;
+	var addr: IPv6Addr;
+
+	intf = ib.GetInterface(li.tag);
+	if intf == 0 then return;
+if db > 0 then {debug.str("ipv6.InterfaceUp: ifn=");
+debug.uint8(li.tag); debug.chr(':');
+debug.uint8(li.hdr); debug.chr(',');
+debug.uint8(li.trl); debug.chr(',');
+debug.uint16(li.mtu); debug.nl(); }
+	intf.hdr = _max(li.hdr, EUI64?size);  // at least the EUI64 header
+	ib.hdr   = _max(ib.hdr, intf.hdr);
+	intf.trl = li.trl;
+	ib.trl   = _max(ib.trl, intf.trl);
+	intf.type = li.type;
+	if intf.type
+	is ENET then
+	{   net.FromMAC(li.id, intf.iid);
+	    intf.state = TENTATIVE;
+	}
+	is PPP then
+	{   intf.iid = li.id[0:8];
+	    intf.state = PREFERRED;
+	}
+if db > 0 then {
+addr[0:8] = LinkLocalPrefix[0:8]; addr[8:8] = intf.iid;
+debug.str( "\tlla="); AddrPrint(addr); debug.nl();}
+	intf.PfxCacheAdd(LinkLocalPrefix, 64, 0xFFFF_FFFF);
+	addr[0:13] = SolicitedPrefix;
+	addr[13:3] = intf.iid[5:3];		// FIXME
+	intf.AddrAddMulticast(addr);		// multicast solicited-node
+	ib.ifcount += 1;
+    }
+
+    proc (ib: pIPv6Block) InterfaceDown(e: pEvent)
+    {   var intf: pLower;
+
+	intf = ib.GetInterface(e.tag);
+	if intf == 0 then return;
+if db > 0 then {debug.str("ipv6.InterfaceDown: ifn=");
+debug.uint8(e.tag); debug.nl(); }
+	if intf.neighbors != 0 then intf.DeleteQueue(intf.neighbors);
+	intf.state = DOWN;
+	ib.ifcount -= 1;
+    }
+
+    proc (ib: pIPv6Block) InformUpper(isup: boolean)
+    {   var up: pUpper;
+	var li: comm.pLinkInfo;
+	var e: pEvent;
+
+if db > 3 then {debug.str("ipv6.InformUpper ");  debug.uint8(_uint8(isup));
+debug.nl();}
+	up = ib.upper;
+	while up != 0 do
+	{   if isup then
+	    {   li = _new(comm.LinkInfo);
+		li.code = UP;
+		li.tag = up.tag;	// IPv4 vs IPv6
+		li.hdr = ib.hdr + Header?size;
+		li.trl = ib.trl;
+		li.mtu = 1500 - Header?size;    // FIXME
+		up.bid.Send(li);
+	    }
+	    else
+	    {   e = _new(Event);
+		e.code = DOWN;
+		e.tag = up.tag;
+		up.bid.Send(e);
+	    }
+	    up = up.next;
+	}
+    }
+
+   proc (ib: pIPv6Block) StartTimer()
+    {   var te: timer.pTimerEvent;
+
+if db > 3 then {debug.str("ipv6.StartTimer\n");}
+	if ib.iftimer == NONE then
+	{   ib.iftimer = RUN;
+	    te = _new(timer.TimerEvent);
+	    te.code = TSTART;
+	    te.tag = ib.id;
+	    te.ticks = timer.SecondsToTicks(5);    // FIXME: if first then should be random
+	    TimerID.Send(te);
+	}
+    }
+
+    proc (ib: pIPv6Block) Timer(te: timer.pTimerEvent)
+    {   var intf: pLower;
+	var nexttime, thistime: _uint;
+	var ifn: _uint;
+
+	nexttime = 0;
+	for ifn from 0 to NIPv6Lower-1 do
+	{   intf = ib.lower[ifn];
+	    if intf != 0 then
+	    {   thistime = intf.Timer();
+		if nexttime == 0 then
+		    nexttime = thistime;
+		else
+		    nexttime = _min(nexttime, thistime);
+	    }
+	}
+	if nexttime != 0 then
+	{   te.code = TSTART;
+	    te.ticks = timer.SecondsToTicks(nexttime);
+	    TimerID.Send(te);
+	}
+	else
+	{
+if db > 3 then {debug.str("ipv6.Timer deleted\n");}
+	    event.Free(te);
+	}
+    }
+
+    proc Run(b: pBlock, e: pEvent)
+    {   var ib: pIPv6Block;
+
+if db > 4 then {debug.str("ipv6.Run ");  debug.uint8(_uint8(e.code));
+debug.chr(','); debug.uint8(e.tag); debug.nl();}
+        ib = pIPv6Block(b);
+        if e.code
+        is RCVD then    // packet received from interface
+	    ib.Recv(pMBuf(e));
+	is SEND then    // packed received from upper protocol
+	    ib.USend(pMBuf(e));
+	is TDONE then   // timer event
+	    ib.Timer(timer.pTimerEvent(e));
+	is UP then      // interface has come up
+        {   var li: comm.pLinkInfo;
+	    li = comm.pLinkInfo(e);
+	    ib.InterfaceUp(li);
+	    _delete(li);
+	    if ib.ifcount == 1 then // first interface came up
+	    {   ib.InformUpper(true);
+		ib.StartTimer();
+	    }
+	}
+	is DOWN then    // interface has gone down
+	{   ib.InterfaceDown(e);
+	    _delete(e);
+	    if ib.ifcount == 0 then // last interface went down
+		ib.InformUpper(false);
+	}
+	is OPEN then    // upper protocol wants to start
+	{
+	}
+	is CLOSE then   // upper protocol wants to stop
+	{
+	}
+	is CONNECT then
+	{   var ce: event.pConnEvent;
+	    ce = event.pConnEvent(e);
+	    if ce.type == LOWER then
+	    {
+if db > 0 then {debug.str("ipv6.Connect lower: intf="); debug.uint8(ce.chan); debug.nl();}
+		ib.NewInterface(ce.chan, ce.tag);
+	    }
+	    else
+	    {   var up: pUpper;
+if db > 0 then {debug.str("ipv6.Connect upper: intf="); debug.uint8(ce.chan); debug.nl();}
+		up = _new(Upper);
+		up.proto = ce.info;
+		up.tag   = ce.chan;
+		up.bid   = ce.tag;
+		up.next = ib.upper;
+		ib.upper = up;
+	    }
+	    _delete(ce);
+	}
+	is START then   // start things going
+	{   // for each connected interface, send an OPEN
+	    var oe: pEvent;
+	    var ifn: _uint;
+	    for ifn from 0 to NIPv6Lower-1 do
+	    {   if ib.lower[ifn] != 0 then
+		{   oe = _new(Event);
+		    oe.code = OPEN;
+		    oe.tag  = ifn;
+		    ib.lower[ifn].bid.Send(oe);
+		}
+	    }
+	    _delete(e);
+	}
+	    
+    }
+
+
+    proc NewBlock(id: BlockID): pBlock
+    {   var ib: pIPv6Block;
+
+	ib = _new(IPv6Block);  _zero(ib);
+if db > 0 then {debug.str("ipv6.NewBlock ");
+debug.uint8(id); debug.chr(' ');
+debug.hex(_uint(ib)); debug.nl(); }
+	ib.BlockInit(id, Run);
+	return ib;
+    }
+}
+// vim: ts=8 sw=4 noet nowrap
+

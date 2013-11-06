@@ -1,0 +1,315 @@
+/*
+ * Handle Ethernet frames.
+ * This package continues the implementation of ethernet drivers.
+ *
+ * Copyright (c) 2012, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+import net;
+import inet;
+import block;
+import comm;
+import mbuf;
+
+/*
+ * The Ethernet hardware device driver this continues must define:
+ *  type State: <something>;
+ * and implement:
+ *  proc (es: @State) Init(buf: _address, len: _uint): boolean;
+ *  proc (es: @State) XmitLoad(buf: _address, len: _uint): boolean;
+ *  proc (es: @State) RecvLoad(buf: _address, len: _uint): boolean;
+ *
+ * This package continuation implements:
+ *  proc RecvFull(es: @State, adr: _address, len: _uint);
+ *  proc XmitEmpty(es: @State, adr: _address, len: _uint);
+ * which should be forwards in the device driver.
+ *
+ * The interrupt handler is defined as a forward here:
+ *  proc (eb: pEthBlock) Intr();
+ * To monitor PHY status, the following forwards are defined here:
+ *  proc (eb: pEthBlock) EnablePolling();
+ *  proc (eb: pEthBlock) CheckLinkState(e: pEvent): boolean;
+ *     // arg is a TDONE event packet
+ * which must be implemented in a further package continuation.
+ */
+
+package eth
+{
+
+    if !_defined(db) then
+    {   if _defined(debug.db_eth) then
+	    alias debug.db_eth as db;
+	else
+	    const db = 0;
+    }
+    alias net.EUI64 as EUI64;
+    alias net.pEUI64 as pEUI64;
+    alias event.Event as Event;
+    alias event.pEvent as pEvent;
+    alias block.BlockID as BlockID;
+    alias block.Block as Block;
+    alias block.pBlock as pBlock;
+    alias mbuf.MBuf as MBuf;
+    alias mbuf.pMBuf as pMBuf;
+
+    const EnetFrameSize = 1576;
+    const BufOffset = 2;	// to keep what follows ethernet header aligned
+    type Proto: (IPV4=0x0800, ARP=0x0806, IPV6=0x86DD, END=0xFFFF);
+    type Header:
+    {   dstaddr: net.MAC;
+	srcaddr: net.MAC;
+	proto:   Proto: be;
+    };
+    type pHeader: @Header;
+
+    type ModeT: (NONE, UCAST, BCAST);
+    type Upper:
+    {   next:   @Upper;
+	bid:    BlockID;
+	tag:    _uint8;
+	proto:  Proto;
+	mode:   ModeT;
+    };
+    type pUpper: @Upper;
+
+    type EthBlock(Block):
+    {
+	upper:     pUpper;		// list of upper endpoints
+        XmitQueue: pEvent;		// device not able to take these yet
+        IsOpen:    boolean;		// upper level says to start
+	LinkUp:    boolean;		// hardware says link is up
+	state:     State;		// device state, previously declared
+    };
+    type pEthBlock: @EthBlock;
+
+    proc (eb: pEthBlock) EnablePolling();			// forward
+    proc (eb: pEthBlock) CheckLinkStatus(e: pEvent): boolean;   // forward
+    proc (eb: pEthBlock) Intr();				// forward
+
+    // Enqueue FIFO
+    proc (eb: pEthBlock) XmitEnqueue(mb: pMBuf)
+    {   var pn, pp: pMBuf;
+
+if db > 3 then debug.str("eth.XmitEnqueue\n");
+	mb.SetNext(0);
+	pn = pMBuf(eb.XmitQueue);
+	if pn == 0 then
+	    eb.XmitQueue = mb;
+	else
+	{   loop
+	    {   pp = pn;
+		pn = pn.GetNext();
+	      exit pn == 0;
+	    }
+	    pp.SetNext(mb);
+	}
+    }
+
+    proc (eb: pEthBlock) XmitDequeue(): pMBuf
+    {   var pn: pMBuf;
+
+	pn = pMBuf(eb.XmitQueue);
+	eb.XmitQueue = pn.GetNext();
+	return pn;
+    }
+
+    proc (eb: pEthBlock) Xmit(mb: pMBuf)
+    {   var eh: pHeader;
+	var la: pEUI64;
+
+	la = pEUI64(mb.Data());
+	// Discard EUI64 header replace with ethernet header
+	eh = pHeader(mb.GrowHead(Header?size - EUI64?size));
+	eh.dstaddr = la@[0:6];	// use discarded data
+	eh.srcaddr = MyMAC;
+	eh.proto = mb.info;
+if db > 1 then {debug.str("eth.Send: size="); debug.uint(mb.Size());
+debug.str(" proto="); debug.hex16(_uint16(eh.proto));
+debug.nl();}
+	if !eb.state.XmitLoad(mb.Data(), mb.Size()) then    // FIXME: need to queue here
+debug.str("eb.Xmit failed\n");
+    }
+
+    var ethb: pEthBlock;   // FIXME: kludge to get context
+
+    // upcall from hardware driver interrupt
+    proc RecvFull(es: @State, adr: _address, len: _uint)
+    {   var eh: pHeader;
+	var mb: pMBuf;
+	var eb: pEthBlock;
+	var up: pUpper;
+
+	// calculate the address of the mbuf header
+	mb = pMBuf(adr, .buf[BufOffset]);
+//	mb = pMBuf((_uint32(adr)&~3) - MBuf?size);
+	mb.GrowTail(len);
+	eh = pHeader(mb.Data());
+if db > 1 then {debug.str("eth.Recv: size="); debug.uint(mb.Size());
+debug.str(" proto="); debug.hex16(_uint16(eh.proto));
+debug.nl();}
+	eb = ethb;	    // FIXME
+	// Check for minimum length?
+	up = eb.upper;
+	while up != 0 && up.proto != eh.proto do
+	    up = up.next;
+if db > 2 then {debug.str("\tup="); debug.hex(_uint(up)); debug.nl();}
+	if up != 0 then
+	{   mb.ShrinkHead(Header?size);
+	    mb.code = RCVD;
+	    mb.tag  = up.tag;
+	    mb.info = up.proto;
+	    up.bid.Send(mb);
+	}
+	else
+	    mbuf.Free(mb);// FIXME: Interrupt level. No-one interested, discard.
+	// FIXME: who should do this
+	// Give driver another buffer
+	mb = mbuf.Alloc(1576, BufOffset);
+	if !eb.state.RecvLoad(mb.Data(), mb.GetTailMax()) then
+	    mbuf.Free(mb);
+    }
+
+    // upcall from hardware driver interrupt
+    proc XmitEmpty(es: @State, adr: _address, len: _uint)
+    {
+	var mb: pMBuf;
+
+if db > 1 then debug.str("eth.XmitEmpty\n");
+	// calculate the address of the mbuf header
+	mb = pMBuf(adr, .buf[BufOffset]);
+//	mb = pMBuf((_uint32(adr)&~3) - MBuf?size);
+	mbuf.Free(mb);	// FIXME: Interrupt level.
+	// FIXME: check XmitQueue and send down
+    }
+
+    proc (eb: pEthBlock) Prime(n: _uint)
+    {   var i: _uint;
+    	var mb: mbuf.pMBuf;
+
+if db > 1 then debug.str("eth.Prime\n");
+	i = 0;
+	while i < n do
+	{   mb = mbuf.Alloc(1576, BufOffset);
+	  exit !eb.state.RecvLoad(mb.Data(), mb.GetTailMax()) with
+		mbuf.Free(mb);
+	    i += 1;
+	}
+    }
+
+    proc (eb: pEthBlock) NotifyLinkState(isup: boolean)
+    {   var up: pUpper;
+	var li: comm.pLinkInfo;
+	var e: pEvent;
+
+	eb.LinkUp = isup;
+	up = eb.upper;
+	while up != 0 do
+	{   if isup then
+	    {   li = _new(comm.LinkInfo);
+		if isup then li.code = UP; else li.code = DOWN;
+		li.tag = up.tag;	// interface number
+		li.id[0:6] = MyMAC;
+		li.hdr = 16;
+		li.trl = 0;
+		li.mtu = 1500;
+		li.type = ENET;
+		up.bid.Send(li);
+	    }
+	    else
+	    {   e = _new(Event);
+		e.code = DOWN;
+		e.tag = up.tag;
+		up.bid.Send(e);
+	    }
+	    up = up.next;
+	}
+    }
+
+    proc Run(b: pBlock, e: pEvent)
+    {   var eb: pEthBlock;
+
+	eb = pEthBlock(b);
+	if e == 0 then
+	{
+if db > 2 then { debug.str("eth.Run I\n"); }
+	    eb.Intr();
+	}
+	else
+	{
+if db > 1 then { debug.str("eth.Run ");  debug.uint8(_uint8(e.code));
+debug.chr(','); debug.uint8(e.tag); debug.nl(); }
+	    if e.code
+	    is SEND then
+	    {   eb.Xmit(pMBuf(e));
+	    }
+	    is RCVD then
+	    {
+	    }
+	    is OPEN then
+	    {   if !eb.IsOpen then
+		{   eb.IsOpen = true;
+		    eb.Prime(4);    // FIXME - how many?
+		    eb.state.Start();
+		    eb.EnablePolling();
+		}
+		_delete(e);
+	    }
+	    is CLOSE then
+	    {
+		_delete(e);
+	    }
+	    is CONNECT then
+	    {   var ce: event.pConnEvent;
+		ce = event.pConnEvent(e);
+		if ce.type == UPPER then
+		{   var pu: pUpper;
+		    // assert not a duplicate
+		    pu = _new(Upper);
+		    pu.bid   = ce.tag;
+		    pu.proto = Proto(ce.info);
+		    pu.tag   = ce.chan;
+		    pu.next  = eb.upper;
+		    eb.upper = pu;
+		}
+		_delete(ce);
+	    }
+	    is TDONE then   // if timer running, then polling PHY status
+	    {
+		if eb.CheckLinkStatus(e) then
+		{   if eb.state.GetLinkState(eb.LinkUp) then
+		    {   if !eb.LinkUp then
+			    eb.NotifyLinkState(true);
+		    }
+		    else
+		    {   if eb.LinkUp then
+			    eb.NotifyLinkState(false);
+		    }
+		}
+	    }
+	    else
+		_delete(e);
+	}
+    }
+
+
+    proc NewBlock(id: BlockID): pBlock
+    {   var eb: pEthBlock;
+
+        eb = _new(EthBlock);
+if db > 0 then { debug.str("eth.NewBlock ");
+debug.uint8(id); debug.chr(' ');
+debug.hex(_uint(eb)); debug.nl(); }
+        ethb = eb;      // FIXME
+	eb.BlockInit(id, Run);
+//	eb.SetIntr(vector);
+	eb.upper = 0;
+	eb.XmitQueue = 0;
+	eb.IsOpen = false;
+	eb.LinkUp = false;
+	eb.state.Init(MyMAC);
+	return eb;
+    }
+}
+// vim: ts=8 sw=4 noet nowrap
+

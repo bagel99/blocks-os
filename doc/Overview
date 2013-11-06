@@ -1,0 +1,45 @@
+BLOCKS
+
+Blocks is an "operating system" for embedded systems.
+
+A "block" is a container for state variables and code that operates on that
+state.  Blocks communicate with other blocks by sending "events".
+Each block is
+given a "block identifier (BID)" which is a unique small positive number.
+The value of the BID is also the priority of the block, thus no two blocks
+have the same priority.
+
+The maximum number of active blocks in a system is fixed at compile time.
+However, each block is activated at run time.  When they are activated,
+they generally allocate memory for their state variables.
+
+	<package>.NewBlock(bid);
+
+In protocol stacks, it is convenient to think of blocks having an "upper" and
+"lower" side.
+
+An event is a packet of memory that is "sent" from the sending block to the
+receiving block.  After being sent, the event memory no longer belongs to
+the sending block and must not be modified.  Thus, events are dynamically
+allocated and freed.
+
+In some cases, a block knows the BID of the receiving block.  For example,
+the system should define a constant named "TimerID" with the BID of the
+timer block as its value.  Other blocks can then send events to the timer block.
+
+But in many cases, a block A needs to "connect" with another block B but doesn't know
+its BID.  In these cases, the system must tell block A about block B.
+
+[Should connect be a procedure or an event?]
+
+The contents of an event packet include, as a minimum, the following:
+    code -  an 8-bit number that defines the event type
+    tag  -  an 8-bit number that indicates to the receiver something about
+	    the sender.  It is usually one of the following:
+	    1. senders BID
+	    2. an interface or channel number set up by a connect event
+    xsize - the size of the remaining part of the event packet
+            (or an immediate value, for some event codes??)
+
+
+

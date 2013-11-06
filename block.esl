@@ -1,0 +1,248 @@
+/*
+ * Block and its event queue.
+ *
+ * Copyright (c) 2012, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+import event;
+
+package block
+{
+    if _defined(debug) then 
+    {   if _defined(debug.db_block) then alias debug.db_block as db;
+        else const db = 0;
+    }
+    else const db = 0;
+    alias event.pEvent as pEvent;
+
+    // Blocks encapsulate event queue and state machine
+    // Generic event service routine
+    type Service: @_(b: @Block, e: pEvent);
+
+    type BlockID: _uint8;
+    // Event tags are often BlockIDs, make sure they fit
+    if event.EventTag?size < BlockID?size then error "BlockID size";
+    type PendIntr: _uint8;      // bit map
+    type IntrNum:  0..7;
+    type Block:
+    {   head:   pEvent;		// linked list of incoming events
+	tail:   pEvent;
+	run:    Service;	// event handler of block
+	id:     BlockID;	// unique (scheduling) ID (e.g. priority)
+	pintr:  PendIntr;	// interrupt pending
+	nintr:  IntrNum;	// interrupt being serviced
+    };
+    type pBlock: @Block;
+
+//    if _defined(sys.MaxBlockID) then alias sys.MaxBlockID as MaxBlockID;
+//    else const MaxBlockID = 32;
+    const MaxBlockID = 32;
+
+    var Ready: _uint32;		// FIXME - limits # blocks to 32
+    var Table: [MaxBlockID-1] pBlock;
+
+    /*
+     * Methods on Blocks
+     */
+
+    proc (bid: BlockID) GetState(): pBlock
+    {
+	if bid != 0 && bid <= MaxBlockID then
+	    return Table[bid-1];
+	return 0;
+    }
+
+    proc (bid: BlockID) MakeRunnable(): :inline
+    {
+        Ready = Ready | (1 << (bid-1));
+    }
+
+    proc (bid: BlockID) MakeIdle(): :inline
+    {
+        Ready = Ready & ~(1 << (bid-1));
+    }
+
+    proc (b: pBlock) IntrSet(n: IntrNum): :inline
+    {
+	    b.pintr = b.pintr | (1<<n);
+    }
+
+    proc (b: pBlock) IntrClr(n: IntrNum): :inline
+    {
+	    b.pintr = b.pintr & ~(1<<n);
+    }
+
+    proc NextToRun(): BlockID
+    {
+
+	if Ready != 0 then
+	    return Ready?bits - _clz(Ready);
+	return 0;
+    }
+
+    proc Sched(): boolean
+    {   var b: pBlock;
+        var e: pEvent;
+        var n: IntrNum;
+        var bid: BlockID;
+
+if db > 2 && Ready != 0 then {
+debug.str("Sched r="); debug.hex32(Ready); }
+	bid = NextToRun();
+	if bid != 0 then
+	{   b = Table[bid-1];
+if db > 2 then {debug.str(" bid="); debug.uint8(bid);}
+	    if b != 0 then      // FIXME - impossible?
+	    {
+		if b.pintr != 0 then    // interrupt(s) pending
+		{   n = _ctz(b.pintr);
+		    b.nintr = n;
+		    b.IntrClr(n);
+		    if b.pintr == 0 then
+			bid.MakeIdle();
+if db > 2 then {debug.nl();}
+		    b.run@(b, 0);
+		}
+		else			// normal event
+		{
+		    e = b.head;
+		    b.head = e.next;
+		    if b.head == 0 then
+			bid.MakeIdle();
+if db > 2 then {debug.str(" e="); debug.hex(_uint(e)); debug.nl();}
+		    b.run@(b, e);
+		}
+		return true;
+	    }
+	}
+	return false;
+    }
+  
+    proc (b: pBlock) BlockInit(bid: BlockID, run: Service)
+    {
+	if bid <= MaxBlockID then
+	{   b.head = 0;
+	    b.tail = 0;
+	    b.run  = run;
+	    b.id   = bid;
+	    b.pintr = 0;
+	    Table[bid-1] = b;
+        }
+        else {} // system configuration error
+    }
+
+    proc (b: pBlock) Enqueue(e: pEvent)
+    {
+	e.next = 0;
+	if b.head == 0 then b.head = e;
+	else                b.tail.next = e;
+	b.tail = e;
+    }
+
+    proc (bid: BlockID) Send(e: pEvent)
+    {   var b: pBlock;
+
+	if bid != 0 && bid <= MaxBlockID then
+	{   b = Table[bid-1];
+	    // FIXME - unlock
+if db > 1 then {debug.str("Send "); debug.uint8(bid);
+debug.chr(':'); debug.uint8(_uint8(e.code));
+debug.str(" b="); debug.hex(_uint(b));
+debug.str(" e="); debug.hex(_uint(e));}
+	    // FIXME - lock
+	    b.Enqueue(e);
+	    bid.MakeRunnable();
+if db > 1 then {debug.str(" r="); debug.hex32(Ready); debug.nl();}
+        }
+        else {} // system configuration error
+    }
+
+    /*
+     * The following is used to map interrupts via a vector
+     * into a BlockID and a IntrNum
+     */
+
+    const MaxVector = 64;       // FIXME
+    type VectorNum: 0..MaxVector-1;
+    type VectorEntry:
+    {   bid:   BlockID;
+	nintr: IntrNum;
+    };
+    var VectorMap: [MaxVector]VectorEntry;
+
+    proc (bid: BlockID) Post(n: IntrNum)
+    {   var b: pBlock;
+
+	b = Table[bid-1];
+	// FIXME - lock
+	b.IntrSet(n);
+	bid.MakeRunnable(); 
+	// FIXME - unlock
+
+    }
+
+    proc Post(v: VectorNum)
+    {   var bid: BlockID;
+
+	if v < MaxVector then
+	{   bid = VectorMap[v].bid;     // assume valid
+	    bid.Post(VectorMap[v].nintr);
+	}
+        else {} // system configuration error
+    }
+
+    proc (bid: BlockID) SetVector(v: VectorNum, n: IntrNum)
+    {
+
+	if bid <= MaxBlockID && v < MaxVector && n <= 7 then
+	{   
+	    VectorMap[v].bid = bid;
+	    VectorMap[v].nintr = n;
+	}
+    }
+
+    /*
+     * The following are helper methods to send specific event packets
+     */
+
+    proc (bid: BlockID) SendConnect(to: BlockID, type: event.ConnectT,
+    				     chan: _uint8, info: _uint16)
+    {   var ce: event.pConnEvent;
+
+	ce = _new(event.ConnEvent);
+	ce.code = CONNECT;
+	ce.tag  = to;
+	ce.xsize = event.ConnEvent?size - event.Event?size;
+	ce.type = type;
+	ce.chan = chan;
+	ce.info = info;
+	bid.Send(ce);
+    }
+
+    /*
+     * The following are used to set up initial connections
+     */
+
+    type ConnectionInfo:
+    {   to:    block.BlockID;
+	fm:    block.BlockID;
+	type:  event.ConnectT;
+	chan:  _uint8;
+	info:  _uint16;
+    };
+
+    proc InitConnections(ct: @[]ConnectionInfo, nc: _uint)
+    {   var i: _uint;
+	var c: @ConnectionInfo;
+
+	for i from 0 to nc-1 do
+	{   c = ct[i];
+	    c.to.SendConnect(c.fm, c.type, c.chan, c.info);
+	    while block.Sched() do {}
+	}
+    }
+
+}
+// vim: ts=8 sw=4 noet nowrap
+

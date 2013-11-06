@@ -1,0 +1,138 @@
+/*
+ * IPv4 definitions
+ *
+ * Copyright (c) 2009-2012, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+import inet;
+import block;
+
+package ipv4
+{
+    alias net.EUI64 as EUI64;
+    alias net.pEUI64 as pEUI64;
+    alias inet.Net32 as Net32;
+    alias inet.Net16 as Net16;
+    alias inet.IPv4AddrLen as IPv4AddrLen;
+    alias inet.IPv4Addr as IPv4Addr;
+    alias inet.Proto as Proto;
+    alias inet.ULHeader4 as ULHeader;
+    alias inet.pULHeader4 as pULHeader;
+    alias event.Event as Event;
+    alias event.pEvent as pEvent;
+    alias mbuf.pMBuf as pMBuf;
+    alias block.Block as Block;
+    alias block.pBlock as pBlock;
+    alias block.BlockID as BlockID;
+
+    if _defined(sys.NIPv4Lower) then
+	alias sys.NIPv4Lower as NIPv4Lower;
+    else
+	const NIPv4Lower = 2;
+
+    const IPv4Type = 0x0800;
+    const ArpType  = 0x0806;
+    const NullAddr: IPv4Addr = { 0, 0, 0, 0 };
+    const BcastAddr:IPv4Addr = { 255, 255, 255, 255 };
+
+    type Header:
+    {   vl:
+	{   version: 0..15;
+	    hdrlen:  0..15;
+	}: packed, msb;
+	tos:
+	{   precedence:  0..7;
+	    delay:       0..1;
+	    thruput:     0..1;
+	    reliability: 0..1;
+	    _:		 0..3;
+	}: packed, msb;
+	length:	Net16;
+	ident:	Net16;
+	fo:
+	{   _:	boolean;	// the evil bit
+	    df:	boolean;
+	    mf: boolean;
+	    offs: 0..0x1FFF;
+	}: packed, msb, be;
+	ttl:	_byte;
+	proto:	Proto;
+	chksum:	_uint16;
+	srcaddr:IPv4Addr;
+	dstaddr:IPv4Addr;
+    } : align(4);
+    type pHeader: @Header;
+
+    if Header?size < inet.ULHeader4?size then
+	error "IPv4 Header?size < ULHeader4?size";
+
+    const zeros: [12]_byte = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+
+
+    // Address Resolution (ARP) Cache
+    type AddrState:(INCOMPLETE, REACHABLE, STALE, DELAY, PROBE);
+
+    type AddrEntry:
+    {   next:   @AddrEntry;
+	addr:   IPv4Addr;
+	queue:	pMBuf;
+	state:  AddrState;
+	age:    _uint8;
+	laddr:  net.MAC;
+    };
+    type pAddrEntry: @AddrEntry;
+
+    type Upper:
+    {   next:    @Upper;
+	proto:   Proto;
+	bid:     BlockID;
+	tag:     _uint8;
+    };
+    type pUpper: @Upper;
+    
+    // Additional DHCP state
+    type DHCPStates: (Down, Select, Request, Bound, Renew, Rebind);
+    type DHCPState:
+    {   offered:   inet.IPv4Addr;
+	server:    inet.IPv4Addr;
+	state:     DHCPStates;
+	retries:   _uint8;
+	timeRT:    _uint8;      // short timeout for messages retries
+	timeleft:  _uint32;
+	timeRenew: _uint32;	// T1
+	timeRebind:_uint32;	// T2
+	timeLease: _uint32;
+    };
+    type pDHCPState: @DHCPState;
+
+    type Lower:
+    {   AddrCache: pAddrEntry;
+	dhcp:      @DHCPState;
+	addr:      IPv4Addr;		// IP address of this interface
+	mask:      IPv4Addr;		// address mask of network
+	mac:       [6]_byte;		// for ethernet
+	ifn:       _uint8;
+	bid:       BlockID;
+	state:     (DOWN, UP);
+	type:      comm.LinkType;
+	hdr:       _uint8;		// space for link level header(s)
+	trl:       _uint8;
+	mtu:       _uint16;		// e.g, 1500 for ethernet
+	IDSeqno:   _uint16;		// header sequence number
+    }: align(4);
+    type pLower: @Lower;
+
+    type IPv4Block(Block):
+    {   upper:     pUpper;		// upper level protocols
+	lower:     [NIPv4Lower]pLower;	// interfaces
+	hdr:       _uint8;		// max over all interfaces
+	trl:       _uint8;		// max over all interfaces
+	ifcount:   _uint8;		// number of ready interfaces
+	IsRouter:  boolean;
+	defifn:    _uint8;		// default route interface number
+    };
+    type pIPv4Block: @IPv4Block;
+}
+// vim: ts=8 sw=4 noet nowrap
+	

@@ -1,0 +1,267 @@
+/*
+ * IPv6 definitions
+ *
+ * Copyright (c) 2009-2011, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+import inet;
+import comm;
+
+package ipv6
+{
+    alias net.EUI64 as EUI64;
+    alias net.pEUI64 as pEUI64;
+    alias inet.Net32 as Net32;
+    alias inet.Net16 as Net16;
+    alias inet.IPv6AddrLen as IPv6AddrLen;
+    alias inet.IPv6Addr as IPv6Addr;
+    alias inet.Proto as Proto;
+    alias inet.ULHeader6 as ULHeader;
+    alias inet.pULHeader6 as pULHeader;
+    alias event.Event as Event;
+    alias event.pEvent as pEvent;
+    alias mbuf.pMBuf as pMBuf;
+    alias block.Block as Block;
+    alias block.pBlock as pBlock;
+    alias block.BlockID as BlockID;
+
+    if _defined(sys.NIPv6Lower) then
+	alias sys.NIPv6Lower as NIPv6Lower;
+    else
+	const NIPv6Lower = 2;
+
+    const IPv6Type = 0x86DD;
+
+    const useArrayCompare: boolean = true;     // FIXME
+
+    const IsRouter: boolean = false;
+    // Timeout constants
+    const DupAddrDetectTransmits = 1;
+//    const RSTimeout = 600;  // 4..1800 default 600 seconds
+    const RSTimeout = 60;  // FIXME test
+    const RetransTimer = 1; // default 1 second 
+
+    const UnspecAddr: [16]_byte: align(8) =
+	{ 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+	  0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00 };
+    const AllNodesAddr: [16]_byte: align(8) =
+	{ 0xFF,0x02,0x00,0x00,0x00,0x00,0x00,0x00,
+	  0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x01 };
+    const AllRoutersAddr: [16]_byte: align(8) =
+	{ 0xFF,0x02,0x00,0x00,0x00,0x00,0x00,0x00,
+	  0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x02 };
+    const LinkLocalPrefix: [16]_byte: align(8) =
+	{ 0xFE,0x80,0x00,0x00,0x00,0x00,0x00,0x00,
+	  0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00 };
+    const SolicitedPrefix: [13]_byte: align(8) =
+	{ 0xFF,0x02,0x00,0x00,0x00,0x00,0x00,0x00,
+	  0x00,0x00,0x00,0x01,0xFF };
+
+    type Header:
+    {	vtf:
+	{   version: 0..15;		// 4-bit version, must be 6
+	    traffic: 0..0xFF;		// 8-bit traffic class
+	    flow:    0..0xFFFFF;	// 20-bit flow label
+	}: packed, msb, be;
+	length:  Net16;			// 16-bit payload length
+	proto:    Proto;		// 8-bit next header type
+	hops:    _uint8;		// 8-bit hop limit
+	srcaddr: IPv6Addr;		// 128-bit source address
+	dstaddr: IPv6Addr;		// 128-bit destination address
+    };
+    type pHeader: @Header;
+
+    if Header?size < inet.ULHeader6?size then
+	error "IPv6 Header?size < ULHeader6?size";
+
+    type OptionHeader:
+    {   proto:    Proto;		// 8-bit next header type
+	len:    _uint8;			// 8-bit length of this option
+    };
+    type pOptionHeader: @OptionHeader;
+
+    type AddrType: (UNSPEC, LOOPBACK, UNICAST, MULTICAST);
+    type AddrScope:
+    (   InterfaceLocal=1, LinkLocal=2, AdminLocal=4, SiteLocal=5,
+	OrganizationLocal=8, Global=14
+    );
+
+    type Upper:
+    {   next:    @Upper;
+	bid:     BlockID;
+	tag:     _uint8;
+	proto:   Proto;
+    };
+    type pUpper: @Upper;
+    
+
+    // INTERFACE STATE
+    // For the interfaces we are interested in, namely ethernet and PPP,
+    // interface ids are 8 bytes long.
+    const iidlen = 8;
+    type AddrState: (DOWN, TENTATIVE, WAITDAD, DEPRECATED, PREFERRED);
+    type Lower:
+    {   iid:       [iidlen]_byte;       // interface ID, may be smaller
+	ifn:       _uint8;
+	bid:       BlockID;
+	type:      comm.LinkType;
+        state:     AddrState;		// FIXME
+	rsage:     _uint16;		// router solicitation aging
+	hdr:       _uint8;		// space for link level header(s)
+	trl:       _uint8;
+	mtu:       _uint16;		// e.g, 1500 for ethernet
+	prefixes:  @IntfAddrEntry;      // forward
+	multicast: @IntfAddrEntry;      // forward
+	neighbors: @NCacheEntry;	// forward
+    }: align(8);
+    type pLower: @Lower;
+
+    type IPv6Block(Block):
+    {   upper:     pUpper;			// upper level protocols
+	lower:     [NIPv6Lower]pLower;		// interfaces
+	fraghead:  @FragEntry;			// forward
+	hdr:       _uint8;			// max over all interfaces
+	trl:       _uint8;			// max over all interfaces
+	ifcount:   _uint8;			// number of ready interfaces
+	IsRouter:  boolean;
+	iftimer:   (NONE, RUN);			// interface timer state
+    };
+    type pIPv6Block: @IPv6Block;
+
+if _defined(debug) then {
+    //BEGIN DEBUG
+    proc AddrPrint(a: @IPv6Addr)
+    {   var i: _uint;
+
+	i = 0;
+	loop
+	{   debug.hex8(a[i]); debug.hex8(a[i+1]);
+	    i += 2;
+	  exit i == 16;
+	    debug.chr(':'); 
+	}
+    }
+
+    proc MACPrint(a: @net.MAC)
+    {   var i: _uint;
+
+	i = 0;
+	loop
+	{   debug.hex8(a[i]);
+	    i += 1;
+	  exit i == 6;
+	    debug.chr(':'); 
+	}
+    }
+    //END DEBUG
+}
+
+    // Replace with simple array compare when compiler handles it.
+    proc AddrSame(a1: @IPv6Addr, a2: @IPv6Addr): boolean
+    {
+if useArrayCompare then {
+	return a1@ == a2@;
+} else {
+	var i: _uint;
+
+	i = 0;
+	while i < IPv6AddrLen do
+	{   if a1[i] != a2[i] then return false;
+	    i += 1;
+	}
+	return true;
+}
+    }
+
+    proc IsMulticast(a: @IPv6Addr): boolean: inline
+    {
+	return a[0] == 0xFF;
+    }
+
+    proc IsLinkLocal(a: @IPv6Addr): boolean: inline
+    {
+if useArrayCompare then {
+	return a[0:2] == LinkLocalPrefix[0:2];
+} else {
+	return a[0] == 0xFE && a[1] == 0x80;
+}
+    }
+
+    proc GetAddrType(a: @IPv6Addr): AddrType, AddrScope
+    {
+
+	if a[0]
+	is 0xFF then
+	    return MULTICAST, AddrScope(a[1]&0xF);
+	is 0xFE then
+	{
+if useArrayCompare then {
+	    if a[2:6] != UnspecAddr[2:6] then return UNICAST, Global;
+} else {
+	    i = 2;
+	    while i < 8 do
+	    {  if a[i] != 0 then return UNICAST, Global;
+		i += 1;
+	    }
+}
+	    if a[1]
+	    is 0xC0 then return UNICAST, SiteLocal;	// deprecated
+	    is 0x80 then return UNICAST, LinkLocal;
+	}
+	is 0x00 then
+	{
+if useArrayCompare then {
+	    if a[1:14] != UnspecAddr[1:14] then return UNICAST, Global;
+} else {
+	    i = 1;
+	    while i < 15 do
+	    {  if a[i] != 0 then return UNICAST, Global;
+		i += 1;
+	    }
+}
+	    if a[15]
+	    is 0x00 then return UNSPEC, AddrScope(0);
+	    is 0x01 then return LOOPBACK, InterfaceLocal;
+	}
+	return UNICAST, Global;
+    }
+
+    // Are prefixes always multiples of bytes in practice?
+    // If so, these can be simplified.
+    proc Match(a1: @[]_byte, a2: @[]_byte, nbits: _uint): boolean
+    {   var i, nbytes: _uint;
+
+	nbytes = nbits / 8;	// number of complete bytes
+	i = 0;
+	while i < nbytes do
+	{   if a1[i] != a2[i] then return false;
+	    i += 1;
+	}
+	nbits = nbits % 8;	// leftover bits
+	if nbits != 0 && (a1[i] ^ a2[i]) & (0xFF << (8-nbits)) != 0 then
+	    return false;
+	return true;
+    }
+
+    proc Prefix(a1: @[]_byte, a2: @[]_byte): _uint
+    {   var i, n: _uint;
+	var bits: _uint8;
+
+	i = 0;
+	while i < 16 && a1[i] == a2[i] do
+	    i += 1;
+	n = i * 8;
+	if i < 16 then
+	{   // n += _ctlz_(a1[i] ^ a2[i]);
+	    bits = ~(a1[i] ^ a2[i]) & 0xFF;
+	    while bits != 0 do
+	    {   n += 1;
+		bits = (bits << 1) & 0xFF;
+	    }
+	}
+	return n;
+    }
+}
+// vim: ts=8 sw=4 noet nowrap
+

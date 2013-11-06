@@ -1,0 +1,395 @@
+/*
+ * DHCP client for IPv4
+ * Works somewhat.
+ * Although DHCP uses UDP, we do not layer it above UDP because it has so
+ * many hooks into the IPv4 layer.  Instead we treat it as a special case.
+ *
+ * References:
+ *   1. RFC 2131
+ *   2. RFC 2132
+ *
+ * Copyright (c) 2009-2012, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+package dhcpv4
+{
+    if _defined(debug.db_dhcpv4) then
+	alias debug.db_dhcpv4 as dbg;
+    else
+	const dbg = 0;
+
+    alias inet.IPv4Addr as IPv4Addr;
+    alias inet.UDPHeader as UDPHeader;
+    alias event.pEvent as pEvent;
+    alias mbuf.pMBuf as pMBuf;
+    alias block.Block as Block;
+    alias block.pBlock as pBlock;
+ 
+    const EnetType = 1;		// FIXME: move elsewhere, net?
+    alias net.MACLen as EnetAddrLen;
+
+    const DHCPClientPort = 68;
+    const DHCPServerPort = 67;
+
+    const OptLen = 60;		// should be multiple of 4
+    type OpTypes: (BOOTREQUEST=1, BOOTREPLY=2);
+    type DHCPHeader:
+    {   udp:    UDPHeader;	// kludge, build on UDP
+	op:	OpTypes: bits(8);
+	hwtype: _uint8;
+	hwadrl: _uint8;
+	hops:	_uint8;
+	xid:	_uint32;	// network order doesn't matter?
+	secs:	_uint16: be;
+	flags:  _uint16: be;
+	ciaddr:	IPv4Addr;
+	yiaddr:	IPv4Addr;
+	siaddr:	IPv4Addr;
+	giaddr:	IPv4Addr;
+	chaddr: [16]_byte;
+	sname:	[64]_byte;
+	file:	[128]_byte;
+	magic:	_uint32: be;
+	options:[OptLen]_byte;	// should be 4-byte aligned
+    } : align(4);
+    type pDHCPHeader: @DHCPHeader;
+
+    const Broadcast = 0x8000;
+    const Unicast   = 0x0000;
+
+    // Options
+    type OptCode:
+    (	PAD=0, SUBNETMASK=1, ROUTER=3, DNSSERVER=6, BROADCAST=28,
+	REQIPADDR=50, LEASETIME=51, OVERLOAD=52, MSGTYPE=53,
+	SERVERID=54, PARMREQ=55, T1TIME=58, T2TIME=59,
+	END=255
+    );
+    type MsgType:
+    (	Discover=1, Offer=2, Request=3, Decline=4, Ack=5, Nak=6,
+	Release=7, Inform=8
+    );
+       
+    const Magic = 0x63825363;
+
+    proc OptEnd(db: @[]_byte): @[]_byte: inline
+    {
+	db[0] = _byte(OptCode.END);
+	return db[1:];
+    }
+
+    proc OptMsgType(db: @[]_byte, mt: MsgType): @[]_byte: inline
+    {
+	db[0] = _byte(OptCode.MSGTYPE);
+	db[1] = 1;
+	db[2] = _byte(mt);
+	return db[3:];
+    }
+	
+    proc OptParmReq(db: @[]_byte): @[]_byte: inline
+    {
+	db[0] = _byte(OptCode.PARMREQ);
+	db[1] = 4;
+	db[2] = _byte(OptCode.SUBNETMASK);
+	db[3] = _byte(OptCode.ROUTER);
+	db[4] = _byte(OptCode.BROADCAST);
+	db[5] = _byte(OptCode.DNSSERVER);
+	return db[6:];
+    }
+
+    proc OptAddr(db: @[]_byte, opcode: OptCode, addr: @IPv4Addr): @[]_byte: inline
+    {
+	db[0] = _byte(opcode);
+	db[1] = 4;
+	db[2:4] = addr@;
+	return db[6:];
+    }
+
+    proc (intf: ipv4.pLower) DHCPSend(mt: MsgType, state: ipv4.DHCPStates)
+    {   var mb: pMBuf;
+	var dh: pDHCPHeader;
+	var len, hdr: _uint;
+	var uh4: inet.pULHeader4;
+    	var db: @[]_byte;
+	var bcast: boolean;
+
+	len = DHCPHeader?size + intf.trl;
+	hdr = ipv4.Header?size + intf.hdr;
+    	mb = mbuf.Alloc(len, hdr);
+    	dh = pDHCPHeader(mb.GrowTail(DHCPHeader?size));
+    	_zero(dh);
+
+	db = dh.options[0:];
+	db = OptMsgType(db, mt);	// 1st option always message type
+	if mt
+	is Discover then
+	{
+	    db = OptParmReq(db);
+	    dh.flags = Broadcast;
+	    dh.ciaddr = ipv4.NullAddr;
+	    bcast = true;
+	}
+	is Request then
+	{
+	    if state == Request then
+	    {
+		db = OptAddr(db, REQIPADDR, intf.dhcp.offered);
+		db = OptAddr(db, SERVERID, intf.dhcp.server);
+	    	db = OptParmReq(db);
+		dh.flags = Broadcast;
+		dh.ciaddr = ipv4.NullAddr;
+		bcast = true;
+	    }
+	    else	// Renew or Rebind
+	    {   dh.flags = Unicast;
+		dh.ciaddr = intf.addr;
+		bcast = state == Rebind;
+	    }
+	}
+	is Decline then
+	{
+	    db = OptAddr(db, REQIPADDR, intf.dhcp.offered);
+	    db = OptAddr(db, SERVERID, intf.dhcp.server);
+	    dh.ciaddr = ipv4.NullAddr;
+	    bcast = true;
+	}
+	is Release then
+	{
+	    db = OptAddr(db, SERVERID, intf.dhcp.server);
+	    dh.ciaddr = intf.addr;
+	    bcast = false;
+	}
+	is Inform then
+	{
+	    dh.ciaddr = intf.addr;
+	    bcast = true;
+	}
+	OptEnd(db);			// end of options
+
+	// Finish filling in request
+	dh.op = BOOTREQUEST;
+	dh.hwtype  = EnetType;
+	dh.hwadrl =  EnetAddrLen;
+	dh.hops = 0;
+	dh.xid = 2;	// FIXME - random and store for reply check
+	dh.yiaddr = ipv4.NullAddr;
+	dh.siaddr = ipv4.NullAddr;
+	dh.giaddr = ipv4.NullAddr;
+	dh.chaddr[0:6] = MyMAC;
+	dh.sname[0] = 0;
+	dh.file[0] = 0;
+	dh.magic = Magic;
+	len = mb.Size();
+	// Fill in the UDP header
+	dh.udp.srcport = DHCPClientPort;
+	dh.udp.dstport = DHCPServerPort;
+	dh.udp.len = len;
+	// Prefix the checksum header
+	uh4 = inet.pULHeader4(mb.GrowHead(inet.ULHeader4?size));
+	if bcast then
+	    uh4.dstaddr = ipv4.BcastAddr;
+	else
+	    uh4.dstaddr = intf.dhcp.server;
+	uh4.srcaddr = ipv4.NullAddr;
+	uh4.len = len;
+	uh4.proto = UDP;
+	uh4.info = inet.InfoZero;
+	intf.USend(mb, uh4);
+
+    }
+
+    proc (intf: ipv4.pLower) DHCPState(newstate: ipv4.DHCPStates)
+    {
+    	if newstate
+    	is Down then
+    	{
+	    newstate = Select;
+	    // initialize retransmission timer
+	    intf.dhcp.timeRT = 4;	// 4 seconds initially
+	    intf.dhcp.retries = 4;	// and 4 retries
+	    intf.dhcp.timeleft = intf.dhcp.timeRT;
+	    intf.DHCPSend(Discover, newstate);
+    	}
+	is Select then
+	    intf.DHCPSend(Discover, newstate);
+	is Request then
+	    intf.DHCPSend(Request, newstate);
+	is Bound then
+	{   intf.dhcp.retries = 0;
+	    intf.dhcp.timeleft = intf.dhcp.timeRenew;
+	}
+	is Renew then
+	{   intf.DHCPSend(Request, newstate);	// try to renew
+	    intf.dhcp.timeleft = intf.dhcp.timeRebind - intf.dhcp.timeRenew;
+	}
+	is Rebind then
+	{   intf.DHCPSend(Request, newstate);	// try to renew via broadcast
+	    intf.dhcp.timeleft = intf.dhcp.timeLease - intf.dhcp.timeRebind;
+	}
+    	intf.dhcp.state = newstate;
+    }
+
+    proc (intf: ipv4.pLower) DHCPTimer(secs: _uint)
+    {
+debug.str("DHCPTimer: state=");  debug.uint8(_uint8(intf.dhcp.state));
+debug.str(" timeleft=");  debug.uint32(intf.dhcp.timeleft);  debug.nl();
+	if intf.dhcp.timeleft == 0 then
+	    return;	// no active timer
+	if secs < intf.dhcp.timeleft then
+	{   intf.dhcp.timeleft -= secs;
+	    return;	// timer did not elapsed
+	}
+	intf.dhcp.timeleft = 0;	// timeout
+	if intf.dhcp.retries != 0 then
+	{   // messages retransmission timer elapsed
+	    intf.dhcp.retries -= 1;
+	    intf.dhcp.timeRT = intf.dhcp.timeRT * 2;	// double timeout
+	    // stay in same state to trigger retransmission
+	    intf.DHCPState(intf.dhcp.state);
+	    intf.dhcp.timeleft = intf.dhcp.timeRT;
+	}
+	else
+	{   // long term timer elapsed
+	
+	    if intf.dhcp.state
+	    is Bound then
+	    {   // T1 timer expired.  Try to renew the lease.
+	        intf.DHCPState(Renew);
+	    }
+	    is Renew then
+	    {	// T2 timer expired.  Try to rebind.
+	    	intf.DHCPState(Rebind);
+	    }
+	    is Rebind then
+	    {	// All has failed.
+	    	intf.DHCPState(Down);
+	    }
+	}
+    }
+
+    proc (intf: ipv4.pLower) DHCPBind(newaddr: @IPv4Addr)
+    {
+	intf.addr = newaddr@;
+    }
+
+    // A table to save indexes of the value of the interesting options
+    type OptInx: (MSGTYPE, SERVERID, ROUTER, LEASETIME, T1TIME, T2TIME);
+    type OptInxTable: [OptInx]_uint8;	// no more than 255 bytes of options
+
+    proc (intf: ipv4.pLower) DHCPSaveOptions(db: @[]_byte, oinx: @OptInxTable)
+    {   type Net32: _uint32: be, align(1);	// unaligned big-endian 32-bit
+	type pNet32: @Net32;
+	var pn: pNet32;
+
+    	if oinx[LEASETIME] != 0 then
+    	{   pn = pNet32(db[oinx[LEASETIME]:4]);
+    	    intf.dhcp.timeLease = pn@;
+    	}
+    	if oinx[T1TIME] != 0 then
+    	{   pn = pNet32(db[oinx[T1TIME]:4]);
+    	    intf.dhcp.timeRenew = pn@;
+    	}
+    	else
+    	    intf.dhcp.timeRenew = intf.dhcp.timeLease/2;
+    	if oinx[T2TIME] != 0 then
+    	{   pn = pNet32(db[oinx[T2TIME]:4]);
+    	    intf.dhcp.timeRebind = pn@;
+    	}
+    	else
+    	    intf.dhcp.timeRebind = intf.dhcp.timeLease;
+    }
+
+    proc (dh: pDHCPHeader) ParseOptions(oinx: @OptInxTable)
+    {	var db: @[]_byte;
+	var i: _uint;
+
+	_zero(oinx);	// set all indices to invalid
+	db = dh.options[0:];
+	i = 0;
+	while i < 255 do
+	{   if OptCode(db[i])
+	    is PAD then i += 1;
+	    is END then i = 256;	// end loop
+	    is MSGTYPE then   { oinx[MSGTYPE] =   i+2; i += 3; }
+	    is SERVERID then  { oinx[SERVERID] =  i+2; i += 6; }
+	    is ROUTER then    { oinx[ROUTER] =    i+2; i += 6; }
+	    is LEASETIME then { oinx[LEASETIME] = i+2; i += 6; }
+	    is T1TIME then    { oinx[T1TIME] =    i+2; i += 6; }
+	    is T2TIME then    { oinx[T2TIME] =    i+2; i += 6; }
+	    else	// uninteresting option, skip over it
+	    	i += db[i+1]+2;
+	}
+    }
+
+    proc (intf: ipv4.pLower) DHCPRecv(mb: pMBuf)
+    {	var dh: pDHCPHeader;
+	var uh4: inet.pULHeader4;
+	var chksum: _uint16;
+    	var OT: OptInxTable;
+
+debug.str("dhcp.Recv");
+    	// FIXME - check UDP checksum
+    	uh4 = inet.pULHeader4(mb.Data());
+	uh4.info = inet.InfoZero;	// for checksumming
+	chksum = inet.Checksum(mb.Data(), uh4.len + inet.ULHeader4?size);
+debug.str(" cksum="); debug.hex16(chksum); debug.nl();
+	// strip the checksum header
+	dh = pDHCPHeader(mb.ShrinkHead(ipv4.ULHeader?size));
+	// FIXME - check xid
+	if dh.op == BOOTREPLY then
+	{   dh.ParseOptions(OT);
+	    if MsgType(dh.options[OT[MSGTYPE]])
+	    is Offer then
+	    {
+debug.str("\tOffer\n");
+		if OT[SERVERID] != 0 then
+		{   // save offered address and server address
+		    intf.dhcp.offered = dh.yiaddr;
+		    intf.dhcp.server = dh.options[OT[SERVERID]:4];
+		    intf.DHCPState(Request);
+		}   
+	    }
+	    is Ack then
+	    {
+debug.str("\tAck\n");
+		if intf.dhcp.state
+		is Request then
+		{
+		    intf.DHCPSaveOptions(dh.options, OT);
+		    intf.DHCPBind(dh.yiaddr);
+		    intf.DHCPState(Bound);
+		}
+		is Renew, Rebind then
+		{
+		    intf.DHCPSaveOptions(dh.options, OT);
+		    intf.DHCPBind(dh.yiaddr);
+		    intf.DHCPState(Bound);
+		}
+	    }
+	    is Nak then
+	    {
+debug.str("\tNak\n");
+	    }
+	
+	}
+    }
+
+    proc (ib: ipv4.pIPv4Block) DHCPRecv(mb: pMBuf)
+    {	var intf: ipv4.pLower;
+	
+	intf = ib.GetInterface(mb.tag);
+	if intf != 0 then
+	    intf.DHCPRecv(mb);
+	mbuf.Free(mb);	// finished with buffer	    	
+    }
+
+    proc (intf: ipv4.pLower) DHCPStart()
+    {   var ds: ipv4.pDHCPState;
+
+	ds = _new(ipv4.DHCPState);
+	_zero(ds);
+	intf.dhcp = ds;
+	intf.DHCPState(Down);    	
+    }
+}
+

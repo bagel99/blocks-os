@@ -1,0 +1,59 @@
+/*
+ *
+ * Copyright (c) 2013, Brian G. Lucas.  See LICENSE file.
+ */
+
+package font
+{
+    type Glyph:
+    {
+	width:  _uint8;
+	height: _uint8;
+	nbytes: _uint8;		// number of bytes in bitmap for one row
+	xoffs:  _uint8;
+	yoffs:  _uint8;
+	bitmap: _uint16;	// index into bitmap array for this glyph
+    };
+
+    type Range:
+    {   first:  _uint16;	// first 16-bit code point
+        last  : _uint16;	// last 16-bit code point 
+        offset: _uint32;	// index into glyph table of first code point
+    };
+
+    type Font:
+    {   width:   _uint8;	// maximum width in pixels
+	height:  _uint8;	// maximum height in pixels
+	space:   _uint8;	// width of space
+	nranges: _uint8;	// number of ranges
+	glyphs:  @[]Glyph;
+	bitmaps: @[]_byte;
+	range:   []Range;
+    };
+    type FP: @Font;
+
+    proc (fp: FP) GetGlyph(c: _uint16): @Glyph
+    {   var i, j: _uint;
+
+	for i from 0 to fp.nranges-1 do
+	{   if c >= fp.range[i].first && c <= fp.range[i].last then
+	    {   j = fp.range[i].offset + (c - fp.range[i].first);
+		return fp.glyphs[j];
+	    }
+	}
+	return 0;   
+    }
+
+    proc (fp: FP) Dump()
+    {
+	if fp == 0 then return;
+	debug.str("Font\nwidth="); debug.uint8(fp.width);
+	debug.str(" height="); debug.uint8(fp.height);
+	debug.str(" space="); debug.uint8(fp.space);
+	debug.str(" nranges="); debug.uint8(fp.nranges);
+	debug.str("\nglyphs="); debug.hex32(_uint32(fp.glyphs));
+	debug.str(" bitmaps="); debug.hex32(_uint32(fp.bitmaps));
+	debug.nl();
+    }
+}
+

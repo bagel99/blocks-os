@@ -1,0 +1,9 @@
+/doc/
+Notes*
+*.s
+*.o
+*.elf
+*.bin
+*.map
+*~
+

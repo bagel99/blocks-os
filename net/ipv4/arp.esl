@@ -1,0 +1,113 @@
+/*
+ * ARP for IPv4
+ *
+ * Copyright (c) 2009-2011, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+package ipv4
+{
+    const EnetType = 1;
+
+    type Op: (Request=1, Reply=2);
+    type ArpHeader:
+    {   hwtype: Net16;		//0x00
+	prtype: Net16;		//0x02
+	hwadrl: _byte;		//0x04
+	pradrl: _byte;		//0x05
+	opz:	_byte;		//0x06 always zero
+	op:     Op;		//0x07
+	shwadr: net.MAC;	//0x08
+	spradr: [4]_byte;	//0x0E IPv4Addr not aligned
+	thwadr: net.MAC;	//0x12
+	tpradr: [4]_byte;	//0x18 IPv4Addr not aligned
+    };
+    type pArpHeader: @ArpHeader;
+
+
+    proc (intf: pLower) ArpSend(mb: pMBuf, bcast: boolean)
+    {   var pp: pArpHeader;
+	var la: pEUI64;
+
+if db > 2 then {debug.str("ipv4.ArpSend\n");}
+	pp = pArpHeader(mb.Data());
+	la = pEUI64(mb.GrowHead(EUI64?size));
+	if bcast then
+	    la@[0:6] = net.BcastMAC;
+	else
+	    la@[0:6] = pp.thwadr;
+	mb.code = SEND;
+	mb.tag  = 0x80 + intf.ifn;
+	mb.info = ArpType;
+	intf.bid.Send(mb);
+    }
+
+    proc (intf: pLower) ArpSendReply(mb: pMBuf, pp: pArpHeader)
+    {
+
+if db > 2 then {debug.str("ipv4.ArpReply\n");}
+	pp.tpradr = pp.spradr;
+	pp.thwadr = pp.shwadr;
+	pp.spradr = intf.addr;
+	pp.shwadr = intf.mac;
+	pp.op  = Op.Reply;
+	intf.ArpSend(mb, false);
+    }
+
+    proc (intf: pLower) ArpSendRequest(target: @IPv4Addr)
+    {   var pp: pArpHeader;
+	var mb: pMBuf;
+
+if db > 2 then {debug.str("ipv4.ArpRequest\n");}
+	mb = mbuf.Alloc(ArpHeader?size+intf.trl, intf.hdr);
+	pp = pArpHeader(mb.GrowTail(ArpHeader?size));
+	pp.hwtype = EnetType;
+	pp.prtype = IPv4Type;
+	pp.hwadrl = net.MACLen;
+	pp.pradrl = IPv4AddrLen;
+	pp.opz = 0;
+	pp.op  = Op.Request;
+	pp.shwadr = intf.mac;
+	pp.spradr = intf.addr;
+	pp.thwadr = net.NullMAC;
+	pp.tpradr = target@;
+	intf.ArpSend(mb, true);
+    }
+
+    proc (ib:pIPv4Block) ArpRecv(mb: pMBuf)
+    {   var pp: pArpHeader;
+	var intf: pLower;
+	var from: IPv4Addr;	// for alignment
+
+	intf = ib.GetInterface(mb.tag);
+	if intf != 0 then
+	{
+if db > 1 then {debug.str("arp.Recv: size="); debug.uint(mb.Size());
+debug.str(" ifn="); debug.uint8(intf.ifn); debug.nl();}
+	    pp = pArpHeader(mb.Data());
+	    if  pp.hwtype == EnetType && pp.prtype == IPv4Type &&
+		pp.hwadrl == net.MACLen  && pp.pradrl == IPv4AddrLen then
+	    {
+if db > 2 then {debug.str("\ttgt="); ipv4.PrintAddr(pp.tpradr);
+debug.str(" src="); ipv4.PrintAddr(pp.spradr); debug.nl();}
+		if pp.tpradr == intf.addr then	// we are the target
+		{
+		    // Capture requester's address for our cache
+		    // We need this to route the reply
+		    from = pp.spradr;	// copy to aligned array
+		    if pp.op
+		    is Request then
+		    {
+			intf.AddrAdd(from, REACHABLE, pp.shwadr);
+			intf.ArpSendReply(mb, pp);	// use same MBuf to reply
+			return;
+		    }
+		    is Op.Reply then
+			intf.AddrAdd(from, REACHABLE, pp.shwadr);
+		}
+	    }
+	}
+	mbuf.Free(mb);	// Not interested or done with it, discard.
+    }
+
+}

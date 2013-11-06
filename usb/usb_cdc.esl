@@ -1,0 +1,123 @@
+/*
+ * Definitions for USB Communication Device Class.
+ *
+ * Reference: USB Device Class Definitions for Communications Devices v1.1
+ *
+ * Copyright (c) 2013, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+import usb;
+
+package usb	// extends package
+{
+  package cdc
+  {
+    type CDSubclass:
+    (	DIRECTLINE=	0x01,
+	ACM=		0x02,
+	TELEPHONE=	0x03,
+	MULTICHANNEL=	0x04,
+	CAPI=		0x05,
+	ETHERNET=	0x06,
+	ATM=		0x07
+    );
+
+    type CDCRequest:    // Class specific requests
+    (	SEND_ENCAPSULATED_COMMAND=	0x00,
+	GET_ENCAPSULATED_RESPONSE=	0x01,
+	SET_COMM_FEATURE=		0x02,
+	GET_COMM_FEATURE=		0x03,
+	CLEAR_COMM_FEATURE=		0x04,
+	SET_AUX_LINE_STATE=		0x10,
+	SET_HOOK_STATE=			0x11,
+	PULSE_SETUP=			0x12,
+	SEND_PULSE=			0x13,
+	SET_PULSE_TIME=			0x14,
+	RING_AUX_JACK=			0x15,
+	SET_LINE_CODING=		0x20,
+	GET_LINE_CODING=		0x21,
+	SET_CONTROL_LINE_STATE=		0x22,
+	SEND_BREAK=			0x23,
+	SET_RINGER_PARMS=		0x30,
+	GET_RINGER_PARMS=		0x31,
+	SET_OPERATION_PARMS=		0x32,
+	GET_OPERATION_PARMS=		0x33,
+	SET_LINE_PARMS=			0x34,
+	GET_LINE_PARMS=			0x35,
+	DIAL_DIGITS=			0x36,
+	SET_UNIT_PARAMETER=		0x37,
+	GET_UNIT_PARAMETER=		0x38,
+	CLEAR_UNIT_PARAMETER=		0x39,
+	GET_PROFILE=			0x3A,
+	SET_ENET_MULTICAST_FILTERS=	0x40,
+	SET_ENET_POWER_MANAGE_PATTERN=	0x41,
+	GET_ENET_POWER_MANAGE_PATTERN=	0x42,
+	SET_ENET_PACKET_FILTER=		0x43,
+	GET_ENET_STATISTIC=		0x44,    
+	SET_ATM_DATA_FORMAT=		0x50,
+	GET_ATM_DEVICE_STATISTICS=	0x51,
+	SET_ATM_DEFAULT_VC=		0x52,
+	GET_ATM_VC_STATISTICS=		0x53,
+    );
+
+    type LineCoding:
+    {   rate:    _uint32: le;
+	stop:   (STOP1, STOP1_5, STOP2);
+	parity: (NONE, ODD, EVEN, MARK, SPACE);
+	bits:   _uint8;
+    };
+
+    type CDDescSubtype:
+    (	HEADER=		0x00,
+	CALLMGMT=	0x01,
+	ACMGMT=		0x02,
+	DLMGMT=		0x03,
+	RINGER=		0x04,
+	CALLSTATE=	0x05,
+	UNION=		0x06,
+	COUNTRY=	0x07,
+	TELEMODES=	0x08,
+	TERMINAL=	0x09,
+	NETWORKCHAN=	0x0A,
+	PROTOCOLUNIT=	0x0B,
+	EXTENSIONUINT=	0x0C,
+	MULTICHANNEL=	0x0D,
+	CAPI=		0x0E,
+	ETHERNET=	0x0F,
+	ATM=		0x10
+    );
+
+    type CSInterfaceDesc(Descriptor):
+    {   Subtype:  CDDescSubtype;					// 0x02
+    };
+    
+    type CDCSHeader(CSInterfaceDesc):
+    {   Release:  _uint16: le;		// BCD				// 0x03
+    };
+
+    type CDCSCall(CSInterfaceDesc):
+    {   Capabilities:							// 0x03
+	{   cmfeature:   boolean;
+	    canusedata:  boolean;
+	    _:           0..0b1111_11;	// should be zero
+	}: packed, lsb;
+	DataInterface:   _uint8;
+    };
+
+    type CDCSAcm(CSInterfaceDesc):
+    {   Capabilities:							// 0x03
+	{   commfeature: boolean;
+	    linestate:   boolean;
+	    sendbreak:   boolean;
+	    netconnect:  boolean;
+	    _:           0..0b1111;	// should be zero
+	}: packed, lsb;
+    };
+
+    type CDCSUnion(CSInterfaceDesc):
+    {   Interfaces: []_uint8;		// first is master		// 0x03
+    };
+  }
+}
+

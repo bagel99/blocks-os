@@ -1,0 +1,162 @@
+/*
+ * Definitions for USB Human Interface Device
+ *
+ * Reference: USB Device Class Definition for Human Interface Devices (HID) v1.11
+ *
+ * Copyright (c) 2012, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+import usb;
+
+package usb	// extends package
+{
+  package hid
+  {
+    type HIDSubClass: (NONE, BOOT, RSVD=255);
+    type HIDProtocol: (NONE, KEYBOARD, MOUSE, RSVD=255);
+
+    type ClassDescNumber:
+    (   HID=    0x1,
+	REPORT= 0x2,
+	PHYSICAL=0x3
+    );
+    const DescHID: DescType =      { ClassDescNumber.HID, CLASS };
+    const DescReport: DescType =   { ClassDescNumber.REPORT, CLASS };
+    const DescPhysical: DescType = { ClassDescNumber.PHYSICAL, CLASS };
+
+    type HIDDesc(Descriptor):
+    {	spec:   _uint16: le;	// BCD					// 0x02
+	ccode:  _uint8;							// 0x04
+	ndesc:  _uint8;							// 0x05
+	class:	_uint8;		// FIXME-array of class/length?		// 0x06
+	length: _uint16: le, align(1);					// 0x07
+    }: nopad;
+
+    type HIDRequest:    // Class specific requests
+    (   GetReport=1, GetIdle, GetProtocol,
+	SetReport=9, SetIdle, SetProtocol
+    );
+
+    /*
+     *  iiiittss
+     *        ss - size
+     *      tt   - type 00=Main, 01=Global, 10=Local
+     *  iiii     - item tag
+     */
+    type ItemTag: 	// includes 4 bit tag and 2 bits of type
+    ( /*iiii_00		iiii_01		iiii_10		iiii_11*/
+      /*Main		Global		Local		Reserved*/
+	_,		UsagePage,	Usage,		_,	// 0000_tt
+	_,		LogicalMin,	UsageMin,	_,	// 0001_tt
+    	_,		LogicalMax,	UsageMax,	_,	// 0010_tt
+    	_,		PhysicalMin,	DesigIndex,	_,	// 0011_tt
+    	_,		PhyscialMax,	DesigMin,	_,	// 0100_tt
+    	_,		UnitExponent,	DesigMax,	_,	// 0101_tt
+    	_,		Unit,		_,		_,	// 0110_tt
+    	_,		ReportSize,	StringIndex,	_,	// 0111_tt
+    	Input,		ReportID,	StringMin,	_,	// 1000_tt
+    	Output,		ReportCount,	StringMax,	_,	// 1001_tt
+    	Collection,	Push,		Delimiter,	_,	// 1010_tt
+    	Feature,	Pop,		_,		_,	// 1011_tt
+    	EndCollection,	_,		_,		_,	// 1100_tt
+    	_,		_,		_,		_,	// 1101_tt
+    	_,		_,		_,		_,	// 1110_tt
+    	_,		_,		_,		_	// 1111_tt
+    );
+    type HIDReportItem:
+    {	tag:   ItemTag;
+	size:  0..3;
+    }: packed, msb;
+    const END: HIDReportItem = { EndCollection, 0 };
+/*
+    type MainItemTag:
+    (   Input=		0b1000,
+    	Output=		0b1001,
+    	Collection=	0b1010,
+    	Feature=	0b1011,
+    	EndCollection=	0b1100,
+    	_=		0b1111
+    );
+    type GlobalItemTag:
+    (   UsagePage=	0b0000,
+    	LogicalMin=	0b0001,
+    	LogicalMax=	0b0010,
+    	PhysicalMin=	0b0011,
+    	PhyscialMax=	0b0100,
+    	UnitExponent=	0b0101,
+    	Unit=		0b0110,
+    	ReportSize=	0b0111,
+    	ReportID=	0b1000,
+    	ReportCount=	0b1001,
+    	Push=		0b1010,
+    	Pop=		0b1011,
+    	_=		0b1111
+    );
+    type ItemType:
+    (   Main=   0b00,
+	Global= 0b01,
+	Local=  0b10,
+	_=      0b11
+    );
+*/
+
+    // Input/Output/Feature information, 1st byte
+    type IOFtype:
+    {   constant:   boolean;	// .00 otherwise data
+	variable:   boolean;	// .01 otherwise array
+	relative:   boolean;	// .02 otherwise absolute
+	wrap:       boolean;	// .03 otherwise no-wrap
+	nonlinear:  boolean;	// .04 otherwise linear
+	nopref:     boolean;	// .05 otherwise preferred state
+	nullstate:  boolean;	// .06 otherwise no null position
+	volatile:   boolean;	// .07 otherwise non-volatile (not input)
+    }: packed, lsb;
+
+    // Input/Output/Feature information, 2nd byte
+    type IOFtype2(IOFtype):
+    {   bytes:      boolean;	// .08 otherwise bit field
+	_:          0..0x7F;	// .09-15 reserved
+    }: packed, lsb;
+
+    // Collection information
+    type Colltype:
+    (   Physical,   Application,    Logical,	    Report,
+	NamedArray, UsageSwitch,    UsageModifier,
+	Reserved=0x7F,
+	VendorMin=0x80, VendorMax=0xFF
+    );
+
+    // Exponent values are a signed 4-bit quantity
+    type Exponent: -8..+7;
+    type System:
+    ( NONE, SILinear,   SIRotation, EnglishLinear, EnglishRotation, Vendor=15 );
+    //NONE, Centimeter, Radians,    Inch,          Degrees      // Length
+    //NONE, Gram,       Gram,       Slug,          Slug         // Mass
+    //NONE, Seconds,    Seconds,    Seconds,       Seconds      // Time
+    //NONE, Kelvin,     Kelvin,     Fahrenheit,    Fahrenheit   // Temperature
+    //NONE, Ampere,     Ampere,     Ampere,        Ampere       // Current
+    //NONE, Candela,    Candela,    Candela,       Candela      // Luminosity
+
+    type Units:
+    {   system:  System;
+	units:   [3]Exponent;
+    }: packed, lsb;
+
+    type Units2:
+    {   system:  System;
+	units:   [7]Exponent;
+    }: packed, lsb;
+
+/*
+    // Examples
+    const centimeter: Units = { SILinear, {1, 0, 0} };
+    const gram: Units       = { SILinear, {0, 1, 0} };
+    const second: Units     = { SILinear, {0, 0, 1} };
+    const joule: Units      = { SILinear, {2, 1, -2} };
+    const volt: Units2      = { SILinear, {2, 1, -3, 0, -1} };
+*/
+  }
+}
+// vim: ts=8 sw=4 noet nowrap
+

@@ -1,0 +1,65 @@
+/*
+ * Some generic networking definitions.
+ *
+ * Copyright (c) 2009-2011, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+package net
+{
+    const MACLen = 6;
+    type MAC:   [MACLen]_byte;	// e.g. Ethernet link address
+    const BcastMAC: MAC = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
+    const NullMAC:  MAC = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+    type EUI64: [8]_byte;	// generic link address
+    type pEUI64: @EUI64;
+
+    proc FromMAC(mac: @MAC, eui64: @EUI64)
+    {
+	eui64[0] = mac[0] ^ 0x02;
+	eui64[1] = mac[1];
+	eui64[2] = mac[2];
+	eui64[3] = 0xFF;
+	eui64[4] = 0xFE;
+	eui64[5] = mac[3];
+	eui64[6] = mac[4];
+	eui64[7] = mac[5];
+    }
+
+    proc ToMAC(eui64: @EUI64, mac: @MAC)
+    {
+	mac[0] = eui64[0] ^ 0x02;
+	mac[1] = eui64[1];
+	mac[2] = eui64[2];
+	mac[3] = eui64[5];
+	mac[4] = eui64[6];
+	mac[5] = eui64[7];
+    }
+
+    // FIXME: This can go away when the compiler does vector compares
+    proc VEqual(a: @[]_byte, b: @[]_byte, n: _uint): boolean
+    {   var i: _uint;
+
+	i = 0;
+	while i < n do
+	{   if a[i] != b[i] then return false;
+	    i += 1;
+	}
+	return true;
+    }
+
+if _defined(debug) then {
+    proc VPrint(a: @[]_byte, n: _uint)
+    {   var i: _uint;
+
+	i = 0;
+	loop
+	{   debug.hex8(a[i]);
+	    i += 1;
+	  exit i == n;
+	    debug.chr(':'); 
+	}
+    }
+}
+}
+

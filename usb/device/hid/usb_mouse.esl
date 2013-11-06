@@ -1,0 +1,311 @@
+/*
+ * USB Mouse device
+ */
+import usb_hid;
+
+package usbdev		// extends driver
+{
+    const EP1TxSize = 4;	// mouse sends 4 byte packets
+    const EP1TxMaxSize = 8;	// for the endpoint descriptor
+
+    const ManufactString = 1;
+    const ProductString = 2;
+    const SerialNoString = 3;
+    const DevDesc: usb.DeviceDesc: align(4) = 
+    {	usb.DeviceDesc?size,		// desc. length
+    	usb.DescDevice,
+    	0x0200,				// version 2.0
+    	0,				// class
+    	0,				// subclass
+    	0,				// protocol
+    	64,				// max packet size
+    	0x0483,				// vendor
+    	0x5710,				// product
+    	0x0200,				// release
+    	ManufactString,			// manufacturer string
+    	ProductString,			// product string
+    	SerialNoString,			// serial number string
+    	1				// number of configurations
+    };
+
+    const ReportDesc: []_byte =
+    {
+	0x05, 0x01,	// USAGE_PAGE (Generic Desktop)
+	0x09, 0x02,	// USAGE (Mouse)
+	0xA1, 0x01,	// COLLECTION (Application)
+	0x09, 0x01,	//   USAGE (Pointer)
+	0xA1, 0x00,	//   COLLECTION (Physical)
+	0x05, 0x09,	//     USAGE_PAGE (Button)
+	0x19, 0x01,	//     USAGE_MINIMUM (Button 1)
+	0x29, 0x03,	//     USAGE_MAXIMUM (Button 3)
+	0x15, 0x00,	//     LOGICAL_MINIMUM (0)
+	0x25, 0x01,	//     LOGICAL_MAXIMUM (1)
+	0x95, 0x03,	//     REPORT_COUNT (3)
+	0x75, 0x01,	//     REPORT_SIZE (1)
+	0x81, 0x02,	//     INPUT (Data,Var,Abs)
+	0x95, 0x01,	//     REPORT_COUNT (1)
+	0x75, 0x05,	//     REPORT_SIZE (5)
+	0x81, 0x01,	//     INPUT (Cnst)
+	0x05, 0x01,	//     USAGE_PAGE (Generic Desktop)
+	0x09, 0x30,	//     USAGE (X)
+	0x09, 0x31,	//     USAGE (Y)
+	0x15, 0x81,	//     LOGICAL_MINIMUM (-127)
+	0x25, 0x7F,	//     LOGICAL_MAXIMUM (127)
+	0x75, 0x08,	//     REPORT_SIZE (8)
+	0x95, 0x02,	//     REPORT_COUNT (2)
+	0x81, 0x06,	//     INPUT (Data,Var,Rel)
+	0xC0,		//   END_COLLECTION
+	0xC0		// END_COLLECTION
+    };
+
+    type SuperDesc:
+    {	conf: usb.ConfigDesc;
+    	intf: usb.InterfaceDesc: align(1);
+    	hid:  usb.hid.HIDDesc: align(1);
+    	endp1:usb.EndpointDesc: align(1);
+    }: nopad;
+    const SuperConfDesc: SuperDesc: align(4) =
+    {
+	{   usb.ConfigDesc?size,	// desc. length
+	    usb.DescConfig,
+	    34,				// total length
+	    1,				// number of interfaces
+	    1,				// configuration value
+	    0,				// configuration index
+	    { .RemoteWake=true,.BusPower=true,.SelfPower=true }, // attributes
+	    0x32				// max power 100mA
+	},
+	{   usb.InterfaceDesc?size,
+    	    usb.DescInterface,
+    	    0,				// interface number
+    	    0,				// alternate setting
+    	    1,				// number of endpoints
+    	    HID,			// class
+    	    1,				// subclass = boot
+    	    2,				// protocol = mouse
+    	    0				// string
+	},
+	{   usb.hid.HIDDesc?size,
+	    usb.hid.DescHID,
+	    0x0101,			// spec release (BCD)
+	    0,				// country code
+	    1,				// num class descriptors
+	    0x22,			// descriptor type
+	    ReportDesc?size
+	},
+	{   usb.EndpointDesc?size,
+    	    usb.DescEndpoint,
+    	    { .Dir=IN, .Num=1 },
+    	    { .Type=INTR },
+    	    EP1TxMaxSize,		// max packet size
+    	    10				// polling inverval 10mS
+	}
+    };
+
+    const S0: usb.StringDesc =		// Language array
+    {	4,
+ 	usb.DescString,
+ 	{ 0x0409 }			// US English
+    };
+    const S1: usb.StringDesc =		// Manufacturer
+    {   38,
+    	usb.DescString,
+	{'S','T','M','i','c','r','o','e','l','e','c','t','r','o','n','i','c','s'}
+    };    	
+    const S2: usb.StringDesc =		// Product
+    {   24,
+    	usb.DescString,
+	{'S','T','M','3','2',' ','M','o','u','s','e'}
+    };
+    const S3: usb.StringDesc =		// Serial
+    {   16,
+    	usb.DescString,
+	{'0','0','0','0','0','0','1'}
+    };
+
+
+    type State:
+    {
+	busy:   boolean: in, out;		// data ready for host
+	CurrentConfig: _uint8;
+	epin:   usbdev.eps;
+	datain: [EP1TxSize]_byte: align(4);	// to host
+    };
+    var hs: State;
+
+
+    proc DoSetConfiguration()
+    {
+    }
+
+    proc SetupOut(rqst: @usb.SetupPkt): _address, _uint
+    {
+	if rqst.type
+	is {.dir=OUT, .stype=Standard, .recip=Device} then
+	{
+	    if usb.StandardRequests(rqst.request)
+	    // SetAddress already handled
+	    is SetConfiguration then
+	    {
+if db > 1 then {debug.str("DSC\n");}
+		if rqst.value&0xFF == 1 then
+		    DoSetConfiguration();
+	    }
+	    is ClearFeature then
+	    {
+if db > 1 then {debug.str("DCF\n");}
+	    }
+	    is SetFeature then
+	    {
+if db > 1 then {debug.str("DSF\n");}
+	    }
+	    is SetDescriptor then
+	    {
+if db > 1 then {debug.str("DSD\n");}
+	    }
+	}
+	is {.dir=OUT, .stype=Standard, .recip=Interface} then
+	{
+	    if usb.StandardRequests(rqst.request)
+	    is ClearFeature then
+	    {
+if db > 1 then {debug.str("ICF\n");}
+	    }
+	    is SetFeature then
+	    {
+if db > 1 then {debug.str("ISF\n");}
+	    }
+	}
+	is {.dir=OUT, .stype=Standard, .recip=EndPoint} then
+	{
+	    if usb.StandardRequests(rqst.request)
+	    is ClearFeature then
+	    {
+if db > 1 then {debug.str("ECF\n");}
+	    }
+	    is SetFeature then
+	    {
+if db > 1 then {debug.str("ESF\n");}
+	    }
+	}
+	is {.dir=OUT, .stype=Class, .recip=Interface} then
+	{   if usb.hid.HIDRequest(_uint8(rqst.request))
+	    is SetReport then
+	    {
+if db > 1 then {debug.str("CSR\n");}
+	    }
+	    is GetIdle then
+	    {
+if db > 1 then {debug.str("CSI\n");}
+	    }
+	    is GetProtocol then
+	    {
+if db > 1 then {debug.str("CSP\n");}
+	    }
+	}
+	return 0, 0;
+    }
+
+    proc SetupIn(rqst: @usb.SetupPkt): _address, _uint
+    {
+	if rqst.type
+	is {.dir=IN, .stype=Standard, .recip=Device} then
+	{
+	    if usb.StandardRequests(rqst.request)
+	    is GetDescriptor then
+	    {
+if db > 4 then {
+debug.str("DGD"); debug.uint8(rqst.value>>8); debug.uint8(rqst.value&0xFF);
+debug.nl();
+}
+	        if usb.DescType(_uint8(rqst.value>>8))
+		is usb.DescDevice then
+		    return DevDesc, DevDesc?size;
+		is usb.DescConfig then
+		    return SuperConfDesc, SuperConfDesc?size;
+		is usb.DescString then
+		{   if rqst.value&0xFF
+		    is 0 then return S0, S0.Length;
+		    is 1 then return S1, S1.Length;
+		    is 2 then return S2, S2.Length;
+		    is 3 then return S3, S3.Length;
+		    else return 0, 0;	// FIXME?
+		}
+	    }
+	    is GetStatus then
+	    {
+if db > 1 then {debug.str("DGS\n");}
+	    }
+	    is GetConfiguration then
+	    {
+if db > 1 then {debug.str("DGI\n");}
+	    }
+	}
+	is {.dir=IN, .stype=Standard, .recip=Interface} then
+	{
+	    if usb.StandardRequests(rqst.request)
+	    is GetDescriptor then
+	    {
+if db > 4 then {debug.str("IGD\n");}
+	        if usb.DescType(_uint8(rqst.value>>8))
+		is usb.hid.DescHID then
+		    return SuperConfDesc.hid, usb.hid.HIDDesc?size;
+		is usb.hid.DescReport then
+		    return ReportDesc, ReportDesc?size;
+	    }
+	    is GetStatus then
+	    {
+if db > 1 then {debug.str("IGS\n");}
+	    }
+	    is GetInterface then
+	    {
+if db > 1 then {debug.str("IGI\n");}
+	    }
+	}    
+	is {.dir=IN, .stype=Standard, .recip=EndPoint} then
+	{
+	    if usb.StandardRequests(rqst.request)
+	    is GetStatus then
+	    {
+if db > 1 then {debug.str("EGS\n");}
+	    }
+	}    
+	is {.dir=IN, .stype=Class, .recip=Interface} then
+	{   if usb.hid.HIDRequest(_uint8(rqst.request))
+	    is GetReport then
+	    {
+if db > 1 then {debug.str("CGR\n");}
+	    }
+	    is GetIdle then
+	    {
+if db > 1 then {debug.str("CGI\n");}
+	    }
+	    is GetProtocol then
+	    {
+if db > 1 then {debug.str("CGP\n");}
+	    }
+	}
+	return 0, 0;
+    }
+
+    proc DataRcvd(ep: usbdev.eps)
+    {
+if db > 1 then {debug.str("DR\n");}
+	// Should not happen
+    }
+
+    proc DataSent(ep: usbdev.eps)
+    {
+if db > 1 then {debug.str("DS\n");}
+	hs.busy = false;
+    }
+
+
+    proc MouseInit()
+    {
+	DeviceInit();
+    	hs.epin  = EPAllocate({0x81, INTR, EP1TxMaxSize});
+    	DeviceStart();
+    }
+}
+

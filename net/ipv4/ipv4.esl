@@ -1,0 +1,630 @@
+/*
+ * IPv4
+ * Needs more work.
+ *
+ * Copyright (c) 2009-2012, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+import ipv4def;
+import timer;
+
+package ipv4	// continue with implementation
+{
+    if !_defined(db) then
+    {   if _defined(debug.db_ipv4) then
+	    alias debug.db_ipv4 as db;
+	else
+	    const db = 0;
+    }
+
+    // BEGIN DEBUG
+    proc PrintAddr(addr: @IPv4Addr)
+    {   var i: _uint;
+
+	i = 0;
+	loop
+	{   debug.uint8(addr@[i]);
+	    i += 1;
+	  exit i > 3;
+	    debug.chr('.');
+	}
+    }
+    proc PrintLink(linkaddr: @net.MAC)
+    {   var i: _uint;
+
+	i = 0;
+	while i < 6 do
+	{   debug.hex8(linkaddr@[i]);
+	    i += 1;
+	}
+    }
+    // END DEBUG
+
+    proc (intf: pLower) ArpSendRequest(target: @IPv4Addr);  // forward
+
+    // Interface numbers (ifn) are 1-based
+    proc (ib: pIPv4Block) GetInterface(ifn: _uint): pLower: inline
+    {   var ifz: _uint;     // 0-based
+
+	ifz = ifn - 1;
+	if ifz < NIPv4Lower then
+	    return ib.lower[ifz];
+	return 0;
+    }
+
+    proc (intf: pLower) AddQueue(pnc: pAddrEntry, mb: pMBuf)
+    {
+if db > 2 then {debug.str("ipv4.AddQueue\n");}
+	mb.SetNext(pnc.queue);
+	pnc.queue = mb;
+    }
+
+    proc (intf: pLower) SendQueue(pnc: pAddrEntry, linkaddr: @net.MAC)
+    {   var mb: pMBuf;
+	var la: pEUI64;
+
+if db > 2 then {debug.str("ipv4.SendQueue\n");}
+	mb = pnc.queue;
+	while mb != 0 do
+	{   la = pEUI64(mb.Data());
+	    la[0:6] = linkaddr@;
+	    intf.bid.Send(mb);
+	    mb = mb.GetNext();
+	}
+	pnc.queue = 0;
+    }
+
+    proc (intf: pLower) AddrAdd(addr: @IPv4Addr, state: AddrState,
+		                  linkaddr: @net.MAC): pAddrEntry
+    {   var pnc: pAddrEntry;
+
+if db > 2 then {debug.str("ipv4.AddrAdd: ip="); PrintAddr(addr); debug.nl();}
+	// First check if already in cache
+	pnc = intf.AddrCache;
+	while pnc != 0 && addr@ != pnc@.addr do
+	    pnc = pnc.next;
+	if pnc == 0 then
+	{
+	    pnc = _new(AddrEntry);  _zero(pnc);
+	    pnc.addr = addr@;
+	    pnc.next = intf.AddrCache;
+	    intf.AddrCache = pnc;
+	}
+	pnc.state = state;
+	pnc.age = 30;   // FIXME: should be random 15-45 seconds
+	if linkaddr != 0 then
+	{   pnc.laddr = linkaddr@;
+if db > 2 then {debug.str("\tlink="); PrintLink(linkaddr); debug.nl();}
+	}
+	if state
+	is INCOMPLETE then
+	    intf.ArpSendRequest(pnc.addr);
+	is REACHABLE then
+	{   if pnc.queue != 0 then
+	        intf.SendQueue(pnc, linkaddr);
+	}
+	return pnc;
+    }
+
+    proc (intf: pLower) AddrFind(addr: @IPv4Addr): boolean, @net.MAC
+    {   var pnc: pAddrEntry;
+
+if db > 2 then {debug.str("ipv4.AddrFind: ip="); PrintAddr(addr); debug.nl();}
+	pnc = intf.AddrCache;
+	while pnc != 0 do
+	{
+	    if addr@ == pnc.addr then return true, pnc.laddr;
+	    pnc = pnc.next;
+	}
+	if addr@ == BcastAddr then
+	    return true, net.BcastMAC;
+	// FIXME - handle multicast
+	return false, 0;
+    }
+
+    proc (ib: pIPv4Block) AddrAge()
+    {   var pnc: pAddrEntry;
+	var ifz: _uint;     // 0-based
+
+if db > 2 then {debug.str("ipv4.AddrAge");}
+	for ifz from 0 to NIPv4Lower-1 do
+	{   pnc = ib.lower[ifz].AddrCache;
+	    while pnc != 0 do
+	    {   if pnc.age != 0 then
+		{   pnc.age -= 1;
+		    if pnc.state
+		    is INCOMPLETE then
+		    {   if pnc.age != 0 then
+			{   // send arp request
+			}
+			else
+			{   // for each in queue error: can't find host
+			}
+		    }
+		    is REACHABLE then
+		    {   if pnc.age == 0 then
+			{   pnc.state = STALE;
+			}
+		    }
+		    is STALE then
+		    {
+		    }
+		}
+	    }
+	}
+    }
+
+    // Calculate the upper layer checksum for TCP or UDP.
+    proc UChecksum(mb: pMBuf, offset: _uint)
+    {   type puint16: @[]_uint16;
+	var hp: puint16;
+
+	offset = offset / 2;    // bytes to halfwords
+	hp = puint16(mb.Data());
+	hp[offset] = 0;
+	hp[offset] = inet.Checksum(hp, mb.Size());
+    }
+
+    /*
+     * Send via an interface.  The mb containing an IPv4 header.
+     * For ethernet, if we don't know the MAC, queue it (causing ARP).
+     * If we do know the MAC add the header containing destination MAC address,
+     * and send it down.
+     */
+    proc (intf: pLower) Send(mb: pMBuf, ip:pHeader)
+    {   var pladdr: @net.MAC;
+	var la: pEUI64;
+	var ok: boolean;
+
+if db > 2 then {debug.str("ipv4.LSend\n");}
+	mb.code = SEND;
+	mb.tag  = intf.ifn;
+	mb.info = IPv4Type;
+	if intf.type != PPP then
+	{   la = pEUI64(mb.GrowHead(EUI64?size));
+	    ok, pladdr = intf.AddrFind(ip.dstaddr);
+	    if !ok then
+	    {   var pnc: pAddrEntry;
+		pnc = intf.AddrAdd(ip.dstaddr, INCOMPLETE, 0);
+		intf.AddQueue(pnc, mb);
+		return;     // can't send now
+	    }
+	    la@[0:6] = pladdr@;
+	}
+	intf.bid.Send(mb);
+    }
+
+    /*
+     * Send via an interface.  The mb still has the checksum header with
+     * a valid src address for this interface.
+     * Strip it off and add the IPv4 header.
+     */
+    proc (intf: pLower) USend(mb: pMBuf, uh: pULHeader)
+    {   var ip: pHeader;
+	var proto: Proto;
+	var len: _uint;
+
+	proto = uh.proto;
+	/*
+	 * The IP layer and TCP/UDP are joined at the hip through the
+	 * "psuedo-header" influence on the checksum.  Since this includes
+	 * the source address, which is determined in this layer,
+	 * the TCP/UCP checksums can't be calculated until after that.
+	 */
+	uh.info = inet.InfoZero;    // zero for checksum
+	if proto
+	is TCP then UChecksum(mb, ULHeader?size + 16);
+	is UDP then UChecksum(mb, ULHeader?size + 6);
+	// Now discard upper layer header and build IPv4 header,
+	// src/dst addresses already in place
+	ip = pHeader(mb.GrowHead(Header?size - ULHeader?size));
+	len = mb.Size();
+	ip.vl = { .version=4, .hdrlen=5 };
+	ip.tos = { .precedence=0 };
+	ip.length = len;
+	ip.ident = intf.IDSeqno;  intf.IDSeqno += 1;
+	ip.fo = { .df=true, .offs=0 };
+	ip.ttl = 64;
+	ip.proto = proto;   // FIXME - already in place?
+	ip.chksum = 0;
+	ip.chksum = inet.Checksum(mb.Data(), Header?size);
+	intf.Send(mb, ip);
+    }
+    
+    proc (ib: pIPv4Block) SearchRoute(addr: @IPv4Addr): pLower
+    {
+        var ifz: _uint;     // 0-based
+	var intf: pLower;
+
+        for ifz from 0 to NIPv4Lower-1 do
+        {   intf = ib.lower[ifz];
+	    // FIXME - check for interface up?
+	    // FIXME - make more efficient using 32-bit integers?
+	    if addr[0]&intf.mask[0] == intf.addr[0]&intf.mask[0] &&
+	       addr[1]&intf.mask[1] == intf.addr[1]&intf.mask[1] &&
+	       addr[2]&intf.mask[2] == intf.addr[2]&intf.mask[2] &&
+	       addr[3]&intf.mask[3] == intf.addr[3]&intf.mask[3] then
+		return intf;
+        }
+	return 0;
+    }
+
+    proc (ib: pIPv4Block) GetDstInterface(ifn: _uint, dstaddr: @IPv4Addr): pLower
+    {
+	if ifn == 0 then    // unknown interface
+	{
+	    ifn = ib.defifn;    // FIXME
+	}
+	return ib.lower[ifn-1];    
+    }
+    
+    proc (ib: pIPv4Block) Route(mb: pMBuf, ip:pHeader)
+    {   var ifn: _uint8;
+	var intf: pLower;
+
+	ifn = mb.tag & 0x7F;
+if db > 2 then {debug.str("ipv4.Route: ifn="); debug.uint8(ifn); debug.nl();}
+	intf = ib.GetInterface(ifn);
+	if intf == 0 then    // must use addr to search route table for interface
+	{   intf = ib.SearchRoute(ip.dstaddr);
+	    if intf == 0 then
+	    {
+if db > 1 then {debug.str("ipv4.Route: no interface found\n");}
+		mbuf.Free(mb);
+		return;
+	    }
+	}
+	intf.Send(mb, ip);
+    }
+
+    /*
+     * Upper proto uses this to send.
+     * Need to construct the IPv4 header.
+     * The mb.parm field contains the interface number.
+     */
+    proc (ib: pIPv4Block) USend(mb: pMBuf)
+    {	var ip: pHeader;
+	var uh: pULHeader;
+	var proto: Proto;
+	var len: _uint;
+	var intf: pLower;
+	var ifn: _uint8;
+
+	uh = pULHeader(mb.Data());
+	ifn = uh.info.ifn;
+if db > 1 then {debug.str("ipv4.USend: ifn="); debug.uint8(ifn);
+debug.str(" proto="); debug.hex8(_uint8(uh.proto)); debug.nl();}
+	intf = ib.GetDstInterface(ifn, uh.dstaddr);
+	uh.srcaddr = intf.addr;
+	proto = uh.proto;
+	/*
+	 * The IP layer and TCP/UDP are joined at the hip through the
+	 * "psuedo-header" influence on the checksum.  Since this includes
+	 * the source address, which is determined in this layer,
+	 * the TCP/UCP checksums can't be calculated until after that.
+	 */
+	uh.info = inet.InfoZero;    // zero for checksum
+	if proto
+	is TCP then UChecksum(mb, ULHeader?size + 16);
+	is UDP then UChecksum(mb, ULHeader?size + 6);
+	// Now discard upper layer header and build IPv4 header,
+	// src/dst addresses already in place
+	ip = pHeader(mb.GrowHead(Header?size - ULHeader?size));
+	len = mb.Size();
+	ip.vl = { .version=4, .hdrlen=5 };
+	ip.tos = { .precedence=0 };
+	ip.length = len;
+	ip.ident = intf.IDSeqno;  intf.IDSeqno += 1;
+	ip.fo = { .df=true, .offs=0 };
+	ip.ttl = 64;
+	ip.proto = proto;   // FIXME - already in place?
+	ip.chksum = 0;
+	ip.chksum = inet.Checksum(mb.Data(), Header?size);
+	intf.Send(mb, ip);
+    }
+}
+
+import arp;
+import icmpv4;
+import dhcpv4;
+
+package ipv4	// continue the package
+{
+    proc (ib: pIPv4Block) Forward(mb: pMBuf, ip: pHeader)
+    {
+    }
+
+    proc (ib: pIPv4Block) Deliver(mb: pMBuf, ip: pHeader)
+    {   var uh: pULHeader;
+	var hdrlen, len: _uint;
+	var up: pUpper;
+	var proto: Proto;
+
+	hdrlen = ip.vl.hdrlen * 4;
+	proto = ip.proto;
+	// FIXME: assert hdrlen > ULHeader?size
+	uh = pULHeader(mb.ShrinkHead(hdrlen - ULHeader?size));
+	uh.info = { .isipv6=false, .ifn=mb.tag };
+	uh.proto = proto;
+	uh.len = ip.length - hdrlen;
+	// handle special cases first
+        if proto == ICMPv4 then
+	{   ib.ICMPRecv(mb);
+	    return;
+	}
+	else if proto == UDP then
+	{   var udph: inet.pUDPHeader;
+	    udph = inet.pUDPHeader(mb.Offset(ULHeader?size));
+	    if udph.dstport == dhcpv4.DHCPClientPort &&
+	       udph.srcport == dhcpv4.DHCPServerPort then
+	    {
+		ib.DHCPRecv(mb);
+		return;
+	    }
+	}
+	// search for upper protocol handler
+	up = ib.upper;
+	while up != 0 do
+	{   if up.proto == proto then
+	    {   up.bid.Send(mb);	// send upward
+		return;
+	    }
+	    up = up.next;
+	}
+	mbuf.Free(mb);      // nobody wants it
+    }
+
+    // Handle data from lower endpoints
+    proc (ib: pIPv4Block) Recv(mb: pMBuf)
+    {   var ip: pHeader;
+	var hdrlen, len: _uint;
+
+	len = mb.Size();
+	ip = pHeader(mb.Data());
+	if len >= Header?size && ip.vl.version == 4 then
+	{   hdrlen = ip.vl.hdrlen * 4;
+if db > 1 then {debug.str("ipv4.Recv: size="); debug.uint(len);
+debug.str(" hdrlen="); debug.uint(hdrlen);
+debug.str(" totlen="); debug.uint32(ip.length);
+debug.str(" proto="); debug.hex8(_uint8(ip.proto));
+debug.nl();}
+	    if inet.Checksum(mb.Data(), hdrlen) == 0 then
+	    {   // See if all the data is there
+		if len >= ip.length then
+		{
+		    // Trim any padding bytes from tail of MBuf, e.g. enet padding
+		    if len > ip.length then
+			mb.ShrinkTail(len - ip.length);
+		    ib.Deliver(mb, ip);
+		    return;
+		}
+	    }
+	}
+	mbuf.Free(mb);	// Bad, or no-one interested, discard.
+    }
+
+    proc (ib: pIPv4Block) NewInterface(ifn: _uint8, to: BlockID)
+    {   var intf: pLower;
+	var ifz: _uint;     // 0-based
+
+if db > 0 then {debug.str("ipv4.NewInterface: "); debug.uint8(ifn);
+debug.nl();}
+	ifz = ifn - 1;
+	if ifz < NIPv4Lower then
+	{   intf = _new(Lower);  _zero(intf);
+	    ib.lower[ifz] = intf;
+	    intf.ifn = ifn;
+	    intf.bid = to;
+	}
+    }
+
+    proc (ib: pIPv4Block) InterfaceUp(li: comm.pLinkInfo)
+    {   var intf: pLower;
+
+	intf = ib.GetInterface(li.tag);
+	if intf != 0 then
+	{
+if db > 1 then {debug.str("ipv4.InterfaceUp: ifn=");
+debug.uint8(li.tag); debug.chr(':');
+debug.uint8(li.hdr); debug.chr(',');
+debug.uint8(li.trl); debug.chr(',');
+debug.uint16(li.mtu); debug.nl(); }
+	    // FIXME - make sure hdr is 4-byte aligned
+	    intf.hdr = _max(li.hdr, EUI64?size);  // at least the EUI64 header
+	    ib.hdr   = _max(ib.hdr, intf.hdr);
+	    intf.trl = li.trl;
+	    ib.trl   = _max(ib.trl, intf.trl);
+	    intf.type = li.type;
+	    intf.state = UP;
+	    intf.IDSeqno = 1;     // should be random?
+	    if intf.type
+	    is ENET then
+	    {   intf.mac = li.id[0:6];
+		intf.addr = MyIPv4Addr;
+		intf.mask = MyIPv4Mask;
+if db > 1 then {debug.str("\taddr="); PrintAddr(intf.addr);
+debug.str(" mask="); PrintAddr(intf.mask); debug.nl();}
+		if intf.addr == NullAddr then
+		{
+		    intf.DHCPStart();
+		}
+	    }
+	    is PPP then
+	    {   intf.AddrAdd(li.id[0:4], REACHABLE, 0);
+	    }
+	    ib.ifcount += 1;
+	}
+    }
+
+    proc (ib: pIPv4Block) InterfaceDown(e: pEvent)
+    {   var intf: pLower;
+
+	if e.tag < NIPv4Lower then
+	{   intf = ib.lower[e.tag];
+if db > 1 then {debug.str("ipv4.InterfaceDown ifn=");
+debug.uint8(e.tag); debug.nl(); }
+	    intf.state = DOWN;
+	    ib.ifcount -= 1;
+	}
+    }
+
+    proc (ib: pIPv4Block) InformUpper(isup: boolean)
+    {   var up: pUpper;
+	var li: comm.pLinkInfo;
+	var e: pEvent;
+
+if db > 1 then {debug.str("ipv4.InformUpper ");  debug.uint8(_uint8(isup));
+debug.nl();}
+	up = ib.upper;
+	while up != 0 do
+	{   if isup then
+	    {   li = _new(comm.LinkInfo);
+		li.code = UP;
+		li.tag = up.tag;	// IPv4 vs IPv6
+		li.hdr = ib.hdr + Header?size;
+		li.trl = ib.trl;
+		li.mtu = 1500 - Header?size;    // FIXME
+//		li.id[0:4] = ib.myaddr;
+		up.bid.Send(li);
+	    }
+	    else
+	    {   e = _new(Event);
+		e.code = DOWN;
+		e.tag = up.tag;
+		up.bid.Send(e);
+	    }
+	    up = up.next;
+	}
+    }
+
+    const TimerSecs = 2;    // 2 second timeout  FIXME
+
+    proc (ib: pIPv4Block) StartTimer()
+    {   var te: timer.pTimerEvent;
+
+if db > 1 then {debug.str("ipv4.StartTimer\n");}
+//	if ib.iftimer == NONE then
+//	{   ib.iftimer = RUN;
+	    te = _new(timer.TimerEvent);
+	    te.code = TSTART;
+	    te.tag = ib.id;
+	    te.ticks = timer.SecondsToTicks(TimerSecs);
+	    TimerID.Send(te);
+//	}
+    }
+
+    proc (ib: pIPv4Block) Timer(te: timer.pTimerEvent)
+    {   var intf: pLower;
+	var ifz: _uint;     // 0-based
+
+if db > 1 then {debug.str("ipv4.Timer\n");}
+	for ifz from 0 to NIPv4Lower-1 do
+	{   intf = ib.lower[ifz];
+	    if intf != 0 then
+	    {
+		if intf.dhcp != 0 then
+		    intf.DHCPTimer(TimerSecs);
+	    }
+	}
+	te.code = TSTART;
+	te.tag = ib.id;
+	te.ticks = timer.SecondsToTicks(TimerSecs);
+	TimerID.Send(te);
+    }
+
+    proc Run(b: pBlock, e: pEvent)
+    {   var mb: pMBuf;
+	var ib: pIPv4Block;
+
+if db > 1 then {debug.str("ipv4.Run ");  debug.uint8(_uint8(e.code));
+debug.chr(','); debug.uint8(e.tag); debug.nl();}
+        ib = pIPv4Block(b);
+        if e.code
+        is RCVD then    // packet received from interface
+        {   mb = pMBuf(e);
+	    if e.tag&0x80 == 0 then    // IPv4 packet
+		ib.Recv(mb);
+	    else			// ARP packet
+	    {   mb.tag = mb.tag & 0x7F; // clear flag bit
+		ib.ArpRecv(mb);
+	    }
+	}
+	is SEND then    // packed received from upper protocol
+	    ib.USend(pMBuf(e));
+	is TDONE then   // timer event
+	    ib.Timer(timer.pTimerEvent(e));
+        is UP   then    // interface has come up
+        {   var li: comm.pLinkInfo;
+	    li = comm.pLinkInfo(e);
+	    ib.InterfaceUp(li);
+	    _delete(li);
+	    if ib.ifcount == 1 then // first interface came up
+	    {   ib.InformUpper(true);
+		ib.StartTimer();
+	    }
+	}
+	is DOWN then    // interface has gone down
+	{   ib.InterfaceDown(e);
+	    _delete(e);
+	    if ib.ifcount == 0 then // last interface went down
+		ib.InformUpper(false);
+	}
+	is OPEN then    // upper protocol wants to start
+	{
+	}
+	is CLOSE then   // upper protocol wants to stop
+	{
+	}
+	is CONNECT then
+	{   var ce: event.pConnEvent;
+	    ce = event.pConnEvent(e);
+	    if ce.type == LOWER then
+	    {
+if db > 0 then {debug.str("ipv4.Connect lower: intf="); debug.uint8(ce.chan); debug.nl();}
+		ib.NewInterface(ce.chan, ce.tag);
+	    }
+	    else
+	    {   var up: pUpper;
+if db > 0 then {debug.str("ipv4.Connect upper: intf="); debug.uint8(ce.chan); debug.nl();}
+		up = _new(Upper);
+		up.proto = ce.info;
+		up.tag   = ce.chan;
+		up.bid   = ce.tag;
+		up.next  = ib.upper;
+		ib.upper = up;
+	    }
+	    _delete(ce);
+	}
+	is START then   // start things going
+	{   // for each connected interface, send an OPEN
+	    var oe: pEvent;
+	    var ifz: _uint;     // 0-based
+	    for ifz from 0 to NIPv4Lower-1 do
+	    {   if ib.lower[ifz] != 0 then
+		{   oe = _new(Event);
+		    oe.code = OPEN;
+		    oe.tag  = ifz+1;
+		    ib.lower[ifz].bid.Send(oe);
+		}
+	    }
+	    _delete(e);
+	}
+    }
+
+
+    proc NewBlock(id: BlockID): pBlock
+    {   var ib: pIPv4Block;
+
+	ib = _new(IPv4Block);  _zero(ib);
+if db > 0 then {debug.str("ipv4.NewBlock ");
+debug.uint8(id); debug.chr(' ');
+debug.hex(_uint(ib)); debug.nl(); }
+	ib.BlockInit(id, Run);
+	ib.IsRouter = true;
+	ib.defifn  = 1;     // FIXME - first interface is default for routing
+	return ib;
+    }
+}
+// vim: ts=8 sw=4 noet nowrap
+	

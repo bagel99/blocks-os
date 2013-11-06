@@ -1,0 +1,51 @@
+/*
+ * Master Boot Record used in Intel/AMD PCs
+ *
+ * Copyright (c) 2012, Brian G. Lucas.  See LICENSE file.
+ * $Id: mbr.esl 331 2012-02-27 21:25:53Z bgl $
+ */
+
+package mbr
+{
+    type PartitionType: _uint8;	// FIXME
+    type CHS:	// cylinder, head, sector
+    {	head:  0..255;
+	sect:  0..0x3F;
+	cyl:   0..0x3FF;
+    }: packed, lsb, nopad;
+	
+    type Partition:
+    {   state: (INACTIVE=0x00, ACTIVE=0x80);
+	first: [3]_uint8;	//CHS: align(1);
+	type:  PartitionType;
+	last:  [3]_uint8;	//CHS: align(1);
+	lba:   _uint32: le;
+	nsec:  _uint32: le;
+    };
+
+    type MBR:	// PC Master Boot Record
+    {   code:  [440]_byte;		//     0: code and data
+	sign:  [4]_byte;		// 0x168: disk signature
+	zero:  [2]_byte;		// 0x16C
+	part:  [4]Partition:align(2);	// 0x16E: partition table
+	magic: [2]_byte;		// 0x1fE: {0x55, 0xAA}
+    }:nopad;
+    type pMBR: @MBR;
+
+    proc IsValid(blk: @[512]_byte): boolean
+    {   var mbr: pMBR;
+
+	mbr = pMBR(blk);
+//	return mbr.magic == { 0x55, 0xAA };
+	return mbr.magic[0] == 0x55 && mbr.magic[1] == 0xAA;
+    }
+
+    proc GetPartitionType(blk: @[512]_byte, pn: _uint): PartitionType
+    {   var mbr: pMBR;
+
+	mbr = pMBR(blk);
+    	if pn > 3 then return 0;
+    	return mbr.part[pn].type;
+    }
+}
+

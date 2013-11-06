@@ -1,0 +1,451 @@
+import usb_msc;
+
+package usbdev
+{
+    const ManufactString = 1;
+    const ProductString = 2;
+    const SerialNoString = 3;
+    const DevDesc: usb.DeviceDesc: align(4) = 
+    {	usb.DeviceDesc?size,		// desc. length
+    	usb.DescDevice,
+    	0x0200,				// version 2.0
+    	0,				// class
+    	0,				// subclass
+    	0,				// protocol
+    	64,				// max packet size
+    	0x0483,				// vendor
+    	0x5720,				// product
+    	0x0200,				// release
+    	ManufactString,			// manufacturer string
+    	ProductString,			// product string
+    	SerialNoString,			// serial number string
+    	1				// number of configurations
+    };
+
+    const S0: usb.StringDesc =		// Language array
+    {	4,
+ 	usb.DescString,
+ 	{ 0x0409 }			// US English
+    };
+    const S1: usb.StringDesc =
+    {   8,
+    	usb.DescString,
+    	{'T','L','A' }
+    };    	
+    const S2: usb.StringDesc =		// Product
+    {   8,
+    	usb.DescString,
+	{'M','S','C'}
+    };
+    const S3: usb.StringDesc =		// Serial
+    {   16,
+    	usb.DescString,
+	{'0','0','0','0','0','0','1'}
+    };
+
+    type SuperDesc:
+    {	conf: usb.ConfigDesc;
+    	intf: usb.InterfaceDesc: align(1);
+    	endp1:usb.EndpointDesc: align(1);
+    	endp2:usb.EndpointDesc: align(1);
+    }: nopad;
+    const SuperConfDesc: SuperDesc: align(4) =
+    {
+	{   usb.ConfigDesc?size,		// desc. length
+	    usb.DescConfig,
+	    32,				// total length
+	    1,				// number of interfaces
+	    1,				// configuration value
+	    0,				// configuration index
+	    { .BusPower=1, .SelfPower=1 },	// attributes
+	    0x32				// max power 100mA
+	},
+	{   usb.InterfaceDesc?size,
+    	    usb.DescInterface,
+    	    0,				// interface number
+    	    0,				// alternate setting
+    	    2,				// number of endpoints
+    	    MASS_STORAGE,		// class
+    	    0x06,			// subclass = SCSI transparent
+    	    0x50,			// protocol = bulk only
+    	    0				// string
+	},
+	{   usb.EndpointDesc?size,
+    	    usb.DescEndpoint,
+    	    { .Dir=IN, .Num=1 },
+    	    { .Type=BULK },
+    	    64,				// max packet size
+    	    0				// polling inverval
+	},
+	{   usb.EndpointDesc?size,
+    	    usb.DescEndpoint,
+    	    { .Dir=OUT, .Num=2 },
+    	    { .Type=BULK },
+    	    64,				// max packet size
+    	    0				// polling inverval
+	}
+    };
+    const MaxLun: [1]_uint: align(4) = { 0 };
+    type State:
+    {
+	state:     usb.msc.States;
+	sensekey:  usb.msc.SenseKey;
+	sensecode: usb.msc.SenseCode;
+	sensequal: _uint8;
+	tag:    _uint32;		// tag from current CBW
+	lba:    _uint32;		// current block/sector number
+	cnt:    _uint32;		// number blocks remaining
+	epin:   usbdev.eps;
+	epout:  usbdev.eps;
+	datain: [512]_byte: align(4);   // to host
+	dataout:[512]_byte: align(4);   // from host
+    };
+    var mss: State;
+
+    proc SetSenseData(key: usb.msc.SenseKey, code: usb.msc.SenseCode, ascq: _uint8)
+    {
+	mss.sensekey = key;
+	mss.sensecode = code;
+	mss.sensequal = ascq;
+    }
+
+    proc DoSetConfiguration(n: _uint)
+    {
+	if n == 1 then      // only implement configuration 1
+	{
+	    mss.epin.Activate();
+	    mss.epout.Activate();
+    	    mss.epout.StartOut(mss.dataout, mss.dataout?len);	// setup receive
+	}
+    }
+
+    proc SetupOut(rqst: @usb.SetupPkt): _address, _uint
+    {
+	if rqst.type
+	is {.dir=OUT, .stype=Standard, .recip=Device} then
+	{
+	    if usb.StandardRequests(rqst.request)
+	    // SetAddress already handled
+	    is SetConfiguration then
+	    {
+if db > 1 then {debug.str("DSC\n");}
+		DoSetConfiguration(rqst.value&0xFF);
+	    }
+	    is ClearFeature then
+	    {
+if db > 1 then {debug.str("DCF\n");}
+	    }
+	    is SetFeature then
+	    {
+if db > 1 then {debug.str("DSF\n");}
+	    }
+	    is SetDescriptor then
+	    {
+if db > 1 then {debug.str("DSD\n");}
+	    }
+	}
+	is {.dir=OUT, .stype=Standard, .recip=Interface} then
+	{
+	    if usb.StandardRequests(rqst.request)
+	    is ClearFeature then
+	    {
+if db > 1 then {debug.str("ICF\n");}
+	    }
+	    is SetFeature then
+	    {
+if db > 1 then {debug.str("ISF\n");}
+	    }
+	}
+	is {.dir=OUT, .stype=Standard, .recip=EndPoint} then
+	{
+	    if usb.StandardRequests(rqst.request)
+	    is ClearFeature then
+	    {
+if db > 1 then {debug.str("ECF\n");}
+	    }
+	    is SetFeature then
+	    {
+if db > 1 then {debug.str("ESF\n");}
+	    }
+	}
+	// CLASS Specific follow
+	is {.dir=OUT, .stype=Class, .recip=Interface} then
+	{   if rqst.request == 0xFF then	// reset
+		{
+if db > 1 then {debug.str("RST\n");}
+		}
+	}    
+	return 0, 0;
+    }
+
+    proc SetupIn(rqst: @usb.SetupPkt): _address, _uint
+    {
+
+	if rqst.type
+	is {.dir=IN, .stype=Standard, .recip=Device} then
+	{
+	    if usb.StandardRequests(rqst.request)
+	    is GetDescriptor then
+	    {   if usb.DescType(_uint8(rqst.value>>8))
+		is usb.DescDevice then
+		    return DevDesc, DevDesc?size;
+		is usb.DescConfig then
+		    return SuperConfDesc, SuperConfDesc?size;
+		is usb.DescString then
+		{   if rqst.value&0xFF
+		    is 0 then return S0, S0.Length;
+		    is 1 then return S1, S1.Length;
+		    is 2 then return S2, S2.Length;
+		    is 3 then return S3, S3.Length;
+		    else return 0, 0;	// FIXME?
+		}
+	    }
+	    is GetStatus then
+	    {
+if db > 1 then {debug.str("DGS\n");}
+	    }
+	    is GetConfiguration then
+	    {
+if db > 1 then {debug.str("DGI\n");}
+	    }
+	}
+	is {.dir=IN, .stype=Standard, .recip=Interface} then
+	{
+	    if usb.StandardRequests(rqst.request)
+	    is GetDescriptor then
+	    {
+if db > 1 then {debug.str("IGD\n");}
+	    }
+	    is GetStatus then
+	    {
+if db > 1 then {debug.str("IGS\n");}
+	    }
+	    is GetInterface then
+	    {
+if db > 1 then {debug.str("IGI\n");}
+	    }
+	}    
+	is {.dir=IN, .stype=Standard, .recip=EndPoint} then
+	{
+	    if usb.StandardRequests(rqst.request)
+	    is GetStatus then
+	    {
+if db > 1 then {debug.str("EGS\n");}
+	    }
+	}
+	// CLASS Specific follow
+	is {.dir=IN, .stype=Class, .recip=Interface} then
+	{   if rqst.request == 0xFE then	// request max LUN
+		return MaxLun, MaxLun?size;
+	}    
+	return 0, 0;
+    }
+    
+    proc SendCSW(status: usb.msc.CSWStatus)
+    {   type pCSW: @usb.msc.CSW;
+	var csw: pCSW;
+
+if db > 2 then {debug.str("S\n");}
+	csw = pCSW(mss.datain[0:usb.msc.CSWSize]);
+	csw.sign = usb.msc.CSWSignature;
+	csw.tag = mss.tag;
+	csw.residue = 0;
+	csw.status = status;
+	mss.state = INCSW;
+	mss.epin.StartIn(mss.datain, usb.msc.CSWSize);
+    	mss.epout.StartOut(mss.dataout, mss.dataout?len);
+    }
+
+    proc SendSenseData()
+    {   var i: _uint;
+
+	i = 0;
+	while i < 18 do
+	{   mss.datain[i] = 0;
+	    i += 1;
+	}
+	mss.datain[0] = 0x70;
+	mss.datain[2] = mss.sensekey;
+	mss.datain[7] = 10;		// additional sense data length
+	mss.datain[12] = mss.sensecode;
+	mss.datain[13] = mss.sensequal;
+	mss.state = INLAST;
+	mss.epin.StartIn(mss.datain, 18);
+	SetSenseData(NoSense, NoCode, 0);	// clear after sending
+    }
+	
+    proc SendInquiryData()
+    {   var i: _uint;
+
+	i = 0;
+	while i < 36 do
+	{   mss.datain[i] = 0;
+	    i += 1;
+	}
+	mss.datain[1] = 0x80;	// RMB=1
+	mss.datain[3] = 0x01;	// response data format
+	mss.datain[4] = 31;	// additional length
+	mss.datain[8:3] = "TLA";
+	mss.datain[16:3] = "MSC";
+	mss.datain[32:4] = "00.01";
+	mss.state = INLAST;
+	mss.epin.StartIn(mss.datain, 36);
+    }
+
+    proc CheckMediumRemoval(isprevent: boolean)
+    {
+	if isprevent then
+	{   SetSenseData(IllegalRequest, InvalidField, 0);
+	    SendCSW(FAILED);
+	}
+	else
+	    SendCSW(PASSED);
+    }
+
+    proc SendCapacityData()
+    {   type pcd: @usb.msc.ReadCapacityData;
+	var cd: pcd;
+	var cap, blksz: _uint32;
+
+	cd = pcd(mss.datain[0:usb.msc.ReadCapacityData?size]);
+	cap, blksz = sd.GetCapacity();
+	cd.lastblkadr = cap - 1;
+	cd.blksize = blksz;
+	mss.state = INLAST;
+	mss.epin.StartIn(mss.datain, usb.msc.ReadCapacityData?size);
+    }
+
+    proc SendModeData6()
+    {
+    	mss.datain[0] = 3;	// size of data header
+    	mss.datain[1] = 0;		
+    	mss.datain[2] = 0;		
+    	mss.datain[3] = 0;
+	mss.state = INLAST;
+	mss.epin.StartIn(mss.datain, 4);
+    }
+
+    proc SendReadData()
+    {
+if db > 0 then {debug.str("R "); debug.uint32(mss.lba);
+debug.chr(','); debug.uint32(mss.cnt); debug.nl();}
+	sd.Read(mss.lba, mss.datain);
+	mss.lba += 1;
+	mss.cnt -= 1;
+	if mss.cnt == 0 then mss.state = INLAST;
+	mss.epin.StartIn(mss.datain, 512);
+    }
+
+    proc RecvWriteData()
+    {
+if db > 0 then {debug.str("W "); debug.uint32(mss.lba);
+debug.chr(','); debug.uint32(mss.cnt); debug.nl();}
+	sd.Write(mss.lba, mss.dataout);
+	mss.lba += 1;
+	mss.cnt -= 1;
+	if mss.cnt == 0 then
+	    SendCSW(PASSED);
+	else
+    	    mss.epout.StartOut(mss.dataout, mss.dataout?len);
+    }
+
+    proc ProcessCBW(buf: @[]_byte, len: _uint)
+    {   type pCBW: @usb.msc.CBW;
+	var cbw: pCBW;
+        var lba, nblks: _uint32;
+
+	if len != usb.msc.CBWSize then return;
+	cbw = pCBW(buf[0:usb.msc.CBWSize]);
+	if cbw.sign != usb.msc.CBWSignature then return;
+if db > 2 then {debug.str("C "); debug.hex8(cbw.comdpkt[0]); debug.nl();}
+	mss.tag = cbw.tag;	// save tag for CSW reply
+	if usb.msc.UFIComd(cbw.comdpkt[0])
+	is TestUnitReady then
+	{   // FIXME check if device is ready (eg SDCard present)
+	    SendCSW(PASSED);
+	}
+	is Inquiry then SendInquiryData();
+	is RequestSense then SendSenseData();
+	is ReadCapacity then SendCapacityData();
+	is ModeSense6 then SendModeData6();
+	is Read10 then
+	{
+	    mss.lba = (cbw.comdpkt[2] << 24) | (cbw.comdpkt[3] << 16) |
+	          (cbw.comdpkt[4] << 8) | cbw.comdpkt[5];
+	    mss.cnt = (cbw.comdpkt[7] << 8) | cbw.comdpkt[8];
+if db > 0 then {debug.str("Rd "); debug.uint32(mss.lba);
+debug.chr(' '); debug.uint(mss.cnt); debug.nl();}
+	    mss.state = DATAIN;
+	    SendReadData();	
+	}
+	is Write10 then
+	{
+	    mss.lba = (cbw.comdpkt[2] << 24) | (cbw.comdpkt[3] << 16) |
+	          (cbw.comdpkt[4] << 8) | cbw.comdpkt[5];
+	    mss.cnt = (cbw.comdpkt[7] << 8) | cbw.comdpkt[8];
+if db > 0 then {debug.str("Wr "); debug.uint32(mss.lba);
+debug.chr(' '); debug.uint(mss.cnt); debug.nl();}
+	    mss.state = DATAOUT;	
+    	    mss.epout.StartOut(mss.dataout, mss.dataout?len);
+	}
+	is MediumRemoval then
+	    CheckMediumRemoval((cbw.comdpkt[4]&0x01) != 0);
+	else
+	{
+if db > 0 then {debug.str("Illegal comd=0x");
+debug.hex8(cbw.comdpkt[0]); debug.nl();}
+	    SetSenseData(IllegalRequest, InvalidCommand, 0);
+	    SendCSW(FAILED);
+	} 
+	    
+    }
+
+    proc DataRcvd(ep: usbdev.eps)
+    {
+if db > 2 then {debug.str("r "); debug.uint(ep.xfercnt);
+debug.chr(' '); debug.uint8(_uint8(mss.state)); debug.nl();}
+if db > 7 then debug.dumpb("", ep.xferbuf, _min(ep.xfercnt, 48));
+	if mss.state
+	is IDLE then	// expecting a CBW
+	{   if ep.xfercnt == usb.msc.CBWSize then
+		ProcessCBW(ep.xferbuf, ep.xfercnt);
+	}
+	is DATAOUT then	// device expecting data block, ie, write
+	{   RecvWriteData();
+	}
+	else		// phase error
+	{
+if db > 0 then debug.str("Phase error - recv\n");
+	}
+    }
+
+    proc DataSent(ep: usbdev.eps)
+    {
+if db > 2 then {debug.str("s "); debug.uint(ep.xfercnt);
+debug.chr(' '); debug.uint8(_uint8(mss.state)); debug.nl();}
+if db > 7 then debug.dumpb("", ep.xferbuf, _min(ep.xfercnt, 48));
+	if mss.state
+	is DATAIN then	// host expecting data block, ie, read
+	    SendReadData();
+	is INLAST then	// sent last data block to host
+	    SendCSW(PASSED);
+	is INCSW then
+	    mss.state = IDLE;
+	else		// phase error
+	{
+if db > 0 then debug.str("Phase error - send\n");
+	}
+    }
+
+    proc Init()
+    {   var uds: usbdev.udevst = usbdev.usbds;
+
+	mss.state = IDLE;
+	SetSenseData(NoSense, NoCode, 0);
+    	DeviceInit();
+    	mss.epout = EPAllocate({0x02, INTR, 64});
+    	mss.epin  = EPAllocate({0x81, INTR, 64});
+    	DeviceStart();
+    }
+}
+

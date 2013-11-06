@@ -1,0 +1,427 @@
+/*
+ * PPP to IPv4 adaption layer
+ *
+ * References:
+ *   RFC 1332 (obsoletes 1172)
+ *   RFC 1877 - name server options
+ *   RFC 2290 - mobile IPv4
+ *   RFC 2794 (updates 2290)
+ *   RFC 3241 (updates 1332) - header compression
+ *   RFC 3544 (obsoletes 2509) - IP header compression
+ *
+ * Copyright (c) 2012, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+import pppcp;
+import comm;
+import mbuf;
+import inet;
+import timer;
+
+package pppip4
+{
+    if _defined(debug) then
+    {   if _defined(debug.db_ppp) then
+	    alias debug.db_ppp as db;
+	else
+	    const db = 3;
+    }
+    else
+	const db = 0;
+
+    alias event.Event as Event;
+    alias event.pEvent as pEvent;
+    alias block.Block as Block;
+    alias block.pBlock as pBlock;
+    alias mbuf.MBuf as MBuf;
+    alias mbuf.pMBuf as pMBuf;
+    alias pppcp.pPPPCPBlock as pPPPCPBlock;
+    alias pppcp.Header as Header;
+    alias pppcp.pHeader as pHeader;
+    alias pppcp.ProtoHdr as ProtoHdr;
+
+    const NCP_Proto:_uint16 = 0x8021;
+    const Net_Proto:_uint16 = 0x0021;
+
+    type Options:   // negotiation options
+    (   _,
+    	_,	// was addresses, now depricated
+    	COMP, 
+    	ADDR,
+    	_, _, _, _
+    );
+    type OptionMap: [Options] boolean: packed;
+
+    type Option:
+    {   code:  Options;
+	len:   _uint8;
+    };
+    type OptComp(Option):
+    {   proto: _uint16: be;
+    	opts:  [2]_byte;
+    }: align(1), nopad;
+    type pOptComp: @OptComp;
+    type OptAddr(Option):
+    {	addr:  [4]_byte;
+    }: align(1), nopad; 
+    type pOptAddr: @OptAddr;
+
+    type PPPIP4Block(pppcp.PPPCPBlock):
+    {   lcladdr: inet.IPv4Addr;
+    	rmtaddr: inet.IPv4Addr;
+    	options: OptionMap;
+        upper:
+        {   bid: block.BlockID;	// always IPv4
+            tag: _uint8;	// this is IPv4's interface number
+        };
+    };
+    type pPPPIP4Block: @PPPIP4Block;
+
+
+    proc (pb: pPPPIP4Block) SendConfReq()
+    {   var mb: pMBuf;
+	var dp: @[]_byte;
+	var ph: pHeader;
+	var len: _uint16;
+	var i: _uint;
+
+	len = 0;
+	if pb.options[COMP] then len += 6;
+	if pb.options[ADDR] then len += OptAddr?size;
+	mb = mbuf.Alloc(Header?size+len+pb.trl, pb.hdr);
+	ph = pHeader(mb.GrowTail(Header?size));
+	ph.code  = CONF_REQ;
+	ph.seqno = pb.seqno;
+	ph.len   = Header?size + len;
+	dp = mb.GrowTail(len);
+	i = 0;
+	if pb.options[COMP] then
+	{   var po2: pOptComp;
+	    po2 = pOptComp(dp[i:6]);
+	    po2.code = COMP;
+	    po2.len  = 6;
+	    po2.proto = 0x002D;
+	    po2.opts[0] = 15;
+	    po2.opts[1] = 1;
+	    i += 6;
+	}
+	if pb.options[ADDR] then
+	{   var po3: pOptAddr;
+	    po3 = pOptAddr(dp[i:OptAddr?size]);
+	    po3.code = ADDR;
+	    po3.len  = OptAddr?size;
+	    po3.addr = pb.lcladdr;
+	    i += OptAddr?size;
+	}
+	pb.PSend(NCP_Proto, mb);
+    }
+
+    proc (pb: pPPPIP4Block) InformUpper(isup: boolean)
+    {
+
+if db > 1 then { debug.str("pppip4.InformUpper ");
+debug.uint8(_uint8(isup)); debug.nl(); }
+	if isup then
+	{   var li: comm.pLinkInfo;
+	    li = _new(comm.LinkInfo);
+	    li.code = UP;
+	    li.tag = pb.upper.tag;
+	    li.type = PPP;
+	    li.hdr = pb.hdr;
+	    li.trl = pb.trl;
+	    li.mtu = pb.mtu;
+	    li.id[0:4] = pb.rmtaddr;
+	    pb.upper.bid.Send(li);
+	}
+	else
+	{   var e: pEvent;
+	    e = _new(Event);
+	    e.code = DOWN;
+	    e.tag = pb.upper.tag;
+	    pb.upper.bid.Send(e);
+	}
+    }
+
+    proc (pb: pPPPIP4Block) InformLower(isup: boolean)
+    {   var e: pEvent;
+
+if db > 1 then { debug.str("pppip4.InformLower ");
+debug.uint8(_uint8(isup)); debug.nl(); }
+	e = _new(Event);
+	if isup then e.code = OPEN; else e.code = CLOSE;
+	e.tag = pb.id;
+	pb.lower.Send(e);
+    }
+
+    proc (s: pPPPIP4Block) Action(event: pppcp.LinkEvents)
+    {   var action: pppcp.CPAction;
+
+	action = pppcp.CPTable[s.state][event];
+	if action.infmdn
+	is UPPER then s.InformUpper(false);
+	is LOWER then s.InformLower(false);
+	if action.iid then
+	    s.seqno += 1;
+	if action.timer
+	is STOP then
+	{   s.retry = 0;
+	    s.TimerStop();
+	}
+	is SHORT then
+	{   s.retry = pppcp.ShortTimeout;
+	    s.TimerStart();
+	}
+	is LONG then
+	{   s.retry = pppcp.LongTimeout;
+	    s.TimerStart();
+	}
+	if action.send
+	is TR then
+	{
+	    s.SendTermReq(NCP_Proto);
+	}
+	is CR then
+	{
+	    s.SendConfReq();
+	}
+	if action.infmup
+	is UPPER then s.InformUpper(true);
+	is LOWER then s.InformLower(true);
+	s.state = action.next;
+	
+    }
+
+    proc (pb: pPPPIP4Block) RecvConfReq(mb: pMBuf, len: _uint): boolean
+    {   var reply, this: pppcp.ControlCode;
+	var i, o, oplen: _uint;
+	var pd: @[]_byte;
+	var ph: pHeader;
+	var opcode: Options;
+
+if db > 1 then { debug.str("pppip6.RecvConfReq\n");}
+	ph = pHeader(mb.Data());
+	pd = mb.Data();
+	// Parse options
+	reply = CONF_ACK;
+	o = 4;      // index into reply
+	i = 4;      // index into parse
+	while i < len do
+	{   opcode = Options(pd[i]);    // option code
+	    oplen = pd[i+1];		// length of this option
+if db > 2 then { debug.str("\ti="); debug.uint(i);
+debug.str(" opcode="); debug.uint8(_uint8(opcode));
+debug.str(" oplen="); debug.uint(oplen); }
+	    this = CONF_ACK;		// assume success
+	    if opcode
+	    is ADDR then		// must accept this
+	    {	pb.rmtaddr = pd[i+2:4];
+	    }
+	    is COMP then		// we don't implement compression, yet
+	    {   this = CONF_REJ;
+	    }
+	    else
+		this = CONF_REJ;
+	    // now copy up rej'ed or nak'ed options
+if db > 2 then { debug.str(" this="); debug.uint8(_uint8(this)); debug.nl(); }
+	    if this
+	    is CONF_REJ then
+	    {   if reply < CONF_REJ then
+		{   // starting new REJ packet, erase any NAK or ACK packet
+		    o = 4;
+		    reply = CONF_REJ;
+		}
+	    }
+	    is CONF_NAK then
+	    {   if reply < CONF_NAK then
+		{   // starting new NAK packet, erase any ACK packet
+		    o = 4;
+		    reply = CONF_NAK;
+		}
+	    }
+if db > 2 then { debug.str("\ti="); debug.uint(i);
+debug.str(" o="); debug.uint(o); debug.nl(); }
+	    // now copy up rej'ed or nak'ed options
+	    if this != CONF_ACK then
+	    {   pd[o:oplen] = pd[i:oplen];
+		o += oplen;
+	    }
+	    i += oplen;
+	}
+	// send reply
+	ph.code  = reply;
+	if reply == CONF_ACK then
+	    ph.len = i;			// send back all options
+	else
+	{   mb.ShrinkTail(i-o);		// delete end of buffer
+	    ph.len = o;
+	}
+	pb.PSend(NCP_Proto, mb);
+	return reply == CONF_ACK;
+    }
+
+    proc (pb: pPPPIP4Block) RecvConfAck(mb: pMBuf, len: _uint)
+    {
+if db > 1 then { debug.str("pppip4.RecvConfAck\n");}
+    }
+
+    proc (pb: pPPPIP4Block) RecvConfNak(mb: pMBuf, len: _uint)
+    {   var pd: @[]_byte;
+
+if db > 1 then { debug.str("pppip4.RecvConfNak\n");}
+	pd = mb.Data();
+    }
+
+    proc (pb: pPPPIP4Block) RecvConfRej(mb: pMBuf, len: _uint)
+    {
+if db > 1 then { debug.str("pppip4.RecvConfRej\n");}
+    }
+
+    // FIXME - this may be factored
+    proc (pb: pPPPIP4Block) RecvFrame(mb: pMBuf)
+    {   var ph: pHeader;
+	var rseqno: _uint8;
+	var len: _uint16;
+
+	ph = pHeader(mb.Data());
+if db > 2 then { debug.str("pppip4.RecvFrame\n");}
+	if mb.Size() < 4 then return;
+	rseqno = ph.seqno;
+	len = ph.len;
+	if len < 4 then return;
+	if ph.code
+	is CONF_REQ then
+	{   if pb.RecvConfReq(mb, len) then
+		pb.Action(ConfReqOK);
+	    else
+		pb.Action(ConfReqBad);
+	}
+	is CONF_ACK then
+	{   if rseqno == pb.seqno then
+	    {   pb.RecvConfAck(mb, len);
+		pb.Action(ConfAck);
+		// only now set the final XMIT ACCM
+	    }
+	}
+	is CONF_NAK then
+	{   if rseqno == pb.seqno then
+	    {   pb.RecvConfNak(mb, len);
+		pb.Action(ConfNak);
+	    }
+	}
+	is CONF_REJ then
+	{   if rseqno == pb.seqno then
+	    {   pb.RecvConfRej(mb, len);
+		pb.Action(ConfRej);
+	    }
+	}
+	is TERM_REQ then
+	{   // Reply(TERM_ACK, m);
+	    pb.Action(TermReq);
+	}
+	is TERM_ACK then
+	{   if rseqno == pb.seqno then
+		pb.Action(TermAck);
+	}
+	is CODE_REJ then {} //FIXME
+	is PROT_REJ then {} //FIXME
+	is ECHO_REQ then
+	{   // Reply(ECHO_REP, m);
+	}
+	is ECHO_REP then {}
+	is DISC_REQ then {}
+	else
+	{   // Reply(CODE_REJ, m);
+	}
+    }	
+
+
+
+    proc Run(b: pBlock, e: pEvent)
+    {   var pb: pPPPIP4Block;
+	var mb: pMBuf;
+
+	pb = pPPPIP4Block(b);
+if db > 1 then { debug.str("pppip4.Run ");  debug.uint8(_uint8(e.code));
+debug.chr(','); debug.uint8(e.tag); debug.nl();}
+	if e.code
+	is SEND then
+	    pb.PSend(Net_Proto, pMBuf(e));
+	is RCVD then
+	{   mb = pMBuf(e);
+	    if mb.tag == 0 then
+	    {	if pb.state == Opened then
+	    	{   e.tag = pb.upper.tag;
+	    	    pb.upper.bid.Send(e);
+	    	}
+	    	else
+	    	    mbuf.Free(mb);
+	    }
+	    else
+	    	pb.RecvFrame(mb);
+	}
+	is TDONE then
+	{   if pb.Timeout(timer.pTimerEvent(e)) then
+		pb.Action(Retry);
+	    else
+		pb.Action(Timeout);
+	}
+	is CONNECT then
+	{   var ce: event.pConnEvent;
+	    ce = event.pConnEvent(e);
+	    if ce.type == LOWER then
+	    {   // assert not a duplicate
+		pb.lower = ce.tag;
+	    }
+	    else        
+	    {   // assert not a duplicate
+		pb.upper.bid   = ce.tag;
+		pb.upper.tag   = ce.chan;
+	    }
+	    _delete(ce);
+	}
+	is OPEN then
+	{   pb.lcladdr = { 192, 156, 205, 18};	// FIXME
+	    pb.options = {[ADDR]=true};
+	    pb.Action(Open);
+	    _delete(e);     // FIXME - extended event
+	}
+	is CLOSE then
+	{   pb.Action(Close);
+	    _delete(e);
+	}
+	is UP then
+	{   var li: comm.pLinkInfo;
+	    li = comm.pLinkInfo(e);
+if db > 2 then { debug.str("pppip4 got UP: ");
+debug.uint8(li.hdr); debug.chr(',');
+debug.uint8(li.trl); debug.chr(',');
+debug.uint16(li.mtu); debug.nl(); }
+	    pb.hdr = li.hdr;
+	    pb.trl = li.trl;
+	    pb.mtu = li.mtu;
+	    if e.tag == 1 then pb.Action(LinkUp);
+	    _delete(li);
+	}
+	is DOWN then
+	{   pb.Action(LinkDn);
+	    _delete(e);
+	}
+    }
+
+
+    proc NewBlock(id: block.BlockID): pBlock
+    {   var b: pPPPIP4Block;
+
+        b = _new(PPPIP4Block);
+if db > 0 then { debug.str("pppip4.NewBlock ");
+debug.uint8(id); debug.chr(' ');
+debug.hex(_uint(b)); debug.nl(); }
+	b.BlockInit(id, Run);
+//	b.options = {false};
+	b.lower = 0;
+	b.upper = { 0, 0 };
+	return b;
+    }
+}
+

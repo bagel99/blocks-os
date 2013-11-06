@@ -1,0 +1,114 @@
+/*
+ * Generic Internet definitions.
+ *
+ * Copyright (c) 2009-2011, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+import net;
+
+package inet
+{
+    type Net16: _uint16: be;
+    type Net32: _uint32: be;
+    const IPv4AddrLen = 4;
+    type IPv4Addr: [IPv4AddrLen]_byte: align(4);	// align as if _uint32
+    const IPv6AddrLen = 16;
+    type IPv6Addr: [IPv6AddrLen]_byte: align(4);	// 128-bit address
+    type Port: _uint16;
+    type Proto:
+    (   HOPv6=0, ICMPv4=1, IGMP=2, GGP=3, IPIP=4, TCP=6,
+	EGP=8, IGRP=9, UDP=17,
+	ROUTEv6=43, FRAGv6=44,
+	CRYPTv6=50, AUTHv6=51,
+	ICMPv6=58, NONEv6=59, DSTOPTv6=60, UDPLite=136,
+	END=0xFF
+    );
+    type AFNum: (NONE, IPV4, IPV6);
+
+    /*
+     * Address Information for for connections
+     */
+    type AddrInfo:
+    {   af:      AFNum: bits(8);	// address family
+	ifn:     _uint8;		// interface number (scope)
+	flow:    _uint16;
+	options: _uint16;		// TBD
+	port:    Port;
+	addr:    [IPv6AddrLen]_byte;
+    }: align(4);
+    type pAddrInfo: @AddrInfo;
+
+    /*
+     * The UDP header is used by DHCP and others protocols, so define it here
+     */	
+    type UDPHeader:
+    {   srcport: Net16;
+	dstport: Net16;
+	len:	 Net16;
+	chksum:	 _uint16;
+    };
+    type pUDPHeader: @UDPHeader;
+
+    /*
+     * Upper Layer Header for use by protocols above IPv4/IPv6
+     */
+    type ULInfo:
+    {   isipv6: boolean;
+	ifn:    0..127;		// interface number
+    } : packed, msb;
+    const InfoZero: ULInfo = { false, 0 };
+
+    type ULHeader:		// common part
+    { 	info:   ULInfo;		// This field must be zero before checksumming
+	proto:	Proto;
+	len:	Net16;
+    } : align(4);
+    type pULHeader: @ULHeader;
+
+    type ULHeader6(ULHeader):	// same size as IPv6 Header
+    {	zeros:	Net32;		// This field must be zero before checksumming
+	srcaddr:IPv6Addr;	// same place as IPv6 Header
+	dstaddr:IPv6Addr;	// same place as IPv6 Header
+    } : align(4);
+    type pULHeader6: @ULHeader6;
+
+    type ULHeader4(ULHeader):	// same size as normal IPv4 Header
+    {   srcaddr:IPv4Addr;	// same place as IPv4 Header
+	dstaddr:IPv4Addr;	// same place as IPv4 Header
+    } : align(4);
+    type pULHeader4: @ULHeader4;
+
+    type ICMPERBody:		// Echo Request/Reply body same in IPv4, IPv6
+    {   ident: Net16;
+	seqno: Net16;
+	data:  []_uint8;
+    };
+    type pICMPERBody: @ICMPERBody;
+
+    // IPv4/6 checksum, assumes buffers are 16-bit aligned
+    proc Checksum(data: @_memory, len: _uint): _uint16
+    {   var sum: _uint;		// assert _uint?size >= _uint32?size
+        type Puint16: @[]_uint16;
+	var p: Puint16;
+	var i, n: _uint;
+
+//debug.str("Checksum: len="); debug.uint32(len); debug.nl();
+//debug.dump("", data, len);
+	sum = 0;
+	p = Puint16(data);		// sum data
+	i = 0;
+	n = len/2;
+	while i < n do
+	{   sum += p@[i];
+	    i += 1;
+	}
+	if len&1 != 0 then
+	    sum += _uint16(data@[len-1]);
+	sum = (sum & 0xFFFF) + (sum >> 16);	// fold 32-bit sum to 16-bits
+	sum += (sum >> 16);			// take care of final carry
+	return _uint16(~sum);
+    }
+}
+// vim: ts=8 sw=4 noet nowrap
+

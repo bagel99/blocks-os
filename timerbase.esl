@@ -1,0 +1,232 @@
+/*
+ * Common definitions and routines for Timer Service.
+ * This package is continued by the implementation of specific timers.
+ *
+ * Copyright (c) 2009-2012, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ *
+ * There are two queues of outstanding timer events maintained: one based
+ * on seconds and one based on ticks.  This is to allow the timer start
+ * event to use the 16-bit info field to specify either seconds or ticks.
+ * Otherwise, a larger timer event packet would be needed. 
+ */
+
+import sys;	// to get TicksPerSecond
+
+import block;
+
+package timer
+{
+    if _defined(debug.db_timer) then
+	alias debug.db_timer as db;
+    else
+	const db = 0;
+    alias event.Event as Event;
+    alias event.pEvent as pEvent;
+    alias block.Block  as Block;
+    alias block.pBlock  as pBlock;
+    alias block.BlockID as BlockID;
+    
+    type TimerEvent(Event):
+    {	ticks:   _uint32;
+    };
+    type pTimerEvent: @TimerEvent;
+
+    type Timer(Block):
+    {	list:   pTimerEvent;	// waiting for ticks timer to expire
+	cticks:  _uint32;	// current timeout is ticks
+    };
+    type pTimer: @Timer;
+
+    proc (tb: pTimer) Set(ticks: _uint32);	// forward, in timer device
+    proc (tb: pTimer) Get(): _uint32;		// forward, in timer device
+    proc (tb: pTimer) Init();			// forward, in timer device
+    proc (tb: pTimer) Intr();			// forward, in timer device
+
+    proc SecondsToTicks(sec: _uint32): _uint32: inline
+    {
+    	// FIXME - check for overflow
+	return sec * sys.TicksPerSecond;
+    }
+
+    proc MilliSecondsToTicks(ms: _uint32): _uint32: inline
+    {
+	return ms * sys.TicksPerSecond / 1000;	
+    }
+
+    // DEBUG
+    proc (tb: pTimer) Dump(te: pTimerEvent)
+    {   var i: _uint;
+
+	debug.str("tmr.Dump:\n");
+	i = 0;
+	while te != 0 && i < 10 do
+	{   debug.chr('\t'); debug.uint8(te.tag);
+	    debug.chr(' '); debug.uint32(te.ticks);
+	    debug.nl();
+	    te = pTimerEvent(te.next);
+	    i += 1;
+	}
+    }
+    // END DEBUG
+
+    /*
+     * Enqueue a new timer event te
+     * There are several cases:
+     *  1.  The queue was empty:
+     *      Put te at head of queue and start timer.
+     *  2.  The queue is not empty:
+     *      remain = time remaining in queue head
+     *  2a. te is first in the list:
+     *      Adjust the old head of queue for elapsed - te.ticks
+     *      Put te at head of queue and start timer.
+     *  2b. te is not first in the list:
+     *      Search list accumulating remainder until te.ticks is greater
+     *      
+     */
+    proc (tb: pTimer) Enq(te: pTimerEvent)
+    {   var tep, ten: pTimerEvent;
+	var remain: _uint32;
+
+if db > 2 then {debug.str("tmr.Enq "); debug.uint8(te.tag);
+debug.chr(' '); debug.uint32(te.ticks); debug.nl();}
+	ten = tb.list;
+	if ten == 0 then		// queue was empty
+	{   te.next = 0;
+	    tb.list = te;
+	    tb.Set(te.ticks);		// FIXME
+	}
+	else				// queue not empty, something active
+	{   remain = tb.Get();		// get remaining time of active
+	    if te.ticks < remain then   // insert at head of list
+	    {   ten.ticks = remain - te.ticks;
+		te.next = ten;
+		tb.list = te;
+		tb.Set(te.ticks);	// FIXME
+	    }
+	    else			// search down list
+	    {   loop
+		{   tep = ten;
+		    ten = pTimerEvent(ten.next);
+		  exit ten == 0 || te.ticks < remain + ten.ticks;
+		    remain += ten.ticks;
+		}
+		te.next = ten;
+		tep.next = te;
+		te.ticks -= remain;		// adjust delta of this event
+		if ten != 0 then		// something follows
+		    ten.ticks -= te.ticks;	// adjust its delta
+	    }
+	}
+if db > 4 then tb.Dump(tb.list);
+    }
+
+    proc (tb: pTimer) Deq(bid: BlockID): pTimerEvent
+    {   var tep, tet, ten: pTimerEvent;
+
+if db > 2 then {debug.str("tmr.Deq "); debug.uint8(bid); debug.nl();}
+	tep = 0;
+	tet = tb.list;
+	while tet != 0 && tet.tag != bid do
+	{   tep = tet;
+	    tet = pTimerEvent(tet.next);
+	}
+	if tet != 0 then
+	{   ten = pTimerEvent(tet.next);
+	    if ten != 0 then		    // another event followed this one
+		ten.ticks += tet.ticks;	    // adjust delta of that next event
+	    if tep == 0 then		    // this was the active event
+	    {   tb.list = ten;
+		if ten != 0 then	    // more events follow
+		{   ten.ticks += tb.Get();   // adjust by remaining
+		    tb.Set(ten.ticks);		// FIXME
+		}
+		else
+		    tb.Set(0);
+	    }
+	    else
+		tep.next = ten;
+	}
+	return tet;	
+if db > 4 then tb.Dump(tb.list);
+    }
+
+    proc (tb: pTimer) SendDone(te: pTimerEvent)
+    {   var bid: BlockID;
+
+	te.code = TDONE;
+	bid = BlockID(te.tag);
+	bid.Send(te);
+    }
+
+    proc (tb: pTimer) Elapsed()
+    {   var te, ten: pTimerEvent;
+
+if db > 2 then debug.str("tmr.Elapsed\n");
+	te = tb.list;
+	if te != 0 then
+	{   ten = pTimerEvent(te.next);
+	    tb.SendDone(te);			// top of queue is done
+	    te = ten;
+	    // all the events with delta=0 on top of queue are also done
+	    while te != 0 && te.ticks == 0 do
+	    {   ten = pTimerEvent(te.next);
+	    	tb.SendDone(te);
+	    	te = ten;
+	    }
+	    tb.list = te;
+	    if te != 0 then
+		tb.Set(ten.ticks);
+	    else
+		tb.Set(0);
+	}
+if db > 4 then tb.Dump(tb.list);	
+    }
+
+    proc Run(b: pBlock, e: pEvent)
+    {   var tb: pTimer;
+	var te: pTimerEvent;
+    	var bid: BlockID;
+
+	tb = pTimer(b);
+	if e == 0 then
+	{
+if db > 6 then { debug.str("tmr.Run I\n"); }
+	    tb.Intr();
+	}
+	else
+	{
+if db > 2 then { debug.str("tmr.Run "); debug.uint8(_uint8(e.code));
+debug.chr(','); debug.uint8(e.tag); debug.nl();}
+	    if e.code
+	    is TSTART then
+	    {
+		tb.Enq(pTimerEvent(e));
+	    }
+	    is TSTOP then
+	    {
+	   	te = tb.Deq(e.tag);
+	   	if te != 0 then
+	   	{   te.code = TSTOPPED;
+	   	    bid = BlockID(te.tag);
+		    bid.Send(te);
+	   	}
+		_delete(e);
+	    }
+	}
+    }
+
+    proc NewBlock(id: BlockID): pBlock
+    {   var tb: pTimer;
+
+	tb = _new(Timer);
+if db > 0 then { debug.str("tmr.NewBlock ");
+debug.uint8(id); debug.chr(' ');
+debug.hex(_uint(tb)); debug.nl(); }
+	tb.BlockInit(id, Run);
+	tb.list = 0;
+	tb.Init();
+	return tb;
+    }
+}
+
