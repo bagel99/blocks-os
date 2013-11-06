@@ -1,0 +1,27 @@
+/*
+ * STM32F10x chip indentification registers
+ *
+ * Copyright (c) 2011, Brian G. Lucas.  See LICENSE file.
+ * $Id: cpu.esl 352 2012-03-21 01:10:38Z bgl $
+ */
+
+package chip
+{
+    type InfoRegs:
+    {   flashsz: _uint16;						// 00
+    	_:       _uint16;
+    	_:       _uint32;
+    	id0:     _uint16;						// 08
+    	id2:     _uint16;						// 0A
+    	id4:     _uint32;						// 0C
+    	id8:     _uint32;						// 10
+    };
+    type pInfoRegs: @InfoRegs;
+    const info: pInfoRegs = 0x1FFF_F7E0;
+
+    proc GetSerialNumber(): _uint32
+    {
+	return info.id0 | (_uint32(info.id2) << 16);
+    }
+}
+

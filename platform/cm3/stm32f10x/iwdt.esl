@@ -1,0 +1,61 @@
+/*
+ * STM32F10x Independent WatchDog Timer.
+ *
+ * Reference: RM0008 rev. 13
+ *
+ * Copyright (c) 2012, Brian G. Lucas.  See LICENSE file.
+ * $Id: gpio.esl 283 2012-02-02 22:32:42Z bgl $
+ */
+
+package iwdt
+{
+    const clockfreq = 40_000;	// internal RC clock is 30-60 kHz
+    const maxtimeout = 26;
+    const key_enable = 0xCCCC;
+    const key_reload = 0xAAAA;
+    const key_unlock = 0x5555;
+    const key_lock   = 0;	// anything but 0x5555
+    // Registers can by accessed as 16-bit or 32-bit values, we do 32-bit
+    type IWDTRegs:
+    {   key:      _uint32: out, wo;	// only low 16-bits are used	// 00
+    	prescale: 0..7: bits(32), out;				// 04
+    	reload:   _uint32: out;		// only low 12-bits are used	// 08
+    	status:								// 0C
+    	{   rvu: boolean;
+    	    pvu: boolean;
+	}: packed, lsb, bits(32), in, ro;
+    };
+    type IWDT: @IWDTRegs;
+    const iwdt: IWDT = 0x4000_3000;
+
+    proc (iwdt: IWDT) SetTimeOut(timeout: _uint32): boolean
+    {   var n: _uint32;
+	var p: _uint;
+
+    	if timeout > maxtimeout then return false;
+    	for p from 2 to 8 do
+    	{   n = (clockfreq * timeout) / (1 << p);
+    	    if n <= 4096 then
+    	    {
+		iwdt.key = key_unlock;
+		iwdt.prescale = p-2;
+		iwdt.reload = n-1;
+		iwdt.key = key_lock;
+		return true;
+    	    }
+    	}
+    	return false;
+    }
+
+    proc Reload()
+    {
+	iwdt.key = key_reload;
+    }
+
+    proc Start(timeout: _uint32)
+    {
+	if iwdt.SetTimeOut(timeout) then
+	    iwdt.key = key_enable;
+    }
+}
+

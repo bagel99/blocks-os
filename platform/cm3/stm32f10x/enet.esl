@@ -1,0 +1,631 @@
+/*
+ * STM32F107 Ethernet
+ *
+ * Copyright (c) 2011, Brian G. Lucas.  See LICENSE file.
+ * $Id: enet.esl 366 2012-05-22 01:37:32Z bgl $
+ */
+
+package eth
+{
+    if !_defined(db) then
+    {   if _defined(debug.db_eth) then
+	    alias debug.db_eth as db;
+	else
+	    const db = 0;
+    }
+
+    const auto_negotiate = true;
+    type PhyRegAddr: 0..31;
+    type Speed:  (S10, S100);
+    type Duplex: (HALF, FULL);
+
+    type XmitDesc:
+    {   cs:
+	{   db:    boolean;	// .00
+	    uf:    boolean;     // .01
+	    ed:    boolean;     // .02
+	    cc:    0..15;       // .03-06
+	    vf:    boolean;     // .07
+	    ec:    boolean;	// .08
+	    lco:   boolean;	// .09
+	    nc:    boolean;	// .10
+	    ica:   boolean;	// .11
+	    ipe:   boolean;	// .12
+	    ff:    boolean;	// .13
+	    jt:    boolean;	// .14
+	    es:    boolean;	// .15
+	    ihe:   boolean;	// .16
+	    ttss:  boolean;	// .17
+	    _:     0..0b11;	// .18-19
+	    tch:   boolean;	// .20
+	    ter:   boolean;	// .21
+	    cic:   (NONE, HDR, IP, PSUEDO);	// .22-23
+	    _:     boolean;	// .24
+	    ttse:  boolean;	// .25
+	    dp:    boolean;	// .26
+	    dc:    boolean;	// .27
+	    fs:    boolean;	// .28
+	    ls:    boolean;	// .29
+	    ic:    boolean;	// .30
+	    own:   boolean;	// .31
+	}: packed, lsb, in, out;
+	desc:
+	{   len1:  0..0x1FFF;   // .00-12
+	    _:     0..0x7;      // .13-15
+	    len2:  0..0x1FFF;   // .16-28
+	    _:     0..0x7;      // .29-31
+	}: packed, lsb, out;
+	adr1:  _address: out;
+	adr2:  _address: out;
+    };
+    type RecvDesc:
+    {   cs:
+	{   pce:   boolean;	// .00
+	    ce:    boolean;	// .01
+	    dripe: boolean;	// .02
+	    re:    boolean;	// .03
+	    rwt:   boolean;	// .04
+	    ft:    (IEEE, ETH);	// .05
+	    lco:   boolean;	// .06
+	    iphce: boolean;	// .07
+	    ls:    boolean;	// .08
+	    fs:    boolean;	// .09
+	    vlan:  boolean;	// .10
+	    oe:    boolean;	// .11
+	    le:    boolean;	// .12
+	    saf:   boolean;	// .13
+	    dsce:  boolean;	// .14
+	    es:    boolean;	// .15
+	    len:   0..0x3FFF;   // .16-29 received length
+	    afm:   boolean;     // .30
+	    own:   boolean;     // .31
+	}: packed, lsb, in, out;
+	desc:
+	{   len1:  0..0x1FFF;   // .00-12
+	    _:     0..1;	// .13
+	    rch:   boolean;	// .14
+	    rer:   boolean;	// .15
+	    len2:  0..0x1FFF;   // .16-28
+	    _:     0..0b11;	// .29-30
+	    dic:   boolean;	// .31
+	}: packed, lsb, out;
+	adr1:  _address: out;
+	adr2:  _address: out;
+    };    
+
+    type MACClockDiv: (DIV42, _, DIV16, DIV26, _, _, _, _);
+
+    type EnetRegs:
+    {   mac:
+	{   cr:							// 0x0000
+	    {   _:    0..3;		// .00-01
+		re:   boolean;		// .02
+		te:   boolean;		// .03
+		dc:   boolean;		// .04
+		bl:   (n10, n8, n4, n1); // .05-06
+		apcs: boolean;		// .07
+		_:    0..1;		// .08
+		rd:   boolean;		// .09
+		ipco: boolean;		// .10
+		dpx:  Duplex;		// .11
+		lm:   boolean;		// .12
+		rod:  boolean;		// .13
+		spd:  Speed;		// .14
+		_:    0..1;		// .15
+		csd:  boolean;		// .16
+		ifg:  (g96, g88, g80, g72, g64, g56, g48, g40);	// .17-19
+		_:    0..3;		// .20-21
+		jd:   boolean;		// .22
+		wd:   boolean;		// .23
+		_:    0..0xFF;		// .24-31
+	    }: packed, lsb, out;
+	    ffr:						// 0x0004
+	    {   pm:   boolean;		// .00
+		hu:   boolean;		// .01
+		hm:   boolean;		// .02
+		daif: boolean;		// .03
+		pam:  boolean;		// .04
+		bfd:  boolean;		// .05
+		pcf:  (none0, none1, all, filter); // .06-07
+		saif: boolean;		// .08
+		saf:  boolean;		// .09
+		hpf:  boolean;		// .10
+		_:    0..0xFFFFF;	// .11-30
+		ra:   boolean;		// .31
+	    }: packed, lsb, out;
+	    hthr: _uint32;					// 0x0008
+	    htlr: _uint32;					// 0x000C
+	    iiar:						// 0x0010
+	    {   mb:   boolean;		// .00
+		mw:   boolean;		// .01
+		cr:   MACClockDiv;	// .02-04
+		_:    0..1;		// .05
+		mr:   PhyRegAddr;	// .06-10
+		pa:   0..31;		// .11-15
+		_:    0..0xFFFF;	// .16-31
+	    }: packed, lsb, in, out;
+	    iidr: _uint32;					// 0x0014
+	    fcr:					        // 0x0018
+	    {   fcb:  boolean;		// .00
+		tfe:  boolean;		// .01
+		rfe:  boolean;		// .02
+		upfd: boolean;		// .03
+		plt:  0..3;		// .04-05
+		_:    0..1;		// .06
+		zqpd: boolean;		// .07
+		_:    0..0xFF;		// .08-15
+		pt:   0..0xFFFF;	// .16-31
+	    }: packed, lsb, out;
+	    vlantr:						// 0x001C
+	    {   tagid:0..0xFFFF;	// .00-15
+		e12b: boolean;		// .16
+		_:    0..0x7FFF;	// .17-31
+	    }: packed, lsb, out;
+	    _:    [2]_uint32;
+	    rwuffr: _uint32;					// 0x0028
+	    pmtcsr:						// 0x002C
+	    {	pd:  boolean;		// .00
+	    	mpe: boolean;		// .01
+	    	wfe: boolean;		// .02
+	    	_:   0..3;		// .03-04
+	    	mpr: boolean;		// .05
+	    	wfr: boolean;		// .06
+	    	_:   0..3;		// .07-08
+	    	gu:  boolean;		// .09
+	    	_:   0..0x1FFFFF;	// .10-30
+	    	wffrpr: boolean;	// .31
+	    }: packed, lsb, in, out;
+	    _:    [2]_uint32;
+	    sr:   _uint32;					// 0x0038
+	    imr:  _uint32;					// 0x003C
+	    a0h:						// 0x0040
+	    {   mac: _uint16;		// .00-15
+		_:   0..0x7FFF;		// .16-30
+		mo:  0..1: ro;		// .31 must be 1
+	    }: packed, lsb, out;
+	    a0l: _uint32: out;					// 0x0044
+	    a1h: _uint32;					// 0x0048
+	    a1l: _uint32;					// 0x004C
+	    a2h: _uint32;					// 0x0050
+	    a2l: _uint32;					// 0x0054
+	    a3h: _uint32;					// 0x0058
+	    a3l: _uint32;					// 0x005C
+	    _:    [40]_uint32;
+	};
+	mmc:
+	{   cr:   _uint32;					// 0x0100
+	    crir: _uint32;					// 0x0104
+	    ctir: _uint32;					// 0x0108
+	    crimr:_uint32;					// 0x010C
+	    ctimr:_uint32;					// 0x0110
+	    _:    [14]_uint32;
+	    tgfsccr: _uint32;					// 0x014C
+	    tgfmsccr:_uint32;					// 0x0150
+	    _:    [5]_uint32;
+	    tgfcr: _uint32;					// 0x0168
+	    _:    [10]_uint32;
+	    rfcecr:_uint32;					// 0x0194
+	    rfaecr:_uint32;					// 0x0198
+	    _:    [10]_uint32;
+	    rgufcr:_uint32;					// 0x01C4
+	    _:    [78]_uint32;
+	};
+	_: [256]_uint32;
+	ptp:
+	{   tscr: _uint32;					// 0x0700
+	    ssir: _uint32;					// 0x0704
+	    tshr: _uint32;					// 0x0708
+	    tslr: _uint32;					// 0x070C
+	    tshur:_uint32;					// 0x0710
+	    tslur:_uint32;					// 0x0714
+	    tsar: _uint32;					// 0x0718
+	    tthr: _uint32;					// 0x071C
+	    ttlr: _uint32;					// 0x0720
+	    _:    [55]_uint32;
+	};
+	_: [512]_uint32;
+	dma:
+	{   bmr:						// 0x1000
+	    {   swr:   boolean;		// .00: software reset
+		da:    (RR, Rx);	// .01
+		dsl:   0..31;		// .02-06
+		_:     0..1;		// .07
+		pbl:   0..63;		// .08-13
+		pr:    0..3;		// .14-15
+		fb:    boolean;		// .16
+		rdp:   0..63;		// .17-22
+		usp:   boolean;		// .23
+		pbl4x: boolean;		// .24
+		aab:   boolean;		// .25
+		_:     0..0b111111;     // .26-31
+	    }: packed, lsb, out;
+	    tpd:   _uint32: out;				// 0x1004
+	    rpd:   _uint32: out;				// 0x1008
+	    rdla:  @[]RecvDesc;					// 0x100C
+	    tdla:  @[]XmitDesc;					// 0x1010
+	    sr:							// 0x1014
+	    {   ts:    boolean;		// .00: tx done
+		tpss:  boolean;		// .01: tx process stopped
+		tbus:  boolean;		// .02: tx buffer unavailable
+		tjts:  boolean;		// .03: tx jabber timeout
+		ros:   boolean;		// .04: rx overflow
+		tus:   boolean;		// .05: tx underflow
+		rs:    boolean;		// .06: rx done
+		rbus:  boolean;		// .07: rx buffer unavailable
+		rpss:  boolean;		// .08: rx process stopped
+		rwts:  boolean;		// .09: rx watchdog timeout
+		ets:   boolean;		// .10: early transmit
+		_:     0..0b11;		// .11-12
+		fbes:  boolean;		// .13: fatal bus error
+		ers:   boolean;		// .14: early receive
+		ais:   boolean;		// .15: abnormal summary
+		nis:   boolean;		// .16: normal summary
+		rps:   (STOP,FETCH,_,WAIT,SUSP,CLOSE,_,XFER);	// .17-19
+		tps:   (STOP,FETCH,WAIT,XFER,_,_,SUSP,CLOSE);	// .20-22
+		exfer: (RxDMA,TxDMA);	// .23
+		erdwr: (WRITE,READ);	// .24
+		edesc: (DATA,DESC);	// .25
+		_:     0..1;		// .26
+		mmcs:  boolean;		// .27
+		pmt:   boolean;		// .28
+		tts:   boolean;		// .29
+		_:     0..0b11;		// .30-31
+	    }: packed, lsb, in, out;    // write 1 to clear bit
+	    omr:						// 0x1018
+	    {   _:     0..1;		// .00
+		sr:    boolean;		// .01: start rx
+		osf:   boolean;		// .02: operate on 2nd frame
+		rtc:   (T64,T32,T96,T128); // .03
+		_:     0..1;		// .04
+		fuf:   boolean;		// .05: forward undersized frames
+		fef:   boolean;		// .06: forward error frames
+		_:     0..0b11111;	// .07-12
+		st:    boolean;		// .13: start tx
+		ttc:   (T64,T128,T192,T256,T40,T32,T24,T16); // .14-16
+		_:     0..0b111;	// .17-19
+		ftf:   boolean;		// .20: flush transmit fifo
+		tsf:   boolean;		// .21: tx store and forward
+		_:     0..0b11;		// .22-23
+		dfrf:  boolean;		// .24: disable flushing of Rx frames
+		rsf:   boolean;		// .25: rx store and forward
+		dtcefd:boolean;		// .26: disable drop of chksum errors
+		_:     0..0x1F;		// .27-31
+	    }: packed, lsb, out;
+            ier:						// 0x101C
+            {   tie:   boolean;		// .00: Tx intr enable
+    		tse:   boolean;		// .01: Tx stop enable
+    		tbe:   boolean;		// .02: Tx buffer unavail enable
+    		tje:   boolean;		// .03: Tx jabber enable
+    		roe:   boolean;		// .04: Rx overflow enable
+    		tue:   boolean;		// .05: Tx underrun enable
+    		rie:   boolean;		// .06: Rx intr enable
+    		rbe:   boolean;		// .07: Rx buffer unavail enable
+    		rse:   boolean;		// .08: Rx stop enable
+    		rwe:   boolean;		// .09: Rx watchdog enable
+    		ete:   boolean;		// .10: early Tx enable
+		_:     0..0b11;		// .11-12
+    		fbe:   boolean;		// .13: fatal bus error enable
+    		ere:   boolean;		// .14: early Rx enable
+    		aise:  boolean;		// .15: abnormal summary enable
+    		nise:  boolean;		// .16: normal summary enable
+    		_:     0..0x3FFF;	// .17-31
+    	    }: packed, lsb, out;
+	    mfbocr:_uint32;					// 0x1020
+	    _:     [9]_uint32;
+	    chtdr: @XmitDesc: in,ro;				// 0x1048
+	    chrdr: @RecvDesc: in,ro;				// 0x104C
+	    chtbar:_address: in,ro;				// 0x1050
+	    chrbar:_address: in,ro;				// 0x1054
+	};
+    };
+    type Enet: @EnetRegs;
+    const enet: Enet = 0x4002_8000;
+    const vector = 61;
+
+    const PhyRWTimeout =  0x4FFFF;
+
+    /*
+     * The following bound procedures operate directly on the device registers
+     */
+    proc (en: Enet) PhyWrite(reg: PhyRegAddr, data: _uint16): boolean
+    {   var cr: MACClockDiv;
+    	var n: _uint32;
+
+	cr = en.mac.iiar.cr;	// save clock divider bits
+	en.mac.iidr = data;
+	en.mac.iiar = { .mb=true, .mw=true, .cr=cr, .mr=reg, .pa=sys.PhyAddr };
+    	n = PhyRWTimeout;
+    	while en.mac.iiar.mb && n > 0 do n -= 1;
+if db > 4 then {debug.str("PhyWrite: n="); debug.hex32(n); debug.nl();}
+    	return n > 0;
+    }
+
+    proc (en: Enet) PhyRead(reg: PhyRegAddr): _uint16, boolean
+    {   var cr: MACClockDiv;
+    	var n: _uint32;
+    	var data: _uint16;
+
+	cr = en.mac.iiar.cr;	// save clock divider bits
+    	en.mac.iiar = { .mb=true, .mw=false, .cr=cr, .mr=reg, .pa=sys.PhyAddr };
+    	n = PhyRWTimeout;
+    	while en.mac.iiar.mb && n > 0 do n -= 1;
+if db > 4 then {debug.str("PhyRead: n="); debug.uint(n); debug.nl();}
+    	if n == 0 then return 0, false;
+    	data = _uint16(en.mac.iidr);
+    	return data, true;
+    }
+
+    proc (en: Enet) LinkUp(speed: Speed, duplex: Duplex)
+    {
+if db > 0 then {debug.str("LinkUp: speed="); debug.uint8(_uint8(speed));
+debug.str(" duplex="); debug.uint8(_uint8(duplex)); debug.nl(); }
+	en.mac.cr.spd = speed;
+	en.mac.cr.dpx = duplex;
+    }
+}
+
+import (sys.phy);	// PHY chip is board dependent
+
+package eth
+{
+    proc (en: Enet) Init(mac: @[6]_byte)
+    {   var cr: MACClockDiv;
+
+	// Enable clocks to device
+	sysctl.ClockEnable(ETHMAC);
+	sysctl.ClockEnable(ETHTX);
+	sysctl.ClockEnable(ETHRX);
+	// Configure PLL3
+	sysctl.PLL3Init(MUL10);
+	// Output PLL3 clock on MCO pin
+	sysctl.MCOInit(PLL3);
+	// Setup MAC clock
+	if sys.HClock < 35_000_000 then		// 20-35 MHz
+	    en.mac.iiar.cr = DIV16;
+	else if sys.HClock < 60_000_000 then    // 35-60 MHz
+	    en.mac.iiar.cr = DIV26;
+	else					// 60-72 MHz
+	    en.mac.iiar.cr = DIV42;
+	sysctl.DeviceReset(ETHMAC);
+	en.mac.a0h = { .mac=(mac[1]<<8) | mac[0], .mo=1 };
+	en.mac.a0l = (mac[5]<<24) | (mac[4]<<16) | (mac[3]<<8) | mac[2];
+	phy.PhyInit(en);
+	if auto_negotiate then
+	    phy.SetAuto(en);
+	else
+	    phy.SetMode(en, S100, FULL);
+	// FIXME: just setup for 100/full, strip padding/CRC
+	en.mac.cr = { .spd=S100, .dpx=FULL, .apcs=true };
+	en.mac.ffr = { .ra=true };
+    }
+
+    proc (en: Enet) Start()
+    {
+	en.mac.cr.re = true;		// enable mac recv
+	en.dma.omr.ftf = true;
+	en.mac.cr.te = true;		// enable mac xmit
+	en.dma.omr.sr = true;		// start dma recv
+	en.dma.omr.st = true;		// start dma xmit
+	nvic.Enable(vector);
+	en.dma.ier = { .tie=true, .rie=true, .nise= true };   // enable interrupts
+    }
+
+
+    /*
+     * The following bound procedures operate on additional state
+     */
+    // FIXME: number of descriptors should be specified elsewhere?
+    const NumTxDesc = 2;
+    const NumRxDesc = 4;
+
+    type State:
+    {   rxprodinx: _uint8;
+	rxconsinx: _uint8;
+	txprodinx: _uint8;
+	txconsinx: _uint8;
+	td:        [NumTxDesc]XmitDesc;
+	rd:        [NumRxDesc]RecvDesc;
+    };
+    type pState: @State;
+    // FIXME: kludge so interrupt know how to find state
+    var eths: pState;
+
+
+    // initialize rx, tx descriptors for ring use
+    proc (es: pState) DescInit()
+    {   var i: _uint;
+
+if db > 2 then debug.str("RxI\n");
+	i = 0;
+	while i < NumRxDesc do
+	{   es.rd[i].cs = { .own=false };
+	    if i == NumRxDesc-1 then		// final
+		es.rd[i].desc = { .rer=true, .rch=false };
+	    else
+		es.rd[i].desc = { .rer=false, .rch=false };
+	    es.rd[i].adr1 = 0;
+	    i += 1;
+	}
+	es.rxprodinx = 0;
+	es.rxconsinx = 0;
+	enet.dma.rdla = es.rd;
+
+if db > 2 then debug.str("TxI\n");
+	i = 0;
+	while i < NumTxDesc do
+	{   if i == NumTxDesc-1 then		// final
+		es.td[i].cs = { .ter=true, .tch=false };
+	    else
+		es.td[i].cs = { .ter=false, .tch=false };
+	    es.td[i].desc = { .len1=0, .len2=0 };
+	    es.td[i].adr1 = 0;
+	    i += 1;
+	}
+	es.txprodinx = 0;
+	es.txconsinx = 0;
+	enet.dma.tdla = es.td;
+    }
+    
+    proc (es: pState) RecvLoad(buf: _address, len: _uint): boolean
+    {   var i: _uint;
+	var rd: @[]RecvDesc;
+	var e: Enet = enet;
+
+	len = len & ~3;			// must be multiple of 4
+	rd = e.dma.rdla;
+	i = es.rxprodinx;
+if db > 2 then {
+debug.str("RxL "); debug.uint(i); debug.uint(es.rxconsinx); debug.nl(); }
+	if rd[i].cs.own then return false;
+	rd[i].desc.len1 = len;
+	rd[i].adr1 = buf;
+	rd[i].cs.own = true;
+	e.dma.rpd = 1;		// prod dma into action
+	if rd[i].desc.rer then i = 0; else i += 1;
+	es.rxprodinx = i;
+	return true;
+    }
+
+    proc (es: pState) RecvUnload(): _address, _uint
+    {   var i: _uint;
+	var rd: @[]RecvDesc;
+	var adr: _address;
+	var len: _uint;
+
+	rd = enet.dma.rdla;
+	i = es.rxconsinx;
+if db > 2 then {
+debug.str("RxD "); debug.uint(es.rxprodinx); debug.uint(i); debug.nl(); }
+	if rd[i].cs.own || rd[i].adr1 == 0 then return 0, 0;
+	adr = rd[i].adr1;
+	len = rd[i].cs.len -4 ;   // discard CRC from count
+	rd[i].adr1 = 0;
+	if rd[i].desc.rer then i = 0; else i += 1;
+	es.rxconsinx = i;
+	return adr, len;
+    }
+
+    proc (es: pState) XmitLoad(buf: _address, len: _uint): boolean
+    {   var i: _uint;
+	var td: @[]XmitDesc;
+	var e: Enet = enet;
+	var last: boolean;
+
+	td = e.dma.tdla;
+	i = es.txprodinx;
+if db > 2 then {
+debug.str("TxL "); debug.uint(i); debug.uint(es.txconsinx);
+if db > 3 then {
+debug.chr(' '); debug.hex32(_uint32(td[i].cs)); }
+debug.nl(); }
+	if td[i].cs.own then return false;
+	last = td[i].cs.ter;
+	td[i].adr1 = buf;
+	td[i].desc.len1 = len;
+	td[i].cs = { .own=true, .ic=true, .fs=true, .ls=true, .ter=last };
+	if last then i = 0; else i += 1;
+	es.txprodinx = i;
+	e.dma.tpd = 1;		// prod dma into action
+	return true;
+    }
+
+    proc (es: pState) XmitUnload(): _address, _uint
+    {   var i: _uint;
+	var td: @[]XmitDesc;
+	var adr: _address;
+	var len: _uint;
+
+	td = enet.dma.tdla;
+	i = es.txconsinx;
+if db > 2 then {
+debug.str("TxD "); debug.uint(es.txprodinx); debug.uint(i);
+if db > 3 then {
+debug.chr(' '); debug.hex32(_uint32(td[i].cs)); }
+debug.nl(); }
+	if td[i].cs.own || td[i].adr1 == 0 then return 0, 0;
+	adr = td[i].adr1;
+	len = td[i].desc.len1;
+	td[i].adr1 = 0;
+	if td[i].cs.ter then i = 0; else i += 1;
+	es.txconsinx = i;
+	return adr, len;
+    }
+
+    proc (es: pState) Start()
+    {
+if db > 0 then debug.str("es.Start\n");
+	enet.Start();
+    }
+
+    proc (es: pState) Init(mac: @[6]_byte)
+    {
+if db > 0 then { debug.str("es.Init "); debug.hex32(_uint32(es)); debug.nl(); }
+	eths = es;      // save pointer to state
+	// Initialize device
+	enet.Init(mac);
+	// Initialize descriptors and other state
+	es.DescInit();
+    }
+
+    proc RecvFull(es: pState, adr: _address, len: _uint);	// forward
+    proc XmitEmpty(es: pState, adr: _address, len: _uint);      // forward
+    /*
+     * These are called from the interrupt
+     */
+    proc (es: pState) RecvDone()
+    {   var adr: _address;
+	var len: _uint;
+
+	loop
+	{
+	    adr, len = es.RecvUnload();
+	  exit adr == 0;
+	    RecvFull(es, adr, len);       // call to generic code
+	}
+    }
+
+    proc (es: pState) XmitDone()
+    {   var adr: _address;
+	var len: _uint;
+
+	loop
+	{
+	    adr, len = es.XmitUnload();
+	  exit adr == 0;
+	    XmitEmpty(es, adr, len);  // call to generic code
+	}
+    }
+
+    proc (es: pState) GetLinkState(wasup: boolean): boolean
+    {   var en: Enet = enet;
+
+	if phy.GetLinkState(en) then      // link is up
+	{   var speed: Speed;
+	    var duplex: Duplex;
+	    if !wasup then
+	    {   speed, duplex = phy.GetLinkSpeed(en);
+		en.LinkUp(speed, duplex);
+	    }
+	    return true;
+	}
+	else				// link is down
+	{
+	    return false;
+	}
+    }
+
+    proc (es: pState) Intr()
+    {   var e: Enet = enet;
+	var istatus: ?enet.dma.sr;
+    
+	istatus = e.dma.sr;
+	e.dma.sr = istatus;	// clear all 1 bits by writing back 1's
+//debug.chr('I');debug.hex32(_uint32(istatus));debug.nl();
+	if istatus.rs then	// Rx ready
+	    es.RecvDone();
+	if istatus.ts then	// Tx ready
+	    es.XmitDone();
+    }
+}
+// vim: ts=8 sw=4 noet nowrap
+

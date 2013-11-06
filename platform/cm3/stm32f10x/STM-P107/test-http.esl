@@ -1,0 +1,189 @@
+// TEST: Test of IPv4/TCP/HTTP
+// Uses port 9080, echos packets starting with '?'
+
+import sys;
+import trace;
+import debug;
+import uart;
+
+package debug
+{
+    const db_fault   = 1;
+    const db_block   = 1;
+    const db_timer   = 1;
+    const db_eth     = 2;
+    const db_ipv4    = 2;
+    const db_ipv6    = 2;
+    const db_tcp     = 5;
+}
+
+import fault;
+import syscb;
+import sysctl;
+import nvic;
+
+import mbuf;
+import block;
+
+var MyMAC:  [6]_byte;
+const TimerID: block.BlockID = 1;
+const EthID:   block.BlockID = 15;
+const IPv4ID:  block.BlockID = 14;
+const IPv6ID:  block.BlockID = 13;
+const TCPID:   block.BlockID = 12;
+const HTTPID:  block.BlockID = 10;
+
+
+// Chip stuff
+import chip;	// for GetSerialNumber()
+import timer;
+import enetsys;
+
+import inet;
+var MyIPv4Addr: inet.IPv4Addr = { 192,156,205,18 };
+var MyIPv4Mask: inet.IPv4Addr = { 255,255,255,128 };
+import ipv6;
+import ipv4;
+import tcp;
+
+alias event.Event as Event;
+alias event.pEvent as pEvent;
+alias block.Block as Block;
+alias block.pBlock as pBlock;
+alias block.BlockID as BlockID;
+
+package httpd
+{
+    alias mbuf.pMBuf as pMBuf;
+
+    type HTTPBlock(Block):
+    {   lower: BlockID;
+	tag:   _uint8;
+    };
+    type pHTTPBlock: @HTTPBlock;
+
+    const Reply1: []_byte = "HTTP/1.1 200 OK\r\n";
+    const Reply2: []_byte = "Content-Type: text/html\r\n";
+    const Reply3: []_byte = "Content-Length: 153\r\n";
+    const Content: []_byte =
+    "<HTML><TITLE>Blocks HTTP Server</TITLE><BODY><H1>Welcome to the Blocks HTTP Server</H1><p>This page is being served from a Blocks system.</BODY></HTML>\r\n"
+    ;
+    proc Run(b: pBlock, e: pEvent)
+    {   var mb: pMBuf;
+	var tb: pHTTPBlock;
+
+{debug.str("http.Run ");  debug.uint8(_uint8(e.code));
+debug.chr(','); debug.uint8(e.tag); debug.nl();}
+	tb = pHTTPBlock(b);
+	if e.code
+	is RCVD then
+	{
+	    mb = pMBuf(e);
+	    debug.str("http.Recv: len=");  debug.uint(mb.Size()); debug.nl();
+	    debug.strn(mb.Data(), mb.Size());
+	    mbuf.Free(mb);
+	    mb = mbuf.Alloc(512, 80);	// FIXME
+	    mb.CopyIn(Reply1, Reply1?len-1);
+	    mb.CopyIn(Reply2, Reply2?len-1);
+	    mb.CopyIn(Reply3, Reply2?len-1);
+	    mb.CopyIn("\r\n", 2);
+	    mb.CopyIn(Content, Content?len-1);
+debug.str("Send to "); debug.uint8(tb.lower); debug.nl();
+//mb.Dump(true);
+	    mb.code = SEND;
+	    mb.tag = tb.tag;
+	    tb.lower.Send(mb);
+	}
+	is CONNECT then
+	{   var ce: event.pConnEvent;
+	    ce = event.pConnEvent(e);
+	    if ce.type == LOWER then
+	    {	tb.lower = ce.tag;
+	    	tb.tag = ce.chan;
+	    }
+	    _delete(ce);
+	}
+	else
+	{
+	    _delete(e);
+	}
+    }
+
+    proc NewBlock(id: BlockID): pHTTPBlock
+    {   var tb: pHTTPBlock;
+
+	tb = _new(HTTPBlock);
+	tb.BlockInit(id, Run);
+	return tb;
+    }
+}
+
+var HeapStart: _memory: external("_end");
+
+proc wait()::external;
+
+proc meminit(addr: _address, size: _uint, pool: _uint): : external;
+
+const Connections: []block.ConnectionInfo =
+{   {   IPv4ID, EthID,   LOWER,  1, 0 },
+    {	EthID,  IPv4ID,  UPPER,  1, _uint16(eth.Proto.IPV4) },
+    {	EthID,  IPv4ID,  UPPER,  1+0x80, 0x0806 },
+    {   IPv6ID, EthID,   LOWER,  1, 0 },
+    {	EthID,  IPv6ID,  UPPER,  1, _uint16(eth.Proto.IPV6) },
+    {	IPv4ID, TCPID,   UPPER, 0, _uint16(inet.Proto.TCP) },
+    {	IPv6ID, TCPID,   UPPER, 1, _uint16(inet.Proto.TCP) },
+    {	TCPID,  HTTPID,  UPPER, 0, 9080 },
+    {	HTTPID, TCPID,   LOWER, 0, 0 }
+};
+
+proc main(): _int
+{   var serialno: _uint32;
+
+    sys.Init();
+    sysctl.Init();
+    fault.Init();
+    debug.Init();
+    sys.ledon(0);							// 01
+debug.str("Starting test-inet...\n");
+    meminit(HeapStart, 0x8000, 0);	// FIXME
+/*
+    // create MAC from serial number
+    serialno = cpu.GetSerialNumber();
+    MyMAC[0] = 0x02;
+    MyMAC[1] = 0x00;
+    MyMAC[2] = _byte(serialno >> 24);
+    MyMAC[3] = _byte(serialno >> 16);
+    MyMAC[4] = _byte(serialno >> 8);
+    MyMAC[5] = _byte(serialno);
+*/
+    MyMAC = { 0x02, 0x12, 0x34, 0x45, 0x67, 0x78 };
+    debug.str("MyMAC="); ipv6.MACPrint(MyMAC); debug.nl();
+
+    timer.NewBlock(TimerID);
+    eth.NewBlock(EthID);
+    ipv4.NewBlock(IPv4ID);
+    ipv6.NewBlock(IPv6ID);
+    tcp.NewBlock(TCPID);
+    httpd.NewBlock(HTTPID);
+    block.InitConnections(Connections, Connections?len);
+    {   var e: pEvent;
+	e = _new(Event);
+	e.code = START;
+	IPv4ID.Send(e);
+	e = _new(Event);
+	e.code = START;
+	IPv6ID.Send(e);
+    }
+
+    sys.ledon(1);							// 11
+
+    loop
+    {
+	block.Sched();
+    	/* wait(); screws jtag */
+    }
+
+
+    return 0;
+}
+

@@ -1,0 +1,13 @@
+import trace;
+import debug;
+
+proc main(): _int
+{
+    debug.Init();
+
+    debug.str("Starting\n");
+    
+    loop {}
+    return 0;
+}
+

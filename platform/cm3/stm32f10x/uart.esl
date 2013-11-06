@@ -1,0 +1,173 @@
+/*
+ * STM32F10x USARTs
+ * There are 5 UARTs.
+ *
+ * Copyright (c) 2011, Brian G. Lucas.  See LICENSE file.
+ * $Id: uart.esl 287 2012-02-03 18:03:30Z bgl $
+ */
+
+import sysctl;
+
+package uart
+{
+    const NumUarts = 5;
+    type Width:  (BITS8, BITS9);
+    type Stop:   (STOP1, STOP0_5, STOP2, STOP1_5);
+    type Parity: (NONE, _, EVEN, ODD);
+
+    // Define register bits.
+    // All registers can be accessed as 32 or 16-bits at a time.
+    // We will work 16-bits at a time.
+    type CR1:
+    {   sbk:    boolean;	// .00
+	rwu:    boolean;	// .01
+	re:     boolean;	// .02 enable recv
+	te:     boolean;	// .03 enable xmit
+	idleie: boolean;	// .04
+	rxneie: boolean;	// .05
+	tcie:   boolean;	// .06
+	txeie:  boolean;	// .07
+	peie:   boolean;	// .08
+	parity: Parity;		// .09-10
+	wake:   boolean;	// .11
+	width:  Width;		// .12
+	ue:     boolean;	// .13 enable uart
+	_:      0..0b11;
+    }: packed, lsb;
+    type UartRegs:
+    {   sr:							// 0x00
+	{   pe:  boolean;       // .00
+	    fe:  boolean;       // .01
+	    ne:  boolean;       // .02
+	    ore: boolean;       // .03
+	    idle:boolean;       // .04
+	    rxne:boolean;       // .05 cleared by writing 0
+	    tc:  boolean;       // .06 cleared by writing 0
+	    txe: boolean;       // .07
+	    lbd: boolean;       // .08 cleared by writing 0
+	    cts: boolean;       // .09 cleared by writing 0
+	    _:   0..0x3F;
+	}: packed, lsb, in, out;
+	_:   _uint16;
+	dr:  _uint16: in, out;	// only low 9 bits are data	// 0x04  				 // 0x04
+	_:   _uint16;
+	brr: _uint16: out;  // actually binary fractional(12.4)
+	_:   _uint16;
+	cr1: CR1: in, out;					// 0x0C
+	_:   _uint16;
+	cr2:							// 0x10
+	{   addr:   0..15;
+	    _:      0..1;
+	    lbdl:   (BITS10, BITS11);
+	    lbdie:  boolean;
+	    _:      0..1;
+	    lbcl:   boolean;
+	    cpha:   (FIRST, SECOND);
+	    cpol:   (LO, HI);
+	    clken:  boolean;
+	    stop:   Stop;
+	    linen:  boolean;
+	    _:      0..1;
+	}: packed, lsb, in, out;
+	_:   _uint16;
+	cr3:							// 0x14
+	{   eie:    boolean;
+	    iren:   boolean;
+	    irlp:   boolean;
+	    hdsel:  (FULL, HALF);
+	    nack:   boolean;
+	    scen:   boolean;
+	    dmar:   boolean;
+	    dmat:   boolean;
+	    rtse:   boolean;
+	    ctse:   boolean;
+	    cgtsie: boolean;
+	    _:      0..0x1F;
+	}: packed, lsb, out;
+	_:   _uint16;
+	gtpr:							// 0x18
+	{   psc:    0..255;
+	    gt:     0..255;
+	}: packed, lsb, out;
+	_:   _uint16;
+    };
+
+    type Uart:    @UartRegs;
+
+    type UartTypes: (UART, USART);
+    const devices: []
+    {   addr:   Uart;
+        vector: _uint8;
+	dev:    sysctl.Device;
+        bus:    sysctl.Bus;
+        type:   UartTypes;
+    } =
+    {   { 0x4001_3800, 37, USART1, APB2, USART },
+	{ 0x4000_4400, 38, USART2, APB1, USART },
+	{ 0x4000_4800, 39, USART3, APB1, USART },
+	{ 0x4000_4C00, 52, UART4,  APB1, UART  },
+	{ 0x4000_5000, 53, UART5,  APB1, UART  }
+    };
+
+    // Methods
+    proc (u: Uart) GetDevIndex(): _uint
+    {   var i: _uint;
+
+	i = 0;
+	while i < devices?len do
+	{   if u == devices[i].addr then return i;
+	    i += 1;
+	}
+	return i;   // FIXME: what to return on error
+    }
+
+    proc (u: Uart) SetFormat(w: Width, s: Stop, p: Parity)
+    {
+	u@.cr1.width = w;
+	u@.cr1.parity = p;
+	u@.cr2.stop = s;
+    }
+
+    proc (u: Uart) SetSpeed(speed: _uint32)
+    {   var clk: _uint32;
+	var intdiv, fracdiv: _uint32;
+        var i: _uint;
+
+	i = u.GetDevIndex();
+        if devices[i].bus
+        is APB2 then clk = sys.P2Clock;
+        is APB1 then clk = sys.P1Clock;
+        else return;    // eh?
+	// This computes a binary fractional 12.4
+	u.brr = clk/speed;
+    }	
+
+    proc (u: Uart) Send(data: _byte)
+    {
+	while !u@.sr.txe do
+	    {}		// spin until xmit ready
+	u@.dr = data;
+    }
+
+    proc Init(n: _uint): Uart
+    {   var u: Uart;
+	var sc: sysctl.SysCtl;
+	var cr1: CR1;
+
+	if n == 0 || n >= devices?len then return 0;
+	n -= 1;     // become zero based
+	sysctl.ClockEnable(devices[n].dev);
+	sysctl.DeviceReset(devices[n].dev);
+	u = devices[n].addr;
+	u.SetFormat(BITS8, STOP1, NONE);
+	u.SetSpeed(115200);
+	cr1 = u.cr1;
+	cr1.re = true;
+	cr1.te = true;
+	cr1.ue = true;
+	u.cr1 = cr1;
+	return u;
+    }
+}
+// vim: ts=8 sw=4 noet nowrap
+

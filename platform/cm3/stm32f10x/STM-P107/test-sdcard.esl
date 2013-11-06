@@ -1,0 +1,79 @@
+// main routine for STM-P107 platform
+
+// Board specific stuff
+import sys;
+//import uart;
+import trace;
+import debug;
+
+package debug
+{
+    const db_sdcard	    = 3;
+}
+
+
+// Cortex M3 stuff
+import syscb;
+import fault;
+import systick;
+import nvic;
+
+// STM32F10x stuff
+import sysctl;
+
+import sdcard;
+
+
+var buf: [512]_byte;
+
+var sd: sdcard.State;
+
+import mbr;
+
+//import fatfs;
+
+//var fs: fatfs.State;
+
+proc main()
+{
+    var i: _uint;
+    var pt: _uint8;
+    var size, blksz: _uint32;
+
+    sysctl.Init();
+    sys.Init();
+    debug.Init();
+    if sd.Init(3, sys.SDCARD) then
+    {
+sys.ledon(0);
+debug.str("M1\n");
+	size, blksz = sd.GetCapacity();
+debug.str("size="); debug.uint32(size); debug.str(" blks\n");
+   	sd.Read(0, buf);
+debug.str("M2 "); debug.hex8(buf[510]); debug.hex8(buf[511]); debug.nl();
+	if mbr.IsValid(buf) then
+	{
+sys.ledon(1);
+debug.str("M3\n");
+	    i = 0;
+	    while i < 4 do
+	    {   pt = mbr.GetPartitionType(buf, i);
+		if pt != 0 then
+		{   debug.str("partition ");
+		    debug.uint(i);
+		    debug.str(": type=");
+		    debug.hex8(pt);
+		    debug.nl();
+		}
+		i += 1;
+	    }
+//	    fs.Init(8192);	    
+	}
+//	sd.Write(8000, buf);
+    }
+    loop
+    {
+    }
+}
+// vim: ts=8 sw=4 noet nowrap
+

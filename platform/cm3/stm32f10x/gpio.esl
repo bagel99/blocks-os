@@ -1,0 +1,196 @@
+/*
+ * STM32F10x GPIO and pin remapping.
+ *
+ * Copyright (c) 2011, Brian G. Lucas.  See LICENSE file.
+ * $Id: gpio.esl 283 2012-02-02 22:32:42Z bgl $
+ */
+
+import sysctl;
+
+package gpio
+{
+    // There are 7 ports of 16-bits each.  Not all are pinned-out.
+    const NumGPIO = 7;
+    // Ports
+    type Port: (A, B, C, D, E, F, G, _, _, _, _, _, _, _, _, X);
+    type PortDesc:
+    {   bit:  0..15;
+	port: Port;
+    }: packed;
+    // What follows is almost a direct mapping to cnf/mode bits
+    type PortConf:		// CNF MODE
+    (   IN_ANALOG,		//  00 00
+	GP_PP_10,		//  00 01      
+	GP_PP_2,		//  00 10
+	GP_PP_50,		//  00 11
+	IN_FLOAT,		//  01 00
+	GP_OD_10,		//  01 01
+	GP_OD_2,		//  01 10
+	GP_OD_50,		//  01 11
+	IN_PULLDOWN,		//  10 00 ODR=0
+	AF_PP_10,		//  10 01
+	AF_PP_2,		//  10 10
+	AF_PP_50,		//  10 11
+	IN_PULLUP,		//  10 00 ODR=1, remapped before use
+	AF_OD_10,		//  11 01
+	AF_OD_2,		//  11 10
+	AF_OD_50		//  11 11
+    );
+    type PortInit:
+    {   port: PortDesc;
+        conf: PortConf;
+        _:    0..0b1111;
+    }: packed;
+
+    type Conf: (GPDRIVE, GPOPEN, AFDRIVE, AFOPEN);
+    const ANALOG:  Conf = GPDRIVE;
+    const INFLOAT: Conf = GPOPEN;
+    const INPULL:  Conf = AFDRIVE;
+    type Mode: (INPUT, OUT10, OUT2, OUT50);
+    type ConfigBits: 0..0b1111;
+//    {   mode: Mode;
+//	cnf:  Conf;
+//    }:packed, lsb;
+    // GPIO Registers
+    // must be accessed as 32-bit words
+    type GPIORegs:
+    {   crl: [8] ConfigBits: packed, lsb, out;			// 0x00
+	crh: [8] ConfigBits: packed, lsb, out;			// 0x04
+	idr:							// 0x08
+	{   data: _uint16;
+	    _:    _uint16;
+	}: packed, lsb, ro, in;
+	odr:							// 0x0C
+	{   data: _uint16;
+	    _:    _uint16;
+	}: packed, lsb, out;
+	bsrr:							// 0x10
+	{   bs: _uint16;    // bits to be set
+	    br: _uint16;    // bits to be reset
+	}: packed, lsb, wo, out;
+	brr:							// 0x14
+	{   br: _uint16;    // bits to be reset
+	    _:  _uint16;
+	}: packed, lsb, wo, out;
+	lckr:							// 0x18
+	{   lck:_uint16;
+	    lckk: 0..1;     // magic lock sequence bit
+	    _:    0..0x7FFF;
+	}: packed, lsb, in, out;
+    };
+    type GPIO: @GPIORegs;
+    const gpio: [NumGPIO]GPIO =
+    { 0x4001_0800, 0x4001_0C00, 0x4001_1000, 0x4001_1400,
+      0x4001_1800, 0x4001_1C00, 0x4001_2000
+    };
+
+    proc Clr(which: PortDesc)
+    {
+	gpio[which.port].brr  = 1 << which.bit;
+    }
+
+    proc Set(which: PortDesc)
+    {
+	gpio[which.port].bsrr = 1 << which.bit;
+    }
+
+    proc Tst(which: PortDesc): boolean
+    {
+	return gpio[which.port].idr.data & (1 << which.bit) != 0;
+    }
+
+    proc Init(which: PortInit)
+    {   var g: GPIO;
+	var c: ConfigBits;
+	var b: _uint;
+
+	// First, make sure the clock is enabled to the GPIO port
+	sysctl.ClockEnable(IOPA + _uint(which.port.port));
+	// Then configure the pin
+	g = gpio[which.port.port];
+	c = ConfigBits(which.conf);
+	if which.conf == IN_PULLUP then c = 0b1000;
+	b = which.port.bit;
+	if b < 8 then
+	    g.crl[b] = c;
+	else
+	    g.crh[b-8] = c;
+	if which.conf
+	is IN_PULLUP then g.bsrr = 1 << b;
+	is IN_PULLDOWN then g.brr = 1 << b;
+    }
+
+    // Alternate function control
+    type Remap1: (NO, REMAP);
+    type Remap2: (NO, PARTIAL, _, REMAP);
+    type ExtIReg:
+    {   exti: [4] Port: packed;
+	_:      0..0xFFFF;
+    }: packed, lsb;	    
+    
+    type AFIORegs:  // 32-bit access only
+    {   evcr:							// 0x00
+	{   bit:  0..15;
+	    port: 0..7;     // not all may be available
+	    evoe: boolean;
+	    _:    0..0xFF_FFFF;
+	}: packed, lsb, out;
+	mapr:							// 0x04
+	{   spi1:   Remap1;
+	    i2c1:   Remap1;
+	    usart1: Remap1;
+	    usart2: Remap1;
+	    usart3: Remap2;
+	    tim1:   Remap2;
+	    tim2:   Remap2;
+	    tim3:   Remap2;
+	    tim4:   Remap1;
+	    can1:   Remap2;
+	    pd01:   Remap1;
+	    tim5ch4:Remap1;
+	    _:      0..0b1111;
+	    eth:    Remap1;
+	    can2:   Remap1;
+	    rmii:   boolean;
+	    swj:    (FULL, NO_RST, SWONLY, _, NONE, _, _, _);
+	    _:      0..1;
+	    spi3:   Remap1;
+	    tim2it1:Remap1;
+	    ptp_pps:boolean;
+	    _:      0..1;
+	}: packed, lsb, out;
+	exticr0: ExtIReg: out;
+	exticr1: ExtIReg: out;
+	exticr2: ExtIReg: out;
+	exticr3: ExtIReg: out;
+	_: _uint32;
+	mapr2:							// 0x1C
+	{   _:      0..0b11111;
+	    tim9:   Remap1;
+	    tim10:  Remap1;
+	    tim11:  Remap1;
+	    tim13:  Remap1;
+	    tim14:  Remap1;
+	    nadv:   Remap1;
+	    _:     0..0x1F_FFFF;
+	}: packed, lsb, out;
+    };
+    type AFIO: @AFIORegs;
+    const afio: AFIO = 0x4001_0000;
+
+    proc ExtIntr(which: PortDesc)
+    {   var af: AFIO;
+	af = afio;
+
+	if which.bit < 4 then
+	    af.exticr0.exti[which.bit] = which.port;
+	else if which.bit < 8 then
+	    af.exticr1.exti[which.bit-4] = which.port;
+	else if which.bit < 12 then
+	    af.exticr2.exti[which.bit-8] = which.port;
+	else if which.bit < 16 then
+	    af.exticr3.exti[which.bit-12] = which.port;
+    }
+}
+// vim: ts=8 sw=4 noet nowrap
+

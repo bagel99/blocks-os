@@ -1,0 +1,73 @@
+// main routine for STM-P107 platform
+
+// Board specific stuff
+import sys;
+import trace;
+import debug;
+
+// Cortex M3 stuff
+import syscb;
+import fault;
+import systick;
+import nvic;
+
+// STM32F10x stuff
+import sysctl;
+import exti;
+
+
+/*
+ * Joystick demo USB device
+ */
+import usbdevotg;
+import usb_keyboard;
+
+
+/*
+ */
+var button1, button2: boolean: in, out;
+
+proc EINT0_IRQ()
+{
+    button1 = true;
+    exti.ClearIntr(sys.BUT1);
+}
+
+proc EINT10_15_IRQ()
+{
+    if exti.Pending(sys.BUT2) then
+    {   button2 = true;
+        exti.ClearIntr(sys.BUT2);
+    }
+}
+
+// "Hello world!\n" in keycodes
+const mesg1: []usbdev.KeyCode =
+{   {0x02,0x0B},{0x00,0x08},{0x00,0x0F},{0x00,0x0F},{0x00,0x12},{0x00,0x2C},
+    {0x00,0x1A},{0x00,0x12},{0x00,0x15},{0x00,0x0F},{0x00,0x07},{0x02,0x1E},
+    {0x00,0x28}
+};
+
+proc main()
+{   var i: _uint;
+
+    sysctl.Init();
+    sys.Init();
+    debug.Init();
+    usbdev.KeyboardInit();
+    exti.EnableIntr(sys.BUT1, RISING);	// WAKEUP 
+    exti.EnableIntr(sys.BUT2, FALLING);	// TAMPER
+    sys.ledon(0);
+    // wait for button
+    while !button1 do {}
+    button1 = false;
+    // then "type" message
+    for i from 0 to mesg1?len-1 do
+	usbdev.Key(mesg1[i]);
+    loop
+    {
+    }
+    
+}
+// vim: ts=8 sw=4 noet nowrap
+

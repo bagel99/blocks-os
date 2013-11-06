@@ -1,0 +1,65 @@
+/*
+ * Custom HID demo USB device
+ *
+ * main routine for STM-P107 platform
+ */
+
+// Board specific stuff
+import sys;
+import trace;
+import debug;
+package debug
+{
+    const db_usbdev = 0x0009030F;
+}
+
+// Cortex M3 stuff
+import fault;
+import systick;
+import nvic;
+
+// STM32F10x stuff
+import sysctl;
+import exti;
+
+import usbdevotg;
+import usb_ledbut;
+
+var button1, button2: boolean: in, out;
+
+proc EINT0_IRQ()
+{
+    button1 = true;
+    exti.ClearIntr(sys.BUT1);
+}
+
+proc EINT10_15_IRQ()
+{
+    if exti.Pending(sys.BUT2) then
+    {   button2 = true;
+        exti.ClearIntr(sys.BUT2);
+    }
+}
+
+
+proc main()
+{
+    sysctl.Init();
+    sys.Init();
+    debug.Init();
+    usbdev.HIDInit();
+    exti.EnableIntr(sys.BUT1, RISING);	// WAKEUP 
+    exti.EnableIntr(sys.BUT2, FALLING);	// TAMPER
+    loop
+    {   if button1 then
+    	{   button1 = false;
+    	    usbdev.Button(1);
+    	}
+    	if button2 then
+    	{   button2 = false;
+    	    usbdev.Button(2);
+    	}
+    }
+}
+// vim: ts=8 sw=4 noet nowrap
+

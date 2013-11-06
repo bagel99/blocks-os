@@ -1,0 +1,44 @@
+// main routine for STM-P107 platform
+
+// Board specific stuff
+import sys;
+import trace;
+import debug;
+
+// Cortex M3 stuff
+import syscb;
+import fault;
+import systick;
+import nvic;
+
+// STM32F10x stuff
+import sysctl;
+
+
+/*
+ * Joystick demo USB device
+ */
+import usbdevotg;
+import usb_joystick;
+
+
+/*
+ * The STM-P107 has only two buttons for input.
+ * We will use them for left and right.
+ */
+
+proc main()
+{   var led1on: boolean;
+
+    sysctl.Init();
+    sys.Init();
+    debug.Init();
+    usbdev.JoyInit();
+    sys.ledon(0);
+    loop
+    {
+    }
+    
+}
+// vim: ts=8 sw=4 noet nowrap
+

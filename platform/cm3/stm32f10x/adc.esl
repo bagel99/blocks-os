@@ -1,0 +1,107 @@
+/*
+ * STM32F10x Analog to Digital Converter.
+ *
+ * Copyright (c) 2012, Brian G. Lucas.  See LICENSE file.
+ * $Id: adc.esl 291 2012-02-04 21:32:04Z bgl $
+ */
+
+package adc
+{
+
+    type SampleTime:	// sample time in cycles, S13_5 is 13.5 cycles
+    ( S1_5, S7_5, S13_5, S28_5, S41_5, S55_5, S71_5, S239_5 );
+    type Range:
+    {   value:  0..0xFFF;	// .00-11 12-bit A-D
+    	_:      0..0xF_FFFF;	// .12-31
+    }: packed, lsb;
+    type Channel: 0..17: bits(5);
+    type Data:
+    {   value:  _int16;		// either left or right adjusted
+    	_:      _uint16;
+    }: packed, lsb;
+    type DualMode:
+    ( Independent,
+      RegSim_InjSim, RegSim_AltTrig, InjSim_FastInlv, InjSim_SlowInlv,
+      InjSim,        RegSim,         FastInlv,        SlowInlv,
+      AltTrig
+    );
+    type ADCRegs:
+    {
+    	sr:	// all bits are read/clear-write-0			// 000
+    	{   awd:    boolean;	// .00 analog watchdog flag
+    	    eoc:    boolean;	// .01 regular end of conversion
+    	    jeoc:   boolean;	// .02 injected channel end of conversion
+    	    jstrt:  boolean;	// .03 injected channel conversion start
+    	    strt:   boolean;	// .04 regular conversion start
+    	    _:      0..0x7FF_FFFF; // .05-31
+    	}: packed, lsb, in, out;
+    	cr1:								// 004
+    	{   awdch:  Channel;	// .00-04 analog watchdog channel
+    	    eocie:  boolean;	// .05 enable intr for EOC
+    	    awdie:  boolean;	// .06 enable intr for analog watchdog
+    	    jeocie: boolean;	// .07 enable intr for injected channels
+    	    scan:   boolean;	// .08
+    	    awdsgl: boolean;	// .09
+    	    jauto:  boolean;	// .10
+    	    discen: boolean;	// .11
+    	    jdiscen:boolean;	// .12
+    	    discnum:0..7;	// .13-15 count-1
+    	    dualmod:DualMode;	// .16-19 not avail in ADC2,3
+    	    _:      0..0b11;	// .20-21
+    	    jawden: boolean;	// .22
+    	    awden:  boolean;	// .23
+    	    _:      0..0xFF;	// .24-31
+    	}: packed, lsb, in, out;
+    	cr2:								// 008
+    	{   adon:   boolean;	// .00 turn ADC on
+    	    cont:   boolean;	// .01
+    	    cal:    boolean;	// .02
+    	    rstcal: boolean;	// .03
+    	    _:      0..0b1111;	// .04-07
+    	    dma:    boolean;	// .08
+    	    _:      0..0b11;	// .09-10
+    	    align:  (RIGHT, LEFT); // .11
+    	    jextsel:0..7;	// .12-14
+    	    jextrig:boolean;	// .15
+    	    _:      0..1;	// .16
+    	    extsel: 0..7;	// .17-19
+    	    exttrig:boolean;	// .20
+    	    jswstrt:boolean;	// .21
+    	    swstrt: boolean;	// .22
+    	    tsvrefe:boolean;	// .23
+    	    _:      0..0xFF;	// .24-31
+    	}: packed, lsb, in, out;
+    	smpr1:	// for channels 10-17					// 00C
+    	{   smp:    [8]SampleTime;
+    	    _:      0..0xFF;	// .24-31
+    	}: packed, lsb, out;
+    	smpr2:	// for channels 0-9					// 010
+    	{   smp:    [10]SampleTime;
+    	    _:      0..0b11;	// .30-31
+    	}: packed, lsb, out;
+    	jofr:   [4] Range: out;						// 014
+    	htr:    Range: out;						// 024
+    	ltr:	Range: out;						// 028
+	sqr1:								// 02C
+	{   sq:     [4] Channel;
+	    len:    0..15;	// .20-23 length-1
+    	    _:      0..0xFF;	// .24-31
+    	}: packed, lsb, out;
+    	sqr2:								// 030
+    	{   sq:     [6] Channel;
+    	    _:      0..0b11;	// .30-31
+    	}: packed, lsb, out;
+    	sqr3:								// 034
+    	{   sq:     [6] Channel;
+    	    _:      0..0b11;	// .30-31
+    	}: packed, lsb, out;
+    	jsqr:								// 038
+	{   sq:     [4] Channel;
+	    len:    0..3;	// .20-21 length-1
+    	    _:      0..0x3FF;	// .22-31
+    	}: packed, lsb, out;
+    	jdr:    [4] Data: ro, in;					// 03C
+    	dr:     Data: ro, in;						// 04C
+    }
+}
+

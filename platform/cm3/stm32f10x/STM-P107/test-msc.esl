@@ -1,0 +1,54 @@
+/*
+ * USB mass storage using SD card
+ *
+ * main routine for STM-P107 platform
+ */
+
+// Board specific stuff
+import sys;
+//import uart;
+import trace;
+import debug;
+
+package debug
+{
+    const db_usbdev         = 3;
+    const db_usbdev_setup   = 0;
+    const db_sdcard	    = 1;
+}
+
+// Cortex M3 stuff
+import syscb;
+import fault;
+import systick;
+import nvic;
+
+// STM32F10x stuff
+import sysctl;
+
+import usbdevotg;
+import sdcard;
+
+var sd: sdcard.State;
+
+import usb_storage;
+
+
+
+proc main()
+{
+    sysctl.Init();
+    sys.Init();
+    debug.Init();
+    if sd.Init(3, sys.SDCARD) then
+    {
+sys.ledon(0);
+	usbdev.Init();
+sys.ledon(1);
+    }
+
+    loop
+    {
+    }
+}
+

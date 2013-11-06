@@ -1,0 +1,127 @@
+/*
+ * All of the board specific stuff should go here, e.g, how pins are used,
+ * if pin-outs need to be remapped, external clocks, etc.
+ *
+ * Copyright (c) 2011, Brian G. Lucas.  See LICENSE file.
+ * $Id: sys.esl 326 2012-02-24 22:06:49Z bgl $
+ */
+
+import syscb;
+import gpio;
+import nvic;
+
+package sys
+{
+    const CpuXtal   = 25_000_000;	// 25MHz crystal
+    const CoreClock = 72_000_000;	// 72MHz required for ethernet
+    const HClock = CoreClock;
+    const P1Divider = 2;
+    const P2Divider = 1;
+    const P1Clock = HClock/P1Divider;
+    const P2Clock = HClock/P2Divider;
+
+    const TopOfStack = 0x20010000;
+
+    const TicksPerSecond = 50;
+
+    // USART3 is the debug port via RS232 connector on board
+    const DebugPort = 3;
+
+    // Parameters for Ethernet PHY
+    const phy = "phy_ste101p";
+//    var PhyAddr: 0..31 = 0;	// Don't know PHY chip strapped address;
+    const PhyAddr = 21;
+    const PhyId1 = 0x0006;	// high bits of PHY vendor code
+    const PhyId2 = 0x1c50;	// low bits of PHY vendor, model
+
+
+    alias nvic.EnableAll as IntrEnableAll;
+    alias nvic.DisableAll as IntrDisableAll;
+    alias nvic.Enable as IntrEnable;
+    alias nvic.Disable as IntrDisable;
+
+    const LED1:  gpio.PortDesc = { .bit=6,  .port=C };
+    const LED2:  gpio.PortDesc = { .bit=7,  .port=C };
+    const MDINT: gpio.PortDesc = { .bit=14, .port=E };
+    const BUT1:  gpio.PortDesc = { .bit=0,  .port=A };
+    const BUT2:  gpio.PortDesc = { .bit=13, .port=C };
+    const SDCARD:gpio.PortDesc = { .bit=4,  .port=A };
+
+    /*
+     * Even if the pin is set to the reset default (IN_FLOAT)
+     * gpio.Init() should be called (at least once per port)
+     * so the clock to the port is enabled.
+     */
+    const PinOut: [] gpio.PortInit =
+    {   { LED1,			GP_PP_50 },	// LED green
+    	{ LED2,			GP_PP_50 },	// LED yellow
+    	{ BUT1,			IN_FLOAT },	// WAKE button
+    	{ BUT2,			IN_FLOAT },	// TAMPER button
+    	{{ .bit=8,  .port=D },	AF_PP_50 },	// USART3_Tx
+    	{{ .bit=9,  .port=D },	IN_FLOAT },	// USART3_Rx
+    	{{ .bit=11, .port=D },	IN_FLOAT },	// USART3_CTS
+    	{{ .bit=12, .port=D },	AF_PP_50 },	// USART3_RTS
+    	{ MDINT,		IN_FLOAT },	// ETH_MDINT - EXTI 14
+    	{{ .bit=1,  .port=C },	AF_PP_50 },	// ETH_MDC
+    	{{ .bit=2,  .port=A },	AF_PP_50 },	// ETH_MDIO
+//    	{{ .bit=1,  .port=A },	IN_FLOAT },	// ETH_REF_CLK
+//	{{ .bit=7,  .port=A },	IN_FLOAT },	// ETH_CRS_DV
+    	{{ .bit=4,  .port=C },	IN_FLOAT },	// ETH_RX0
+    	{{ .bit=5,  .port=C },	IN_FLOAT },	// ETH_RX1
+    	{{ .bit=11, .port=B },	AF_PP_50 },	// ETH_TX_EN
+    	{{ .bit=12, .port=B },	AF_PP_50 },	// ETH_TX0
+    	{{ .bit=13, .port=B },	AF_PP_50 },	// ETH_TX1
+    	{{ .bit=5,  .port=B },	AF_PP_50 },	// ETH_PPS_OUT
+    	{{ .bit=8,  .port=A },	AF_PP_50 },	// MCO output
+    	{ SDCARD,	        IN_FLOAT },	// MMC_CS
+    	{{ .bit=10, .port=C },	AF_PP_50 },	// MMC_SPI_CLK (SPI3)
+    	{{ .bit=11, .port=C },	AF_PP_50 },	// MMC_SPI_MISO (SPI3)
+    	{{ .bit=12, .port=C },	AF_PP_50 },	// MMC_SPI_MOSI (SPI3)
+//    	{{ .bit=9,  .port=A },	IN_FLOAT },	// USB_OTG_VBUS
+//    	{{ .bit=10, .port=A },	IN_FLOAT },	// SUB_OTG_ID
+    	{{ .bit=11, .port=A },	AF_PP_50 },	// USB_DM
+    	{{ .bit=12, .port=A },	AF_PP_50 }	// USB_DP
+//    	{{ .bit=7,  .port=D },	IN_FLOAT },	// USB_VBUS_ON
+//    	{{ .bit=15, .port=E },	IN_FLOAT }	// USB_FAULT - EXTI 15
+    };
+
+    const LEDPorts: [2]gpio.PortDesc = {LED1, LED2};
+
+    proc ledon(which: _uint)
+    {
+	gpio.Set(LEDPorts[which]);
+    }
+
+    proc ledoff(which: _uint)
+    {
+	gpio.Clr(LEDPorts[which]);
+    }
+
+    proc Init()
+    {   var i: _uint;
+
+    	// we need to remap pins, so turn on alternate function control clock
+    	sysctl.ClockEnable(AFIO);
+	// configure GPIO pins
+	i = 0;
+	while i < PinOut?len do
+	{   gpio.Init(PinOut[i]);
+	    i += 1;
+	}
+	// remap GPIO pins
+	var af: gpio.AFIO;
+	af = gpio.afio;
+	af.mapr.usart3 = REMAP;			// remap USART3
+	af.mapr.spi3 = REMAP;			// remap SPI3
+	af.mapr.rmii = true;			// ETH uses RMII
+	// configure external interrupts
+	gpio.ExtIntr(MDINT);			// ETH PHY interrupt
+    }
+
+    proc Fatal(code: _uint32)
+    {
+    	nvic.DisableAll();
+    	loop {}
+    }
+}
+

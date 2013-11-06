@@ -1,0 +1,186 @@
+// TEST: TCP
+// Uses port 23, echos packets starting with '?'
+
+import sys;
+import trace;
+import debug;
+import uart;
+
+package debug
+{
+    const db_fault   = 1;
+    const db_block   = 1;
+    const db_timer   = 1;
+    const db_eth     = 2;
+    const db_ipv4    = 2;
+    const db_ipv6    = 2;
+    const db_tcp     = 5;
+}
+
+import fault;
+import syscb;
+import sysctl;
+import nvic;
+
+import mbuf;
+import block;
+
+var MyMAC:  [6]_byte;
+const TimerID: block.BlockID = 1;
+const EthID:   block.BlockID = 15;
+const IPv4ID:  block.BlockID = 14;
+const IPv6ID:  block.BlockID = 13;
+const TCPID:   block.BlockID = 12;
+const UDPID:   block.BlockID = 11;
+const TelID:   block.BlockID = 10;
+
+
+// Chip stuff
+import chip;	// for GetSerialNumber()
+import timer;
+import enetsys;
+
+import inet;
+var MyIPv4Addr: inet.IPv4Addr = { 192,156,205,18 };
+var MyIPv4Mask: inet.IPv4Addr = { 255,255,255,128 };
+import ipv6;
+import ipv4;
+import tcp;
+
+alias event.Event as Event;
+alias event.pEvent as pEvent;
+alias block.Block as Block;
+alias block.pBlock as pBlock;
+alias block.BlockID as BlockID;
+
+package telnet
+{
+    alias mbuf.pMBuf as pMBuf;
+
+    type Codes:
+    (   ED=0xF0,   NOP=0xF1,  MARK=0xF2, BRK=0xF3,
+	IP=0xF4,   AO=0xF5,   AYT=0xF6,	 EC=0xF7,
+	EL=0xF8,   GA=0xF9,   SB=0xFA,   WILL=0xFB,
+	WONT=0xFC, DO=0xFD,   DONT=0xFE, IAC=0xFF
+    );
+    type TelnetBlock(Block):
+    {   lower: BlockID;
+    };
+    type pTelnetBlock: @TelnetBlock;
+
+    proc Run(b: pBlock, e: pEvent)
+    {   var mb: pMBuf;
+    	var tb: pTelnetBlock;
+	var dp: _address;
+
+{debug.str("telnet.Run ");  debug.uint8(_uint8(e.code));
+debug.chr(','); debug.uint8(e.tag); debug.nl();}
+	tb = pTelnetBlock(b);
+	if e.code
+	is RCVD then
+	{
+	    mb = pMBuf(e);
+	    dp = mb.Data();
+debug.str("telnet.Recv: len=");  debug.uint(mb.Size());
+debug.str(" chr="); debug.chr(dp[0]); debug.nl();
+	    mb.Dump(true);
+	    if dp[0] == '?' then
+	    {	dp[0] = '!';
+debug.str("send to="); debug.uint8(tb.lower); debug.nl();
+	    	mb.code = SEND;
+	    	tb.lower.Send(mb);
+	    }
+	    else
+	        mbuf.Free(mb);
+	}
+	is CONNECT then
+	{   var ce: event.pConnEvent;
+	    ce = event.pConnEvent(e);
+	    if ce.type == LOWER then
+	    	tb.lower = ce.tag;
+	    _delete(ce);
+	}
+	else
+	{
+	    _delete(e);
+	}
+    }
+
+    proc NewBlock(id: BlockID): pBlock
+    {   var tb: pTelnetBlock;
+
+	tb = _new(TelnetBlock);
+	tb.BlockInit(id, Run);
+	return tb;
+    }
+}
+
+var HeapStart: _memory: external("_end");
+
+proc wait()::external;
+
+proc meminit(addr: _address, size: _uint, pool: _uint): : external;
+
+const Connections: []block.ConnectionInfo =
+{   {   IPv4ID, EthID,   LOWER,  1, 0 },
+    {	EthID,  IPv4ID,  UPPER,  1, _uint16(eth.Proto.IPV4) },
+    {	EthID,  IPv4ID,  UPPER,  1+0x80, 0x0806 },
+    {   IPv6ID, EthID,   LOWER,  1, 0 },
+    {	EthID,  IPv6ID,  UPPER,  1, _uint16(eth.Proto.IPV6) },
+    {	IPv4ID, TCPID,   UPPER, 0, _uint16(inet.Proto.TCP) },
+    {	IPv6ID, TCPID,   UPPER, 1, _uint16(inet.Proto.TCP) },
+    {	TCPID,  TelID,   UPPER, 0, 23 },
+    {	TelID,  TCPID,   LOWER, 0, 0 }
+};
+
+
+proc main(): _int
+{   var serialno: _uint32;
+
+    sys.Init();
+    sysctl.Init();
+    fault.Init();
+    debug.Init();
+    sys.ledon(0);							// 01
+debug.str("Starting test-tcp...\n");
+    meminit(HeapStart, 0x8000, 0);	// FIXME
+/*
+    // create MAC from serial number
+    serialno = chip.GetSerialNumber();
+    MyMAC[0] = 0x02;
+    MyMAC[1] = 0x00;
+    MyMAC[2] = _byte(serialno >> 24);
+    MyMAC[3] = _byte(serialno >> 16);
+    MyMAC[4] = _byte(serialno >> 8);
+    MyMAC[5] = _byte(serialno);
+*/
+    MyMAC = { 0x02, 0x12, 0x34, 0x45, 0x67, 0x78 };
+    debug.str("MyMAC="); ipv6.MACPrint(MyMAC); debug.nl();
+
+    timer.NewBlock(TimerID);
+    eth.NewBlock(EthID);
+    ipv4.NewBlock(IPv4ID);
+    ipv6.NewBlock(IPv6ID);
+    tcp.NewBlock(TCPID);
+    telnet.NewBlock(TelID);
+    block.InitConnections(Connections, Connections?len);
+    {   var e: pEvent;
+	e = _new(Event);
+	e.code = START;
+	IPv4ID.Send(e);
+	e = _new(Event);
+	e.code = START;
+	IPv6ID.Send(e);
+    }
+
+    sys.ledon(1);							// 11
+
+    loop
+    {
+	block.Sched();
+    	/* wait(); screws jtag */
+    }
+
+    return 0;
+}
+
