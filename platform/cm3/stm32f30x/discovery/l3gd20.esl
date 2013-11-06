@@ -1,0 +1,156 @@
+/*
+ * ST L3GD20 MEMS Motion Sensor - three-axis digital output gyroscope
+ *
+ * Reference:
+ *   ST Doc ID 022116 Rev 1 - August 2011
+ *
+ * Copyright (c) 2012, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+package l3gd20
+{
+
+    type Regs:
+    (	WHO_AM_I=0x0F,
+	CR1=0x20,   CR2,    CR3,    CR4,    CR5,    REF,    TEMP,   SR,
+	XL=0x28,    XH,     YL,     YH,     ZL,     ZH,     FIFOCR, FIFOSR,
+	INTCFG=0x30,INTSRC, INTXH,  INTXL,  INTYH,  INTYL,  INTZH,  INTZL,
+	INTDUR=0x38
+    ); 
+
+    type Comd:
+    {   reg:  Regs: bits(6);
+        inc:  boolean;		// increment reg address
+        dir:  (WR,RD);
+    }: packed, lsb;
+
+    type CR1Info:
+    {   yenb:   boolean;
+        xenb:   boolean;
+        zenb:   boolean;
+        pwrup:  boolean;
+        bandw:  0..3;
+        drate:  0..3;
+    }: packed, lsb;
+    type HPFModes: (NORM,REF,_,AUTO);
+    type CR2Info:
+    {	hpcf:   0..15;
+	hpm:    HPFModes;
+	zeros:  0..0b11;
+    }: packed, lsb;
+    type Sensitivity: (DPS250,DPS500,DPS2000,DPS2000x);
+    type CR4Info:
+    {	sim:    (SPI4w,SPI3w);
+	zeros:  0..0b111;	// must be zero
+	fs:     Sensitivity;
+	endian: (LE,BE);
+	bdu:    boolean;
+    }: packed, lsb;
+    type CR5Info:
+    {	outsel: 0..3;
+	intsel: 0..3;
+	hpfenb: boolean;
+	_:      0..1;
+	fifoenb:boolean;
+	boot:   boolean;
+    }: packed, lsb;
+ 
+    const CR1init: CR1Info =
+	{ .drate=0, .bandw=3, .pwrup=true, .zenb=true, .yenb=true, .xenb=true };
+    const CR4init: CR4Info =
+	{ .sim=SPI4w, .fs=DPS500, .endian=LE, .bdu=false };
+
+
+    var cs: gpio.PortDesc;	// FIXME - should this be part of spi?
+    var sd: spi.SpiDev;
+
+
+    proc Read(reg: Regs): _uint8
+    {   var comd: Comd;
+	var rv: _uint8;
+
+	comd = { .dir=RD, .inc=false, .reg=reg };
+	gpio.Clr(cs);		// chip select is low active
+	sd.Send(_uint8(comd));
+	sd.Recv();
+	sd.Send(0);
+	rv = sd.Recv();
+	gpio.Set(cs);
+	return rv;
+    }
+
+    proc ReadMultiple(reg: Regs, data: @[]_byte, cnt: _uint)
+    {   var comd: Comd;
+	var i: _uint;
+
+	comd = { .dir=RD, .inc=true, .reg=reg };
+	gpio.Clr(cs);		// chip select is low active
+	sd.Send(_uint8(comd));
+	sd.Recv();
+	for i from 0 to cnt-1 do
+	{   sd.Send(0);
+	    data[i] = sd.Recv();
+	}
+	gpio.Set(cs);
+    }
+
+    proc Write(reg: Regs, data: _uint8)
+    {   var comd: Comd;
+
+	comd = { .dir=WR, .inc=false, .reg=reg };
+	gpio.Clr(cs);		// chip select is low active
+	sd.Send(_uint8(comd));
+	sd.Recv();
+	sd.Send(data);
+	sd.Recv();
+	gpio.Set(cs);
+    }
+
+    proc FilterCmd(enable: boolean)
+    {	var cr5: CR5Info;
+
+	cr5 = CR5Info(Read(CR5));
+	cr5.hpfenb = enable;
+	Write(CR5, _uint8(cr5));
+    }
+    
+    proc FilterConfig(mode: HPFModes, cfreq: 0..15)
+    {   var cr2: CR2Info;
+
+	cr2 = CR2Info(Read(CR2));
+	cr2.hpcf = cfreq;
+	cr2.hpm = mode;
+	Write(CR2, _uint8(cr2));
+    }
+
+    // Returns sensitivity in terms of the unit of the least significate bit,
+    // times 8.  The times 8 is to avoid fixed or floating point notation.
+    proc GetSensitivity(): _uint16
+    {   var cr4: CR4Info;
+	const ScaleTab: [Sensitivity]_uint16 =
+	{   70,	// 8 *  8.75
+	   140,	// 8 * 17.5
+	   560,	// 8 * 70
+	   560	// 8 * 70
+	};
+
+	cr4 = CR4Info(Read(CR4));
+	return ScaleTab[cr4.fs];
+    }
+
+    proc GetXYZ(data: _address)
+    {
+	ReadMultiple(XL, data, 6);
+    }
+   
+    proc Init(spidev: spi.SpiDev, chipsel: gpio.PortDesc)
+    {
+	sd = spidev;
+	cs = chipsel;
+	Write(CR1, _uint8(CR1init));
+	Write(CR4, _uint8(CR4init));
+    }
+
+}
+

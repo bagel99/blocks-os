@@ -1,0 +1,72 @@
+/*
+ * Gyro interface
+ *
+ * Copyright (c) 2012, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+import spi;
+import l3gd20;
+
+
+package gyro
+{
+    const SPICLK:  gpio.PortInit = { { 5,A}, ALT, PP, S50, NONE, 5 };
+    const SPIMISO: gpio.PortInit = { { 6,A}, ALT, PP, S50, NONE, 5 };
+    const SPIMOSI: gpio.PortInit = { { 7,A}, ALT, PP, S50, NONE, 5 };
+    const SPICS:   gpio.PortInit = { { 3,E}, OUT, PP, S50, NONE, 0 };
+    const SPIINT1: gpio.PortInit = { { 0,E}, IN,  PP, S50, NONE, 0 };
+    const SPIINT2: gpio.PortInit = { { 1,E}, IN,  PP, S50, NONE, 0 };
+
+    var sd: spi.SpiDev;
+
+    // Returns X,Y,Z readings scaled to milli-degrees-per-second
+    // The device has been set to return data in little-endian
+    // so we can fill in 16-bit ints directly
+    proc ReadAngRate(mdps: @[3]_int32)
+    {
+	var data: [3]_int16;
+	var sensitivity: _uint16;
+	var tmp: _int32;
+	var i: _uint;
+
+	sensitivity = l3gd20.GetSensitivity();
+//debug.chr('s'); debug.uint16(sensitivity);
+	l3gd20.GetXYZ(data);
+//debug.chr('x'); debug.int16(data[0]);
+//debug.chr('y'); debug.int16(data[1]);
+//debug.chr('z'); debug.int16(data[2]);
+	for i from 0 to 2 do
+	{   tmp = data[i] * sensitivity;
+	    mdps[i] = tmp / 8;
+	}
+    }
+
+    proc Init()
+    {
+	const spihow1: spi.CR1 =
+	    { .mode=MODE0, .master=true, .brdiv=2, .ssi=1, .ssm=true };
+	const spihow2: spi.CR2 = { .ds=7 };
+
+	// Low level init
+	rcc.ClockEnable(SPI1);
+	gpio.Init(SPICLK);
+	gpio.Init(SPIMISO);
+	gpio.Init(SPIMOSI);
+	sd = spi.Init(1, spihow1, spihow2, 7);
+	sd.SetThreshold(QUARTER);
+	sd.Enable();
+	gpio.Init(SPICS);	// for chip select
+	gpio.Set(SPICS.port);	// chip select active low, make it high
+	gpio.Init(SPIINT1);
+	gpio.Init(SPIINT2);
+	l3gd20.Init(sd, SPICS.port);
+	l3gd20.FilterConfig(l3gd20.HPFModes.NORM, 0);
+	l3gd20.FilterCmd(true);
+	
+    }
+
+
+
+}
+

@@ -1,0 +1,170 @@
+/*
+ * STM32F30x SPI.
+ *
+ * Copyright (c) 2012, Brian G. Lucas.  See LICENSE file.
+ * $Id: spi.esl 240 2012-12-16 23:20:50Z bgl $
+ */
+
+package spi
+{
+    type ModeT:	// ckpol ckpha
+    (   MODE0,	//   0     0
+	MODE1,	//   0     1
+	MODE2,	//   1     0
+	MODE3	//   1     1
+    );
+    type CR1:
+    {   mode:   ModeT;			// .00-01
+	master: boolean;		// .02
+	brdiv:  0..7;			// .03-05
+	enable: boolean;		// .06
+	format: (MSB,LSB);		// .07
+	ssi:    0..1;			// .08
+	ssm:    boolean;		// .09
+	rxonly: boolean;		// .10
+	size:   (B8, B16);		// .11
+	crcnxt: boolean;		// .12
+	crcenb: boolean;		// .13
+	duplex: (FULL,_,RECV,XMIT);	// .14-15
+    }: packed, lsb;
+    type Threshold: (HALF,QUARTER);
+    type CR2:
+    {   rxdma:  boolean;		// .00
+    	txdma:  boolean;		// .01
+    	ssoe:   boolean;		// .02
+    	nssp:   boolean;		// .03
+    	frf:    (MOT,TI);		// .04
+    	errie:  boolean;		// .05
+    	rxneie: boolean;		// .06
+    	txeie:  boolean;		// .07
+    	ds:     0..15;			// .08-11
+    	frxth:  Threshold;		// .12
+    	ldmarx: (EVEN,ODD);		// .13
+    	ldmatx: (EVEN,ODD);		// .14
+    	_:      0..1;			// .15
+    }: packed, lsb;
+    /*
+     * SPI registers can be accessed as 16-bit or 32-bit words.
+     * The layout below is for 16-bit access.
+     * The dr register can be accessed as 8, 16, or 32 bits.
+     */
+    type Regs:
+    {   cr1: CR1: out, align(4);					// 000
+    	cr2: CR2: out, align(4);					// 004
+	sr:								// 008
+	{   rxne:   boolean: ro;	// .00
+	    txe:    boolean: ro;	// .01
+	    chside: (LEFT,RIGHT): ro;	// .02
+	    udr:    boolean: ro;	// .03
+	    crcerr: boolean;		// .04 write zero clear
+	    modf:   boolean: ro;	// .05
+	    ovr:    boolean: ro;	// .06
+	    bsy:    boolean: ro;	// .07
+	    fre:    boolean: ro;	// .08
+	    frlvl:  (EMPTY,QUARTER,HALF,FULL);	// .09-10
+	    ftlvl:  (EMPTY,QUARTER,HALF,FULL);	// .11-12
+    	    _:      0..0b111;		// .13-15
+    	}: packed, lsb, in, out, align(4);
+        dr:    _uint8: in, out, align(4);				// 00C
+        crcpr: _uint16: out, align(4);					// 010
+        rxcrc: _uint16: ro, in, align(4);				// 014
+        txcrc: _uint16: ro, in, align(4);				// 018
+        i2scfg:								// 01C
+        {   chlen:  (B16,B32);		// .00
+            datlen: (B16,B24,B32,_);	// .01-02
+            ckpol:  (LO,HI);		// .03
+            std:    (PHIL,MSB,LSB,PCM); // .04-05
+            _:      0..1;		// .06
+            pcmsync:boolean;		// .07
+            cfg:    (STx,SRx,MTx,MRx);	// .08-09
+            i2se:   boolean;		// .10
+            mode:   (SPI, I2S);		// .11
+    	    _:      0..0b1111;		// .12-15
+     	}: packed, lsb, out, align(4);
+	i2spr:								// 020
+	{   div:    0..0xFF;		// .00-07
+	    odd:    0..1;		// .08
+	    mckoe:  boolean;		// .09
+    	    _:      0..0x3F;		// .10-15
+     	}: packed, lsb, out, align(4);            
+    };
+    type Spi: @Regs;
+    type SpiDesc:
+    {   adr:  Spi;
+	dev:  rcc.Device;
+	vec:  _uint8;
+    };
+    type SpiDev: @SpiDesc;
+    const devices: [3] SpiDesc =
+    {   { 0x4001_3000, SPI1, 35 },
+	{ 0x4000_3800, SPI2, 36 },
+	{ 0x4000_3C00, SPI3, 51 }
+    };
+
+    proc (spi: SpiDev) Send(data: _uint8)
+    {	var s: Spi;
+
+	s = spi.adr;
+    	while !s.sr.txe do {}
+    	s.dr = data;
+    }
+
+    proc (spi: SpiDev) Recv(): _uint8
+    {	var s: Spi;
+
+	s = spi.adr;
+    	while !s.sr.rxne do {}
+    	return s.dr;
+    }
+
+    proc (spi: SpiDev) Enable()
+    {	var s: Spi;
+
+	s = spi.adr;
+	s.cr1.enable = true;
+    }
+
+    proc (spi: SpiDev) SetThreshold(to: Threshold)
+    {	var s: Spi;
+
+	s = spi.adr;
+	s.cr2.frxth = to;
+    }
+
+    proc (spi: SpiDev) SetFrequency(freq: _uint)
+    {
+	var clk: _uint32;
+	var div: _uint32;
+
+	clk = rcc.GetClock(spi.dev);
+	clk = clk/2;		// pre-divide by 2
+	div = 0;
+	while div < 8 && clk > freq do
+	{   clk = clk/2;
+	    div += 1;
+	}
+	if div >= 8 then return;
+	spi.adr.cr1.brdiv = div;
+    }
+
+    proc Init(n: _uint, how1: CR1, how2: CR2, poly: _uint16): SpiDev
+    {   var spi: SpiDev;
+	var s: Spi;
+	var cr1: CR1;
+
+	n -= 1;	// make zero based
+	if n > 2 then return 0;
+	spi = devices[n];
+	rcc.ClockEnable(spi.dev);
+	rcc.DeviceReset(spi.dev);
+	s = spi.adr;	
+	cr1 = how1;
+	if cr1.master then cr1.ssi = 1;
+	s.cr1 = cr1;
+	s.cr2 = how2;
+	s.crcpr = poly;
+	return spi;
+    }
+
+}
+

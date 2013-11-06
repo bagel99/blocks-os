@@ -1,0 +1,81 @@
+/*
+ * External Interrupts
+ *
+ * Copyright (c) 2012, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+import gpiodef;
+import syscfg;
+import nvic;
+
+package exti
+{
+    type Mode: (INT, EVT);
+    type Desc:
+    {   mode:  Mode;
+	rise:  boolean;
+	fall:  boolean;
+    };  
+    type Bits32: [32]boolean: packed, lsb;
+    type Regs:[2]	// two sets of control registers
+    {
+	enbl: [Mode]Bits32: out;					// 00,18
+	rise: Bits32: out;						// 08,20
+	fall: Bits32: out;						// 0C,24
+	trig: Bits32: out;						// 10,28
+	pend: Bits32: in, out;	/* write 1 clears */			// 14,2C
+    };
+    var ex: Regs: external(0x4001_0400);
+
+    const vector: [16]_uint8 =
+    {   6,  7,  8,  9, 10,	// First 5 have unique vector,
+       23, 23, 23, 23, 23,	// next 5 share one,
+       40, 40, 40, 40, 40,40	// final six share one.
+    };
+
+    proc Enable(bit: _uint, how: Desc)
+    {   var hi, lo: _uint;
+
+    	hi = bit >> 5;
+    	lo = bit & 0x1F;
+    	ex[hi].enbl[how.mode][lo] = true;
+	ex[hi].rise[lo] = how.rise;
+	ex[hi].fall[lo] = how.fall;
+    }
+
+    proc Disable(bit: _uint)
+    {   var hi, lo: _uint;
+
+    	hi = bit >> 5;
+    	lo = bit & 0x1F;
+    	ex[hi].enbl[INT][lo] = false;
+    	ex[hi].enbl[EVT][lo] = false;
+    }
+
+    proc Pending(bit: _uint): boolean
+    {   var hi, lo: _uint;
+
+    	hi = bit >> 5;
+    	lo = bit & 0x1F;
+    	return ex[hi].pend[lo];
+    }
+
+    proc ClearIntr(bit: _uint)
+    {   var hi, lo: _uint;
+
+    	hi = bit >> 5;
+    	lo = bit & 0x1F;
+	ex[hi].pend[lo] = true;	// FIXME - no need to read register
+    }
+    
+    // FIXME - move to GPIO
+    proc GPIOEnable(which: gpio.PortDesc, how: Desc)
+    {   var hi, lo: _uint;
+
+	syscfg.cfg.exti[which.bit>>2][which.bit&3] = which.port;
+	Enable(which.bit, how);
+    }
+
+}
+

@@ -1,0 +1,25 @@
+/*
+ * System Configuration Registers
+ *
+ * Copyright (c) 2012, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+import gpiodef;
+
+package syscfg
+{
+    type ExtICR: [4]0..15: packed, lsb, bits(32);
+    type Regs:								// 00
+    {   cfg1:
+	    _uint32;	// FIXME;
+	sram:								// 04
+	    _uint32;	// FIXME;
+	exti: [4]ExtICR: out;						// 08-14
+	cfg2:								// 18
+	    _uint32;	// FIXME;
+    };
+    var cfg: Regs: external(0x4001_0000);
+
+}
+

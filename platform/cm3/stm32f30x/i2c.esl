@@ -1,0 +1,221 @@
+/*
+ * STM32F30x I2C.
+ *
+ * Copyright (c) 2012, Brian G. Lucas.  See LICENSE file.
+ * $Id: i2c.esl 251 2013-01-14 18:16:42Z bgl $
+ */
+
+import rcc;
+
+package i2c
+{
+    type CR2:
+    {   sadr:    0..0x3FF;	//.00-09
+	dir:     (WR,RD);	//.10
+	add10:   boolean;	//.11
+	head10rd:boolean;	//.12
+	start:   boolean;	//.13
+	stop:    boolean;	//.14
+	nack:    boolean;	//.15
+	nbytes:  0..255;	//.16-23
+	reload:  boolean;	//.24
+	autoend: boolean;	//.25
+	pecbyte: boolean;	//.26
+    }: packed, lsb, bits(32);
+    type Timing:
+    {   scllo:   0..255;	//.00-07
+	sclhi:   0..255;	//.08-15
+	sdadel:  0..15;	//.16-19
+	scldel:  0..15;	//.20-23
+	_:       0..0b1111;	//.24-27
+	prsec:   0..15;	//.28-31
+    }: packed, lsb, bits(32);
+    
+    type Regs:
+    {
+	cr1:								//00
+	{   pe:      boolean;	//.00
+	    txie:    boolean;	//.01
+	    rxie:    boolean;	//.02
+	    addrie:  boolean;	//.03
+	    nackie:  boolean;	//.04
+	    stopie:  boolean;	//.05
+	    tcie:    boolean;	//.06
+	    errie:   boolean;	//.07
+	    dnf:     0..15;	//.08-11  0=>disabled
+	    anfoff:  boolean;	//.12
+	    _:       0..1;	//.13
+	    txdmae:  boolean;	//.14
+	    rxdmae:  boolean;	//.15
+	    sbc:     boolean;	//.16
+	    nostrch: boolean;	//.17
+	    wupe:    boolean;	//.18
+	    gce:     boolean;	//.19
+	    smbhe:   boolean;	//.20
+	    smbde:   boolean;	//.21
+	    alerte:  boolean;	//.22
+	    pece:    boolean;	//.23
+	}: packed, lsb, bits(32), out;
+	cr2:  CR2: out;							//04
+	oar1:								//08
+	{   oadr:    0..0x3FF;	//.00-09
+	    mode10:  boolean;	//.10
+	    _:       0..0b1111;	//.11-14
+	    oaenb:   boolean;	//.15
+	}: packed, lsb, bits(32), out;
+	oar2:								//0C
+	{   _:       0..1;	//.00
+	    oadr:    0..0x7F;	//.01-07
+	    mask:    0..7;	//.08-10
+	    _:       0..0b1111;	//.11-14
+	    oaenb:   boolean;	//.15
+	}: packed, lsb, bits(32), out;
+	timing:	Timing: out;						//10
+	timeout:							//14
+	{   touta:   0..4095;	//.00-11
+	    tidle:   boolean;	//.12
+	    _:       0..0b11;	//.13-14
+	    toutenb: boolean;	//.15
+	    toutb:   0..4095;	//.16-27
+	    _:       0..0b111;	//.28-30
+	    textenb: boolean;	//.31
+	}: packed, lsb, bits(32), out;
+	isr:								//18
+	{   txe:     boolean;	//.00
+	    txis:    boolean;	//.01
+	    rxne:    boolean;	//.02
+	    addr:    boolean;	//.03
+	    nak:     boolean;	//.04
+	    stop:    boolean;	//.05
+	    tc:      boolean;	//.06
+	    tcr:     boolean;	//.07
+	    berr:    boolean;	//.08
+	    arlo:    boolean;	//.09
+	    ovr:     boolean;	//.10
+	    pec:     boolean;	//.11
+	    timeo:   boolean;	//.12
+	    alert:   boolean;	//.13
+	    _:       0..1;	//.14
+	    busy:    boolean;	//.15
+	    dir:     (WR,RD);	//.16
+	    adrcode: 0..0x7F;	//.17-23
+	}: packed, lsb, bits(32), in, ro;
+	icr:								//1C
+	{   _:       0..0b111;	//.00-02
+	    addr:    boolean;	//.03
+	    nak:     boolean;	//.04
+	    stop:    boolean;	//.05
+	    _:       0..0b11;	//.06-07
+	    berr:    boolean;	//.08
+	    arlo:    boolean;	//.09
+	    ovr:     boolean;	//.10
+	    pec:     boolean;	//.11
+	    timeo:   boolean;	//.12
+	    alert:   boolean;	//.13
+	    _:       0..0b11;	//.14-15
+	}: packed, lsb, bits(32), out, wo;
+	pecr: _uint8: bits(32), in, ro;					//20
+	rxdr: _uint8: bits(32), in, ro;					//24
+	txdr: _uint8: bits(32), out;					//28
+    };
+    type I2c: @Regs;
+
+    type I2cDesc:
+    {   adr:  I2c;
+	dev:  rcc.Device;
+	vecn: _uint8;
+	vece: _uint8;
+    };
+    type I2cDev: @I2cDesc;
+    const devices: [2] I2cDesc =
+    {   { 0x4000_5400, I2C1, 31, 32 },
+	{ 0x4000_5800, I2C2, 33, 34 }
+    };
+
+    const DefaultTiming: Timing =
+    {   .scllo=25, .sclhi= 20, .sdadel=0, .scldel=9, .prsec=0 };
+
+
+    proc (id: I2cDev) Write(adr: _uint8, reg: _uint8, data: _uint8)
+    {   var ic: I2c;
+
+//debug.chr('w'); debug.hex8(reg); debug.chr('='); debug.hex8(data); debug.nl();
+	ic = id.adr;
+	while ic.isr.busy do {}
+	// preserve add10, head10rd, nack, pecbyte?
+	ic.cr2 = {.sadr=adr, .dir=WR, .nbytes=1, .start=true, .reload=true};
+	while !ic.isr.txis do {}
+	ic.txdr = reg;
+	while !ic.isr.tcr do {}
+	// preserve add10, head10rd, nack, pecbyte?
+	ic.cr2 = {.sadr=adr, .dir=WR, .nbytes=1, .autoend=true};
+	while !ic.isr.txis do {}
+	ic.txdr = data;
+	while !ic.isr.stop do {}
+	ic.icr = { .stop=true };	// clear stop flag
+    }
+
+    proc (id: I2cDev) Read(adr: _uint8, reg: _uint8): _uint8
+    {   var ic: I2c;
+	var data: _uint8;
+
+//debug.chr('r'); debug.hex8(reg); debug.chr('=');
+	ic = id.adr;
+	while ic.isr.busy do {}
+	// preserve add10, head10rd, nack, pecbyte?
+	ic.cr2 = {.sadr=adr, .dir=WR, .nbytes=1, .start=true};
+	while !ic.isr.txis do {}
+	ic.txdr = reg;
+	while !ic.isr.tc do {}
+	// preserve add10, head10rd, nack, pecbyte?
+	ic.cr2 = {.sadr=adr, .dir=RD, .nbytes=1, .autoend=true, .start=true};
+	while !ic.isr.rxne do {}
+	data = ic.rxdr;
+	while !ic.isr.stop do {}
+	ic.icr = { .stop=true };	// clear stop flag
+//debug.hex8(data); debug.nl();
+	return data;
+    }
+
+    proc (id: I2cDev) ReadMultiple(adr: _uint8, reg: _uint8,
+				   data: @_memory, len: _uint)
+    {   var ic: I2c;
+	var i: _uint;
+
+	ic = id.adr;
+	while ic.isr.busy do {}
+	// preserve add10, head10rd, nack, pecbyte?
+	ic.cr2 = {.sadr=adr, .dir=WR, .nbytes=1, .start=true};
+	while !ic.isr.txis do {}
+	ic.txdr = reg;
+	while !ic.isr.tc do {}
+	// preserve add10, head10rd, nack, pecbyte?
+	ic.cr2 = {.sadr=adr, .dir=RD, .nbytes=_uint8(len),
+		  .autoend=true, .start=true};
+	for i from 0 to len-1 do
+	{
+	    while !ic.isr.rxne do {}
+	    data[i] = ic.rxdr;
+	}
+	while !ic.isr.stop do {}
+	ic.icr = { .stop=true };	// clear stop flag
+    }
+
+    proc Init(n: _uint): I2cDev
+    {   var i2c: I2cDev;
+    	var ic: I2c;
+
+	n -= 1;	// make zero based
+	if n > 1 then return 0;
+	i2c = devices[n];
+	rcc.ClockEnable(i2c.dev);
+	rcc.DeviceReset(i2c.dev);
+	ic = i2c.adr;
+	ic.timing = DefaultTiming;
+	ic.oar2 = { .oaenb=false };	// FIXME ?
+	ic.oar1 = { .oaenb=true };	// FIXME ?
+	ic.cr1 = { .pe=true };
+	return i2c;
+    }
+}
+

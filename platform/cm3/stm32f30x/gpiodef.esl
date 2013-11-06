@@ -1,0 +1,32 @@
+/*
+ * Definitions for GPIO
+ *
+ * Copyright (c) 2012, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+
+package gpio
+{
+    // There are 6 ports of 16-bits each.  Not all are pinned-out.
+    const NumGPIO = 6;
+    // Ports
+    type Port: (A, B, C, D, E, F, _, _, _, _, _, _, _, _, _, X);
+    type PortDesc:
+    {   bit:  0..15;
+	port: Port;
+    }: packed;
+    type Mode:   (IN, OUT, ALT, ANALOG);
+    type OType:  (PP, OD);		// push-pull or open-drain
+    type OSpeed: (S2, _, S10, S50);
+    type Pull:   (NONE, UP, DOWN, _);   // pull-up/down
+    type PortInit:
+    {   port:  PortDesc;	// .00-07
+        mode:  Mode;		// .08-09
+        ot:    OType;		// .10    type (output only?)
+        os:    OSpeed;		// .11-12 speed (output only?)
+        pu:    Pull;		// .13-14 pull up/down
+        af:    0..15;		// .15-18 alternate function
+    }: packed, bits(32);
+}
+

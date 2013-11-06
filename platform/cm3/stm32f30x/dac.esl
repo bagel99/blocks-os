@@ -1,0 +1,53 @@
+/*
+ * STM32F30x Digital-to-Analog Converter
+ *
+ * Copyright (c) 2012, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+ 
+package dac
+{
+
+    const NChan = 2;
+    // Registers are 32-bit access only
+    type Regs:
+    {   cr:								//00
+	{
+	}:packed, lsb, bits(32), out;
+	swtrig:								//04
+	{
+	}: packed, lsb, bits(32), out, wo;
+	dhr12r1:							//08
+	    0..0xFFF: bits(32), out;	// right-aligned 12-bits;
+	dhr12l1:							//0C
+	    0..0xFFFF: bits(32), out;	// left-aligned 12-bits;
+	dhr8r1:								//10
+	    0..0xFF: bits(32), out;	// 8-bits
+	dhr12r2:							//14
+	    0..0xFFF: bits(32), out;	// right-aligned 12-bits;
+	dhr12l2:							//18
+	    0..0xFFFF: bits(32), out;	// left-aligned 12-bits;
+	dhr8r2:								//1C
+	    0..0xFF: bits(32), out;	// 8-bits
+	dhr12rd:							//20
+	dhr12ld:							//24
+	dhr8rd:
+	{   chan1: 0..0xFF;
+	    char2: 0..0xFF;
+	}: packed, lsb, bits(32), out;								//28
+	dor1:								//2C
+	    0..0xFFF: bits(32), in, ro;								//30
+	dor2:
+	    0..0xFFF: bits(32), in, ro;								//30
+	sr:								//34
+	{   _:     0..0xFFF;
+	    udr1:  boolean; /* rwc1 */
+	    _:     0..0b11;
+	    _:     0..0xFFF;
+	    udr2:  boolean; /* rwc1 */
+	    _:     0..0b11;
+	}: packed, lsb, bits(32), in;
+    };
+
+}
+

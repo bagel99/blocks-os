@@ -1,0 +1,17 @@
+/*
+ * Factory programmed stuff
+ * References:
+ *   ST RM0316 (Doc ID 022558 Rev 1) page 958
+ *   Reference code for STM32F3 Discovery
+ *
+ * The following 96 bits can be used as a UID (in little endian)
+ * 1FFFF7AC - X and Y coordinates on the wafer expressed in BCD format
+ * 1FFFF7B0 - LOT_NUM[23:0], WAF_NUM[7:0]
+ * 1FFFF7B4 - LOT_NUM[55:24]
+ * However, the reference code uses 1FFFF7E8, 1FFFF7EC, 1FFFF7F0 as
+ * the USB serial number.
+ *
+ * Copyright (c) 2012, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+

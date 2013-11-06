@@ -1,0 +1,93 @@
+/*
+ * A clone of the demo program that comes with the ST Discovery board
+ */
+
+var UserButtonPressed: _uint8: in, out = 0;
+
+import sys;
+
+import trace;
+import debug;
+
+import gyro;
+import compass;
+
+proc sqrt(x: _uint32): _uint32
+{   var m, y, b: _uint32;
+
+    m = 0x4000000;
+    y = 0;
+    while m != 0 do
+    {   b = y | m;
+        y = y >> 1;
+        if x >= b then
+        {   x -= b;
+            y = y | m;
+        }
+        m = m >> 2;
+    }
+    return y;
+}
+
+proc main()
+{   var i: _uint;
+    type Axis: (X, Y, Z);
+    var mdps: [Axis]_int32;
+    var accdata: [Axis]_int32;
+    var magdata: [Axis]_int32;
+
+    sys.Init();
+    debug.Init();
+    loop
+    {
+	for i from 0 to 7 do sys.ledoff(i);
+	while UserButtonPressed == 0 do
+	{   for i from 0 to 7 do
+	    {   sys.ledtoggle(i);
+		sys.DelaymS(50);
+	    }
+	}
+	for i from 0 to 7 do sys.ledoff(i);
+	gyro.Init();
+	while UserButtonPressed == 1 do
+	{   
+	    sys.DelaymS(50);
+	    for i from 0 to 7 do sys.ledoff(i);
+	    gyro.ReadAngRate(mdps);	// returns degrees-per-second * 1000
+//debug.chr('X'); debug.int(mdps[X]);
+//debug.chr('Y'); debug.int(mdps[Y]); debug.nl();
+	    if _abs(mdps[X]) > _abs(mdps[Y]) then
+	    {   if mdps[X] > 5000 then
+	    	    sys.ledon(7);
+	    	else if mdps[X] < -5000 then
+	    	    sys.ledon(0);
+	    }
+	    else
+	    {   if mdps[Y] > 5000 then
+		    sys.ledon(3);
+		else if mdps[Y] < -5000 then
+		    sys.ledon(4);
+	    }
+	}
+	for i from 0 to 7 do sys.ledoff(i);
+	compass.Init();
+	while UserButtonPressed == 2 do
+	{
+	    sys.DelaymS(50);
+	    compass.ReadMag(magdata);
+debug.chr('X'); debug.int(magdata[X]);
+debug.chr('Y'); debug.int(magdata[Y]);
+debug.chr('Z'); debug.int(magdata[Z]); debug.nl();
+	    compass.ReadAcc(accdata);
+debug.chr('X'); debug.int(accdata[X]);
+debug.chr('Y'); debug.int(accdata[Y]);
+debug.chr('Z'); debug.int(accdata[Z]); debug.nl();
+	    
+	    for i from 4 to 7 do
+	    {   sys.ledtoggle(i);
+		sys.DelaymS(50);
+	    }
+	}
+    }
+}
+

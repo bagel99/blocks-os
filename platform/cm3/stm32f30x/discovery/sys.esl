@@ -1,0 +1,123 @@
+/*
+ * Board and System stuff
+ *
+ * Copyright (c) 2012, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+package sys
+{
+    const CpuXtal = 8_000_000;
+    const CoreClock = 72_000_000;
+    const useHSE: boolean = true;
+    const TicksPerSecond = 100;
+
+    const TopOfStack = 0x2000A000;
+}
+
+import rcc;
+import fpu;
+import systick;
+import gpio;
+import syscfg;
+import exti;
+import nvic;
+
+package sys
+{
+    // FIXME - move all the GPIO inits into one table
+    // ST labeled the 8 user LEDs as LED3..LED10.  We will use 0..7.
+    const LEDConfig: [8]gpio.PortInit =
+    {   { { 9, E}, OUT, PP, S50, UP, 0 },
+	{ { 8, E}, OUT, PP, S50, UP, 0 },
+	{ {10, E}, OUT, PP, S50, UP, 0 },
+	{ {15, E}, OUT, PP, S50, UP, 0 },
+	{ {11, E}, OUT, PP, S50, UP, 0 },
+	{ {14, E}, OUT, PP, S50, UP, 0 },
+	{ {12, E}, OUT, PP, S50, UP, 0 },
+	{ {13, E}, OUT, PP, S50, UP, 0 }
+    };
+    // The USER button controls an external interrupt.
+    const BTNConfig: gpio.PortInit = { {0, A}, .mode=IN, .pu=NONE };
+    const BTNIntr: exti.Desc = { INT, .rise=true };
+    // USB uses alternate function 14
+    const USBConfig: [2]gpio.PortInit =
+    {	{ {11, A}, ALT, PP, S50, NONE, 14 },
+	{ {12, A}, ALT, PP, S50, NONE, 14 }
+    };
+    // The ST Demo program configures port E14 as USB_DISCONNECT,
+    // but it is already used for a LED.
+    // const USBDiscon: gpio.PortInit = { {14, E} };
+    const L18Intr: exti.Desc = { INT, .rise=true };
+
+    proc ledon(which: _uint)
+    {
+	gpio.Set(LEDConfig[which].port);
+    }
+
+    proc ledoff(which: _uint)
+    {
+	gpio.Clr(LEDConfig[which].port);
+    }
+
+    proc ledtoggle(which: _uint)
+    {
+	if gpio.Tst(LEDConfig[which].port) then
+	    gpio.Clr(LEDConfig[which].port);
+	else
+	    gpio.Set(LEDConfig[which].port);
+    }
+
+    var delay: _uint: in, out;
+
+    proc DelaymS(ms: _uint)
+    {
+	delay = ms / (1000/TicksPerSecond);
+	do
+	{   while !systick.st.ctrl.cntflg do {}
+	    delay -= 1;
+	} while delay != 0;
+    }
+    
+    proc Tick(): : global("SYSTICK_IRQ")
+    {
+    	if delay != 0 then
+    	    delay -= 1;
+    }
+
+
+if _defined(UserButtonPressed) then {
+    proc Button(): : global("EINT0_IRQ")
+    {
+	if exti.Pending(BTNConfig.port.bit) then
+	{   if UserButtonPressed >= 2 then
+		UserButtonPressed = 0;
+	    else
+		UserButtonPressed += 1;
+            exti.ClearIntr(BTNConfig.port.bit);
+	}		
+    }
+}
+
+
+    proc Init()
+    {   var i: _uint;
+
+    	rcc.Init(useHSE);
+    	fpu.Init();
+    	systick.Init(rcc.GetAHBFreq(), TicksPerSecond);
+//    	systick.EnableIntr(0xF0);
+//    	systick.EnableIntr(0);
+	// LED pin configuration
+	for i from 0 to LEDConfig?len-1 do gpio.Init(LEDConfig[i]);
+	// Button pin and interrupt configuration
+	gpio.Init(BTNConfig);
+	exti.GPIOEnable(BTNConfig.port, BTNIntr);
+	nvic.SetPriority(6, 0b00_000000);
+	nvic.Enable(6);
+	// USB pin configuration
+	for i from 0 to USBConfig?len-1 do gpio.Init(USBConfig[i]);
+	exti.Enable(18, L18Intr);
+    }
+}
+

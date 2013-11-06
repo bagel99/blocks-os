@@ -1,0 +1,302 @@
+/*
+ * STM32F30x Reset and Clock Control
+ * Also, some chip specific stuff not associated with a single device.
+ *
+ * Copyright (c) 2012, Brian G. Lucas.  See LICENSE file.
+ * $Id: rcc.esl 235 2012-12-13 22:09:19Z bgl $
+ */
+
+package rcc
+{
+
+    type Bus: (APB2, APB1, AHB, NOBUS);
+    /*
+     * The following is used to index into bit arrays for reset and clock enable.
+     * Note: RTC is not in this bit arrays but is here to give it a device index.
+     */
+    type Device:
+    (   // 32 APB2 DEVICES
+	SYSCFG, _,      _,      _,      _,      _,      _,      _,
+	_,      _,      _,      TIM1,   SPI1,   TIM8,   USART1, _,
+	TIM15,  TIM16,  TIM17,  _,      _,      _,      _,      _,
+	_,      _,      _,      _,      _,      _,      _,      _,
+	// 32 APB1 DEVICES
+	TIM2,   TIM3,   TIM4,   _,      TIM6,   TIM7,   _,      _,
+	_,      _,      _,      WWDG,   _,      _,      SPI2,   SPI3,
+	_,      USART2, USART3, UART4,  UART5,  I2C1,   I2C2,   USB,
+	_,      CAN,    _,      _,      PWR,    DAC,    _,      _,
+	// 32 AHB DEVICES
+	DMA1,   DMA2,   SRAM,   _,      FLITF,  _,      CRC,    _,
+	_,      _,      _,      _,      _,      _,      _,      _,
+	_,      IOPA,   IOPB,   IOPC,   IOPD,   IOPE,   IOPF,   _,
+	TSC,    _,      _,      _,      ADC12,  ADC32,  RTC,    NODEV	
+    );
+
+    const HSIFreq = 8_000_000;	    // high speed internal clock is 8MHz
+    alias sys.CpuXtal as HSEFreq;  // external crystal, board dependent
+  
+    type ClockSource: (HSI, HSE, PLL, _);
+    type APBPreScale: (DIV1, DIV2=0b100,  DIV4, DIV8, DIV16);
+    type AHBPreScale: (DIV1, DIV2=0b1000, DIV4, DIV8, DIV16,
+    		       DIV64, DIV128, DIV256, DIV512);
+    const PreScale: [16]_byte = {0, 0, 0, 0, 1, 2, 3, 4, 1, 2, 3, 4, 6, 7, 8, 9};
+    type MCOSel: (NONE,  _,  LSI, LSE, SYS, HSI, HSE, PLL2);
+    type USBSel: (DIV1_5, DIV1);
+    type RTCSel: (NONE, LSE, LSI, HSE);
+    type CRreg:
+    {   hsion:  boolean;
+	hsirdy: boolean: ro;
+	_:      0..1;
+	trim:   0..31;
+	hsical: 0..255: ro;
+	hseon:  boolean;
+	hserdy: boolean: ro;
+	hsebyp: boolean;
+	csson:  boolean;
+	_:      0..0b1111;
+	pllon:  boolean;
+	pllrdy: boolean: ro;
+	_:      0..0b11_1111;
+    }: packed, lsb, bits(32);
+    type CFGreg:    
+    {   sw:    ClockSource;     //.00-01
+	sws:   ClockSource: ro; //.02-03
+	hpre:  AHBPreScale;     //.04-07
+	p1pre: APBPreScale;     //.08-10
+	p2pre: APBPreScale;     //.11-13
+	_:     0..0b11;		//.14-15
+	pllsrc:(HSI, HSE);      //.16
+	xtpre:  0..1;		//.17
+	pllmul: 0..0b1111;      //.18-21
+	usbpre: USBSel;		//.22
+	i2ssrc: (SYS, EXT);     //.23
+	mcosel: MCOSel;		//.24-26
+	_:      0..1;		//.27
+	mcomodf:boolean: ro;    //.28
+	_:     0..0b111;	//.29-31
+    }: packed, lsb, bits(32);
+
+    type Regs:
+    {   cr:   CRreg: in, out;   // reset=0x0000XX83			// 00
+    	cfg:  CFGreg: in,out;						// 04
+    	cir:								// 08
+    	{   lsirdy:  boolean: in, ro;
+    	    lserdy:  boolean: in, ro;
+    	    hsirdy:  boolean: in, ro;
+    	    hserdy:  boolean: in, ro;
+    	    pllrdy:  boolean: in, ro;
+    	    _:       0..0b11;
+    	    cssrdy:  boolean: in, ro;
+    	    lsienb:  boolean: out;
+    	    lseenb:  boolean: out;
+    	    hsienb:  boolean: out;
+    	    hseenb:  boolean: out;
+    	    pllenb:  boolean: out;
+    	    _:       0..0b111;
+    	    lsiclr:  boolean: out, wo;
+    	    lseclr:  boolean: out, wo;
+    	    hsiclr:  boolean: out, wo;
+    	    hseclr:  boolean: out, wo;
+    	    pllclr:  boolean: out, wo;
+    	    _:       0..0b11;
+    	    cssclr:  boolean: out, wo;
+     	}: packed, lsb, bits(32);
+    	apb2rst: [32] 0..1: packed, lsb, in, out;			// 0C
+    	apb1rst: [32] 0..1: packed, lsb, in, out;			// 10
+    	ahbclk:  [32] 0..1: packed, lsb, in, out;			// 14
+    	apb2clk: [32] 0..1: packed, lsb, in, out;			// 18
+    	apb1clk: [32] 0..1: packed, lsb, in, out;			// 1C
+    	bdcr:								// 20
+    	{   lseenb:  boolean: out;
+	    lserdy:  boolean: in, ro;
+	    lsebyp:  boolean: out;
+	    lsedrv:  (LO, MEDLO, MEDHI, HI): out;
+	    _:       0..0b111;
+	    rtcsel:  RTCSel: out;
+	    _:       0..0b1111;
+	    rtcenb:  boolean: out;
+	    bdrst:   boolean: out;
+    	}: packed, lsb, bits(32);
+    	csr:     _uint32;						// 24
+    	ahbrst:  [32] 0..1: packed, lsb, in, out;			// 28
+    	cfg2:								// 2C
+    	{   prediv:    0..15;	// div by n+1
+	    adc12div:  0..15;
+	    adc12enb:  boolean;
+	    adc34div:  0..15;
+	    adc34enb:  boolean;
+    	}: packed, lsb, bits(32), in, out;
+    	cfg3:								// 30
+    	    _uint32;    // FIXME
+     };
+
+    var rcc: Regs : external(0x4002_1000);
+
+    type FlashRegs:
+    {   acr:    // 0x00  reset=0x0000_0030
+	{   ws:    0..7;    // only 0,1,2 valid
+	    hcae:  boolean;
+	    pfbe:  boolean;
+	    prbs:  boolean: ro;
+	    _:     0..0x3FFFFFF;
+    	}: packed, lsb, in, out;
+    };
+    var fcc: FlashRegs : external(0x4002_2000);
+
+    proc ClockEnable(which: Device)
+    {   var sc: @Regs;
+	var i: _uint;
+
+	sc = rcc;
+	i = _uint(which);
+	if i < 32 then
+	    sc.apb2clk[i] = 1;
+	else if i < 64 then
+	    sc.apb1clk[i-32] = 1;
+        else
+	    sc.ahbclk[i-64] = 1;
+    }
+
+    proc DeviceReset(which: Device)
+    {   var sc: @Regs;
+	var i: _uint;
+
+	sc = rcc;
+	i = _uint(which);
+	if i < 32 then
+	{   sc.apb2rst[i] = 1;
+	    sc.apb2rst[i] = 0;
+	}
+	else if i < 64 then
+	{   sc.apb1rst[i-32] = 1;
+	    sc.apb1rst[i-32] = 0;
+	}
+        else
+	{   sc.ahbrst[i-64] = 1;
+	    sc.ahbrst[i-64] = 0;
+	}
+    }
+
+    proc MCOInit(sel: MCOSel)
+    {   var sc: @Regs;
+
+	sc = rcc;
+	sc.cfg.mcosel = sel;
+    }
+
+    proc GetMainClockFreq(): _uint32
+    {   var sc: @Regs;
+	var freq: _uint32;
+
+	sc = rcc;
+	if sc.cfg.sws
+	is HSI then freq = HSIFreq;
+	is HSE then freq = HSEFreq;
+	is PLL then
+	{   var mul, div: _uint;
+	    mul = sc.cfg.pllmul + 2;
+	    if sc.cfg.pllsrc == HSI then
+		freq = (HSIFreq/2) * mul;
+	    else
+	    {   div = sc.cfg.xtpre + 1;
+		freq = (HSEFreq/div) * mul;
+	    }
+	}
+	return freq;
+    }
+
+    proc GetAHBFreq(): _uint32
+    {
+	return GetMainClockFreq() >> PreScale[rcc.cfg.hpre];
+    }
+    
+    proc GetAPB1Freq(): _uint32
+    {
+	return GetMainClockFreq() >> PreScale[rcc.cfg.p1pre];
+    }
+    
+    proc GetAPB2Freq(): _uint32
+    {
+	return GetMainClockFreq() >> PreScale[rcc.cfg.p2pre];
+    }
+
+    proc GetClock(which: Device): _uint32
+    {   var freq: _uint32;
+	var i: _uint;
+
+	// check for special cases
+	if which
+	is USB then {}  // FIXME
+	is RTC then {}  // FIXME
+	else
+	{   i = _uint(which);
+	    if i < 32 then
+		freq = GetAPB2Freq();
+	    else if i < 64 then
+		freq = GetAPB1Freq();
+	    else
+		freq = GetAHBFreq();
+	}
+	return freq;
+    }
+
+    proc SetUSBClock(sel: USBSel)
+    { 
+	rcc.cfg.usbpre = sel;
+    }
+
+    proc SetRTCClock(sel: RTCSel)
+    {
+	rcc.bdcr.rtcsel = sel;
+    }
+ 
+    proc Init(useHSE: boolean): boolean
+    {   var sc: @Regs;
+	var fc: @FlashRegs;
+    	var n: _uint;
+    	var cfg: CFGreg;
+
+	sc = rcc;
+	if useHSE then
+	{   sc.cr.hseon = true;    // turn HSE on
+	    sc.cr.hsebyp = true;   // HSE osc bypassed with external clock
+	    n = 500;
+	    do
+		n -= 1;
+	    while !sc.cr.hserdy && n != 0;  // wait for HSE ready
+	    if n == 0 then return false;    // failure
+	    fcc.acr = { .pfbe=true, .ws=2 };
+	    cfg = sc.cfg;
+	    cfg.hpre = DIV1;    // configure bus clocks
+	    cfg.p2pre = DIV1;
+	    cfg.p1pre = DIV2;
+	    cfg.pllsrc = HSE;   // configure PLL
+	    cfg.pllmul = 7;     // mul *9
+	}
+	else    // use HSI
+	{   fcc.acr = { .pfbe=true, .ws=2 };
+	    cfg = sc.cfg;
+	    cfg.hpre = DIV1;    // configure bus clocks
+	    cfg.p2pre = DIV1;
+	    cfg.p1pre = DIV2;
+	    cfg.pllsrc = HSI;
+	    cfg.pllmul = 14;     // mul *16
+	}
+	sc.cfg = cfg;
+	sc.cr.pllon = true; // turn on PLL
+	n = 500;
+	do
+	    n -= 1;
+	while !sc.cr.pllrdy && n != 0;  // wait for PLL ready
+	if n == 0 then return false;
+	sc.cfg.sw = PLL;    // select PLL as clock source
+	n = 500;
+	do
+	    n -= 1;
+	while sc.cfg.sws != PLL && n != 0;  // wait for clock source ready
+	if n == 0 then return false;                
+	return true;
+    }
+}
+// vim: ts=8 sw=4 noet nowrap
+

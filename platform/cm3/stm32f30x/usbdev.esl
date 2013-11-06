@@ -1,0 +1,695 @@
+/*
+ * STM32F30x USB device
+ *
+ * Copyright (c) 2013, Brian G. Lucas.  See LICENSE file.
+ * $Id: usbdev.esl 285 2013-03-01 19:46:02Z bgl $
+ */
+
+import usb;
+
+package usbdev
+{
+    if _defined(debug.db_usbdev) then
+	alias debug.db_usbdev as db;
+    else
+	const db = 0;
+    const db_int =    0x8000;
+    const db_test =   0x4000;
+    const db_iepd =   0x2000;
+    const db_oepd =   0x1000;
+    const db_rx =     0x0400;
+    const db_tx =     0x0200;
+    const db_strt =   0x0100;
+    const db_other =  0x0040;
+    const db_setup =  0x0010;
+    const db_sa =     0x0008;
+    const db_start =  0x0002;
+    const db_init =   0x0001;
+
+    const NumEP = 8;		// There are 8 bi-directional device endpoints.
+    type EPnum: 0..NumEP-1;
+    const EP0: EPnum = 0;	// Device control endpoint 0.
+
+    type EPStatus: (DISABLED, STALL, NAK, VALID);
+    type EPType: (BULK, CNTL, ISOC, INTR);
+    type EPDescriptor:
+    {   num:   _uint8;  // ored with 0x80 if IN
+        type:  EPType: bits(8);
+        maxpkt:_uint16;
+    }: packed;
+    type EndPointState:
+    {   ea:     0..15;
+	Txstat: EPStatus;	// toggle
+	Txdtog: 0..1;		// toggle
+	Txctr:  boolean;	// write 0 to clear
+	kind:   boolean;	// meaning depends on EPtype
+	type:   EPType;
+	setup:  boolean: ro;
+	Rxstat: EPStatus;	// toggle
+	Rxdtog: 0..1;		// toggle
+	Rxctr:  boolean;	// write 0 to clear
+    }: packed, lsb, bits(32);
+    type RegISR:
+    {   epn:    0..15: ro;	//.00-03
+	dir:    (IN,OUT): ro;	//.04
+	_:      0..0b111;	//.05-07
+	esof:   boolean;	//.08 write 0 to clear
+	sof:    boolean;	//.09 write 0 to clear
+	rst:    boolean;	//.10 write 0 to clear
+	susp:   boolean;	//.11 write 0 to clear
+	wkup:   boolean;	//.12 write 0 to clear
+	err:    boolean;	//.13 write 0 to clear
+	ovun:   boolean;	//.14 write 0 to clear
+	ctr:    boolean: ro;	//.15
+    }: packed, lsb, bits(32);
+    const PreserveISR: RegISR =
+    {	.esof=true, .sof=true, .rst=true, .susp=true,
+	.wkup=true, .err=true, .ovun=true
+    };    
+    type Regs:
+    {
+	ep:     [NumEP]EndPointState: in, out;				//00-1C
+	_:      [16-NumEP]_uint32;					//20-3C
+	cr:								//40
+	{   reset:  boolean;	//.00
+	    pdwn:   boolean;	//.01
+	    lpmode: boolean;	//.02
+	    susp:   boolean;	//.03
+	    resume: boolean;	//.04
+	    _:      0..0b111;	//.05-07
+	    esofie: boolean;	//.08
+	    sofie:  boolean;	//.09
+	    rstie:  boolean;	//.10
+	    suspie: boolean;	//.11
+	    wkupie: boolean;	//.12
+	    erreie: boolean;	//.13
+	    ovunie: boolean;	//.14
+	    ctrie:  boolean;	//.15
+	}: packed, lsb, bits(32), out;
+	isr:    RegISR: in, out;					//44
+	fnr:								//48
+	{   fn:     0..0x3FFF: in, ro;
+	    lsof:   0..3: in, ro;
+	    lck:    boolean: in, ro;
+	    rxdm:   boolean: in, ro;
+	    rxdp:   boolean: in, ro;
+	}: packed, lsb, bits(32);
+	daddr:								//4C
+	{   adr:    0..0x7F;	// device address
+	    ef:     boolean;
+	    _:      0..0xFF;
+	}: packed, lsb, bits(32), out;
+	btable:	_uint16: bits(32), out;					//50 
+    };
+    type dev: @Regs;
+    var usbd: Regs: external(0x4000_5C00);
+
+    /*
+     * The device accesses all data via the "Packet Memory" (PM).
+     * This is 512 bytes structured as 256 16-bit words on 32-bit alignments.
+     * 512 bytes isn't very much for all the endpoints to share.
+     */
+    var usbmem: [256]_uint32: external(0x4000_6000);
+
+    /*
+     * Each endpoint has 2 buffer descriptors.
+     * Normally the first is used for Tx, the second for Rx.
+     * Doubled buffer endpoints will use both for Rx or both for Tx.
+     * The btable register contains an offset into the PM, 16-bit aligned,
+     * where the buffer description table is located.  We will put it at 0.
+     * There are up to 8 endpoints, so the buffer descriptor table
+     * takes up the first 32 "slots".  We allocate the next 32 slots for
+     * endpoint 0 receive and the next 32 for endpoint 0 transmit.
+     */
+    const NumBD = 2;
+    const TxBD = 0;
+    const RxBD = 1;
+
+    type BufferDesc:
+    {	addr:  _uint16: bits(32);	// slot in packet memory
+    	size:
+    	{   bytes:  0..0x3FF;
+    	    nblks:  0..0x1F;
+    	    blksz:  (S2,S32);		// maxbytes = nblks * { 2 | 32 }
+    	}: packed, lsb, bits(32);
+    };
+    type EPDesc: [NumEP][NumBD]BufferDesc;
+    const epbds: @EPDesc = 0x4000_6000;
+
+    const EP0RxSlot = 0x20;
+    const EP0TxSlot = 0x40;
+    const FirstSlot = 0x60;
+
+    /*
+     * Software state of the End Points
+     */
+    type EPState:
+    {   num:     EPnum;
+	t:
+	{   isin:    boolean;
+	    zlp:     boolean;	// need to send zero length packet
+	    isused:  boolean;
+	    type:    EPType;
+	}: packed, bits(8);
+	maxpkt:  _uint16;
+	xferlen: _uint16;
+	xfercnt: _uint16;
+	xferbuf: _address;
+    };
+    type eps: @EPState;
+
+    type DeviceState:       // generic device state
+    {   ep0:     EPState;
+	inx:     [NumEP-1]EPState;
+	outx:    [NumEP-1]EPState;
+	newadr:  _uint8;
+	pmfree:  _uint8;	// index of next free slot in PMA
+	buf:     [8]_byte: align(2);    // for receiving setup
+    };
+    type udevst: @DeviceState;
+
+    var usbds: DeviceState;		// FIXME - allocate?
+
+    /*
+     * The following are callbacks into the device "gadget" code
+     */
+    proc SetupOut(rqst: @usb.SetupPkt): _address, _uint;
+    proc SetupIn(rqst: @usb.SetupPkt): _address, _uint;
+    proc DataSent(ep: eps);
+    proc DataRcvd(ep: eps);
+
+
+    proc (ud: dev) SetAddress(addr: _uint8)
+    {
+
+if db & db_sa != 0 then { debug.str("SA "); debug.hex8(addr); debug.nl();}
+	ud.daddr = { .adr=addr, .ef=true };
+    }
+
+    /*
+     * The following are routines to modify the endpoint status registers.
+     * These are ugly because the register has a number of "toggle" bits
+     * which flip state if a one is written to them.  If you want to set them
+     * to some value you must see what's already there and change only the
+     * bits you want to by writing a 1 to only those bits.
+     * Whoever designed this should be sent to bed with no supper.
+     */
+    const flippers: _uint16 = 0x7070;
+
+    proc (epn: EPnum) SetAll(want: EndPointState)
+    {   var epr: EndPointState;
+	var tmp1, tmp2: _uint;
+
+	epr = usbd.ep[epn];
+	tmp1 = (_uint(epr) ^ _uint(want)) & flippers;
+	tmp2 = _uint(want) & ~flippers;
+	usbd.ep[epn] = EndPointState(tmp1 | tmp2);
+    }
+
+    proc (epn: EPnum) SetTxRxStatus(sts: EndPointState)
+    {   var epr: EndPointState;
+
+	epr = usbd.ep[epn];
+	epr.Txstat = EPStatus(_uint(epr.Txstat) ^ _uint(sts.Txstat));
+	epr.Rxstat = EPStatus(_uint(epr.Rxstat) ^ _uint(sts.Rxstat));
+	epr.Txdtog = 0;
+	epr.Rxdtog = 0;
+	usbd.ep[epn] = epr;
+    }
+
+    proc (epn: EPnum) SetTxStatus(sts: EPStatus)
+    {   var epr: EndPointState;
+
+	epr = usbd.ep[epn];
+	epr.Txstat = EPStatus(_uint(epr.Txstat) ^ _uint(sts));
+	epr.Rxstat = DISABLED;	// zeros
+	epr.Txdtog = 0;
+	epr.Rxdtog = 0;
+	usbd.ep[epn] = epr;
+    }
+
+    proc (epn: EPnum) SetRxStatus(sts: EPStatus)
+    {   var epr: EndPointState;
+
+	epr = usbd.ep[epn];
+	epr.Rxstat = EPStatus(_uint(epr.Rxstat) ^ _uint(sts));
+	epr.Txstat = DISABLED;	// zeros
+	epr.Txdtog = 0;
+	epr.Rxdtog = 0;
+	usbd.ep[epn] = epr;
+    }
+
+    proc (epn: EPnum) EPClrTx()
+    {   var epr: EndPointState;
+
+	epr = usbd.ep[epn];
+	epr.Txctr  = false;	// clear the bit we want plus the toggle bits
+	epr.Txstat = DISABLED;	// zeros
+	epr.Rxstat = DISABLED;	// zeros
+	epr.Rxdtog = 0;
+	epr.Txdtog = 0;
+	usbd.ep[epn] = epr;
+    }
+
+    proc (epn: EPnum) EPClrRx()
+    {   var epr: EndPointState;
+
+	epr = usbd.ep[epn];
+	epr.Rxctr  = false;	// clear the bit we want plus the toggle bits
+	epr.Txstat = DISABLED;	// zeros
+	epr.Rxstat = DISABLED;	// zeros
+	epr.Rxdtog = 0;
+	epr.Txdtog = 0;
+	usbd.ep[epn] = epr;
+    }
+
+    proc (epn: EPnum) SetType(ept: EPType)
+    {   var epr: EndPointState;
+
+	epr = usbd.ep[epn];
+	epr.type = ept;
+	epr.Txstat = DISABLED;	// zeros
+	epr.Rxstat = DISABLED;	// zeros
+	epr.Txdtog = 0;
+	epr.Rxdtog = 0;
+	usbd.ep[epn] = epr;
+    }
+
+    proc (epn: EPnum) SetTxBuf(offs: _uint16)
+    {
+	epbds[epn][TxBD].addr = offs;
+    }
+
+    proc (epn: EPnum) SetRxBuf(offs: _uint16)
+    {
+	epbds[epn][RxBD].addr = offs;
+    }
+
+    proc (epn: EPnum) SetTxCnt(count: _uint16)
+    {
+	epbds[epn][TxBD].size = { .bytes=count };
+    }
+
+    proc (epn: EPnum) GetRxCnt(): _uint16
+    {
+	return epbds[epn][RxBD].size.bytes;
+    }
+
+    // count must be > 0 and even
+    proc (epn: EPnum) SetRxCnt(count: _uint16)
+    {
+	if count > 62 then
+	    epbds[epn][RxBD].size = {.blksz=S32, .nblks=(count/32)-1};
+	else
+	    epbds[epn][RxBD].size = {.blksz=S2, .nblks=count/2};
+    }
+
+    type pMem16: @[]_uint16;
+    type pMem32: @[]_uint32;
+
+    proc (epn: EPnum) TxLoad(fm: _address, nb: _uint)
+    {   var fmh: pMem16;
+	var i, nh: _uint;
+	var offs: _uint16;
+
+	offs = epbds[epn][TxBD].addr / 2;
+	nh = (nb+1)/2;
+	fmh = pMem16(fm);
+	for i from 0 to nh-1 do
+	    usbmem[offs+i] = fmh[i];
+    }
+
+    proc (epn: EPnum) RxUnld(to: _address, nb: _uint)
+    {   var toh: pMem16;
+	var i, nh: _uint;
+	var offs: _uint16;
+
+	offs = epbds[epn][RxBD].addr / 2;
+	nh = (nb+1)/2;
+	toh = pMem16(to);
+	for i from 0 to nh-1 do
+	    toh[i] = usbmem[offs+i];
+    }
+
+    proc (ep: eps) Activate()
+    {
+    }
+
+    proc EPAllocate(epd: EPDescriptor): eps
+    {   var ep: eps;
+	var epn: EPnum;
+	var isin: boolean;
+
+	isin = (epd.num & 0x80) != 0;
+	epn =   epd.num & 0x7F;
+	if epn == EP0 || epn > EPnum?max then return 0;
+	if isin then
+	{   ep = usbds.inx[epn-1];
+	    epn.SetTxBuf(usbds.pmfree);
+	}
+	else
+	{   ep = usbds.outx[epn-1];
+	    epn.SetRxBuf(usbds.pmfree);
+	    epn.SetRxCnt(epd.maxpkt);
+	}
+	ep.num = epn;
+	ep.t.isin = isin;
+	ep.t.type = epd.type;
+	ep.maxpkt = epd.maxpkt;
+	usbds.pmfree += ep.maxpkt/2;
+	return ep;	
+    }
+
+    proc DeviceStart()
+    {   var u: @Regs;
+
+	u = usbd;
+	u.cr = { .reset=true };
+	u.cr = { .reset=false };
+	u.isr = { .esof=false };  // write zeros clears interrupts
+	u.cr = { .rstie=true, .ctrie=true };
+    }
+
+    proc DeviceInit()
+    {   var u: @Regs;
+
+	// Initialize software state
+	usbds.ep0.num = 0;
+	usbds.ep0.t = { .isused=true, .type=CNTL };
+	usbds.ep0.maxpkt = 64;
+	usbds.pmfree = FirstSlot;
+if db & db_test != 0 then
+{   type word: { a: _uint16; b: _uint16; };
+    var i: _uint;
+    var pw: @[]_uint16;
+    pw = usbmem;
+    for i from 0 to 511 by 2 do pw[i] = 0;
+}    
+	rcc.ClockEnable(PWR);		// FIXME - why?
+	rcc.ClockEnable(SYSCFG);	// FIXME - already done
+	rcc.ClockEnable(IOPE);	// FIXME - already done (GPIO_DISCONNECT?)
+	if sys.CoreClock == 72_000_000 then
+	    rcc.SetUSBClock(DIV1_5);	// USB clock = 72/1.5 = 48MHz
+	else
+	    error "Can't set USB clock";
+	rcc.ClockEnable(USB);  		// Enable USB clock
+	nvic.SetPriority(20, 0b10_000000);
+	nvic.Enable(20);
+	nvic.SetPriority(42, 0b01_000000);
+	nvic.Enable(42);
+    }
+
+    proc (epn: EPnum) In()
+    {   var len: _uint;
+	var ep: eps;
+
+	ep = usbds.outx[epn-1];
+if db & db_tx != 0 then {debug.str("Tx\n");}
+	if ep.xfercnt == ep.xferlen then	// then we are done
+	{   epn.SetTxStatus(NAK);
+	    DataSent(ep);
+	}
+	else
+	{   len = ep.xferlen - ep.xfercnt;
+	    if len == 0 then	
+	    {   if ep.t.zlp then
+		{   ep.t.zlp = false;
+		    epn.SetTxCnt(0);
+		    epn.SetTxStatus(VALID);
+		}
+	    }
+	    else
+	    {   if len >= ep.maxpkt then	
+		{   ep.t.zlp = len == ep.maxpkt;
+		    len = ep.maxpkt;
+		}
+		epn.TxLoad(ep.xferbuf[ep.xfercnt:len], len);
+		ep.xfercnt += len;
+		epn.SetTxCnt(len);
+		epn.SetTxStatus(VALID);
+	    }
+	}	
+    }
+
+    proc (ep: eps) StartIn(buf: _address, len: _uint)
+    {
+if db & db_strt != 0 then {debug.str("Si "); debug.uint(len); debug.chr('/');
+debug.uint16(ep.maxpkt); debug.nl();}
+	ep.xferbuf = buf;
+	ep.xferlen = len;
+	ep.xfercnt = 0;
+	len = _min(len, ep.maxpkt);
+	ep.num.TxLoad(ep.xferbuf[0: len], len);
+	ep.xfercnt += len;
+	ep.num.SetTxCnt(len);
+	ep.num.SetTxStatus(VALID);
+    }
+
+    proc (epn: EPnum) Out()
+    {   var len: _uint;
+	var ep: eps;
+
+	ep = usbds.outx[epn-1];
+	len = epn.GetRxCnt();
+if db & db_rx != 0 then {debug.str("Rx "); debug.uint(len); debug.nl();}	
+	if len > 0 then
+	{   epn.RxUnld(ep.xferbuf[ep.xfercnt: len], len);
+	    ep.xfercnt += len;
+	}
+	if len < ep.maxpkt || ep.xfercnt >= ep.xferlen then 	// final packet
+	{   epn.SetRxStatus(NAK);
+	    DataRcvd(ep);
+	}
+	else							// more to come
+	    epn.SetRxStatus(VALID);
+	
+    }
+
+    proc (ep: eps) StartOut(buf: _address, len: _uint)
+    {
+if db & db_strt != 0 then {debug.str("So "); debug.uint(len); debug.chr('/');
+debug.uint16(ep.maxpkt); debug.nl();}
+	ep.xferbuf = buf;
+	ep.xferlen = len;
+	ep.xfercnt = 0;
+	ep.num.SetRxStatus(VALID);
+    }
+
+    proc (ep: eps) EP0StartIn()
+    {   var len: _uint;
+
+	len = ep.xferlen - ep.xfercnt;
+	if len == 0 then
+	{   if ep.t.zlp then
+	    {   ep.t.zlp = false;
+		EP0.SetTxCnt(0);
+		EP0.SetTxRxStatus({.Txstat=VALID, .Rxstat=NAK});
+	    }
+	}
+	else
+	{   if len >= ep.maxpkt then	
+	    {   ep.t.zlp = len == ep.maxpkt;
+		len = ep.maxpkt;
+	    }
+	    EP0.TxLoad(ep.xferbuf[ep.xfercnt:len], len);
+	    ep.xfercnt += len;
+	    EP0.SetTxCnt(len);
+	    EP0.SetTxRxStatus({.Txstat=VALID, .Rxstat=NAK});
+	}	
+if db & db_setup != 0 then
+{   debug.str("iR0 "); debug.hex16(_uint16(_uint32(usbd.ep[0]))); debug.nl();
+}	
+    }
+
+    proc (ep: eps) EP0StartOut()
+    {
+    }
+
+    proc (ep: eps) EP0StartStatus()
+    {
+
+	EP0.SetTxCnt(0);
+	EP0.SetTxRxStatus({.Txstat=VALID, .Rxstat=NAK});	
+if db & db_setup != 0 then
+{   debug.str("sS0 "); debug.hex16(_uint16(_uint32(usbd.ep[0]))); debug.nl();
+}	
+    }
+
+    proc (uds: udevst) EP0In()
+    {
+	var ep: eps;
+	
+	ep = uds.ep0;
+	if ep.xfercnt < ep.xferlen then
+	    ep.EP0StartIn();
+	else
+	{   EP0.SetTxRxStatus({.Txstat=NAK, .Rxstat=VALID});
+	    if uds.newadr != 0 then
+	    {   usbd.SetAddress(uds.newadr);
+		uds.newadr = 0;
+	    }
+	}	
+if db & db_setup != 0 then
+{   debug.str("I0 "); debug.hex16(_uint16(_uint32(usbd.ep[0]))); debug.nl();
+}
+    }
+
+    // Why is this called?
+    proc (uds: udevst) EP0Out()
+    {
+if db & db_other != 0 then debug.str("O0\n");
+    }
+
+    proc (uds: udevst) EP0Setup()
+    {   var rqst: usb.pSetupPkt;
+	var adr: _address;
+	var len: _uint;
+	var ep: eps;
+
+if db & db_setup != 0 then debug.str("SU\n");
+	ep = uds.ep0;
+	// copy the setup packet from the PMA
+	EP0.RxUnld(uds.buf, 8);
+        rqst = usb.pSetupPkt(uds.buf[0:8]);
+        if rqst.type.dir == IN then
+        {   adr, len = SetupIn(rqst);
+	    ep.xferbuf = adr;
+	    ep.xferlen = _min(len, rqst.length);
+	    ep.xfercnt = 0;
+            ep.t.isin = true;
+	    ep.EP0StartIn();
+	}
+	else    // dir == OUT
+	{   // handle SetAddress here
+	    if rqst.type == {.dir=OUT,.stype=Standard, .recip=Device} &&
+	       usb.StandardRequests(rqst.request) == SetAddress then
+		uds.newadr =  rqst.value&0xFF;  // must delay set until after status     
+	    else 
+		adr, len = SetupOut(rqst);
+            if rqst.length != 0 then
+	    {   ep.xferbuf = adr;
+		ep.xferlen = _min(len, rqst.length);
+		ep.xfercnt = 0;
+	        ep.t.isin = false;
+		ep.EP0StartOut();
+	    }
+	    else
+	    {   ep.t.isin = true;
+		ep.EP0StartStatus();
+	    }
+	}	
+    }
+
+    // Handle reset interrupt
+    proc (ud: dev) Intr_Reset()
+    {   var epn: EPnum;
+
+	ud.btable = 0;		// buffer table always at zero
+	// Set up endpoint 0
+	EP0.SetRxBuf(EP0RxSlot);
+	EP0.SetRxCnt(usbds.ep0.maxpkt);
+	EP0.SetTxBuf(EP0TxSlot);
+	EP0.SetAll({ .ea=0, .type=CNTL, .kind=false, 
+		       .Txctr=false, .Rxctr= false,
+		       .Txstat=STALL, .Rxstat=VALID });
+	for epn from 1 to NumEP-1 do
+	    epn.SetAll({ .ea=epn, .Txstat=DISABLED, .Rxstat=DISABLED });
+	ud.SetAddress(0);
+if db & db_other != 0 then
+{   debug.str("R "); debug.hex16(_uint16(_uint32(ud.ep[0]))); debug.nl();
+}
+    }
+
+    // Handle all transfer complete interrupts
+    proc (ud: dev) Intr_CTR()
+    {
+	var isr: RegISR;
+	var epn: EPnum;
+	var epr: EndPointState;
+	loop
+	{   isr = ud.isr;
+	  exit !isr.ctr;
+	    epn = isr.epn;
+	    epr = ud.ep[epn];
+if db & (db_iepd|db_oepd) != 0 then
+{   debug.str("EP "); debug.hex16(_uint16(_uint32(epr))); debug.nl();
+}
+	    if epn == 0 then		// control endpoint
+	    {
+	        EP0.SetTxRxStatus({.Txstat=NAK, .Rxstat=NAK});
+	        if isr.dir == IN then	// control IN
+	        {   EP0.EPClrTx();
+		    usbds.EP0In();
+		}
+		else
+		{   EP0.EPClrRx();
+		    if epr.setup then	// control SETUP
+			usbds.EP0Setup();
+		    else		// control OUT
+		    	usbds.EP0Out();
+		}
+	    }
+	    else			// normal endpoint
+	    {
+	        if epr.Rxctr then
+	        {   epn.EPClrRx();
+	            epn.Out();
+	        }
+	        if epr.Txctr then
+	        {   epn.EPClrTx();
+	   	    epn.In();
+		}
+	    }
+	}
+    }
+
+    proc Intr_LP(): : external("USB_LP_IRQ")
+    {   var ud: dev = usbd;
+	var isr, tmp: RegISR;
+	
+	isr = ud.isr;
+if db & db_int != 0 then
+{   debug.str("I "); debug.hex16(_uint16(_uint32(isr))); debug.nl();
+}
+	if isr.ctr then		// transfer complete
+	    ud.Intr_CTR();
+	if isr.rst then		// reset
+	{   tmp = PreserveISR;
+	    tmp.rst = false;	// W0 clears
+	    ud.isr = tmp;
+	    ud.Intr_Reset();
+	}
+	if isr.ovun then
+	{   tmp = PreserveISR;
+	    tmp.ovun = false;	// W0 clears
+	    ud.isr = tmp;
+	}
+	if isr.err then
+	{   tmp = PreserveISR;
+	    tmp.err = false;	// W0 clears
+	    ud.isr = tmp;
+	}
+	if isr.wkup then
+	{   tmp = PreserveISR;
+	    tmp.wkup = false;	// W0 clears
+	    ud.isr = tmp;
+	}
+	if isr.susp then
+	{   tmp = PreserveISR;
+	    tmp.susp = false;	// W0 clears
+	    ud.isr = tmp;
+	}
+	if isr.sof then
+	{   tmp = PreserveISR;
+	    tmp.sof = false;	// W0 clears
+	    ud.isr = tmp;
+	}
+	if isr.esof then
+	{   tmp = PreserveISR;
+	    tmp.esof = false;	// W0 clears
+	    ud.isr = tmp;
+	}
+
+    }
+}
+

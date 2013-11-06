@@ -1,0 +1,183 @@
+/*
+ * ST LSM303DLHC E-Compass
+ *
+ * This device has two separate I2C interfaces:
+ * 1. linear accelerometer
+ * 2. magnetometer
+ * We will separate them into two sub-packages.
+ *
+ * Reference:
+ *   ST Doc ID 018771 Rev 1 - April 2011
+ *
+ * Copyright (c) 2012, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+package lsm303dlhc
+{
+    var ic: i2c.I2cDev;		// shared I2C device
+
+    /*
+     * Linear accelerometer
+     */
+    package acc
+    {	// chip address, i2c hardware overwrites lo bit: 0=>WR, 1=>RD
+	const adr: _uint8 = 0b0011_0010;
+	// set hi bit of regs to indicate multiple reads
+	type Regs:
+	(   CR1=0x20, CR2,  CR3,    CR4,    CR5,    CR6,    REF,    SR,
+	    XL,     XH,     YL,     YH,     ZL,     ZH,     FIFOCR, FIFOSR,
+	    I1CFG,  I1SRC,  I1THS,  I1DUR,
+	    I2CFG,  I2SRC,  I2THS,  I2DUR,
+	    CLCFG,  CLSRC,  CLTHS,  TIMLIM, TIMLAT, TIMWIN
+	);
+	type DataRate:
+	(   PD, R1, R10, R25, R50, R100, R200, R400,
+	    LP1_62k, R1_344k
+	);
+	type CR1Info:
+	{   xenb:   boolean;
+	    yenb:   boolean;
+	    zenb:   boolean;
+	    lpmode: boolean;
+	    odr:    DataRate;
+	}: packed, lsb;
+
+	type HPFModes: (NORMRST, REF, NORM, AUTORST);
+	type CR2Info:
+	{   hpis1:  boolean;
+	    hpis2:  boolean;
+	    hpclick:boolean;
+	    fds:    boolean;
+	    hpcf:   0..3;	// power of 2 minus 3
+	    hpmode: HPFModes;
+	}: packed, lsb;
+
+	type FullScale: (S2g, S4g, S8g, S16g);
+	type CR4Info:
+	{   sim:    (SPI4w,SPI3w);
+	    zeros:  0..0b11;	// must be zero
+	    hr:     boolean;
+	    fs:     FullScale;
+	    endian: (LE,BE);
+	    bdu:    (CONTINUOUS, SINGLE);
+	}: packed, lsb;
+
+	const Scale: [FullScale]_uint16 = {   1,  2,  4,  12  };
+
+	const CR1init: CR1Info =
+	    { .lpmode=false, .odr=R50, .xenb=true, .yenb=true, .zenb=true };
+	const CR4init: CR4Info =
+	    { .hr=true, .endian=LE, .bdu=CONTINUOUS };
+	
+	proc Write(reg: Regs, data: _uint8)
+	{
+	    ic.Write(adr, _uint8(reg), data);
+	}
+
+	proc Read(reg: Regs): _uint8
+	{   var rv: _uint8;
+
+	    return ic.Read(adr, _uint8(reg));
+	}
+
+	proc ReadMultiple(reg: Regs, data:@_memory, len: _uint)
+	{
+	    // high order bit of reg indicates multiple mode
+	    ic.ReadMultiple(adr, _uint8(reg)|0x80, data, len);
+	}
+
+	proc FilterConfig(mode: HPFModes, cfreq: 0..3)
+	{   var cr2: CR2Info;
+
+	    cr2 = CR2Info(Read(CR2));
+	    cr2.hpmode = mode;
+	    cr2.hpcf = cfreq;
+	    Write(CR2, _uint8(cr2));
+	}
+
+	proc Init(i2cdev: i2c.I2cDev)
+	{
+	    ic = i2cdev;
+	    Write(CR1, _uint8(CR1init));
+	    Write(CR4, _uint8(CR4init));
+	}
+    }
+
+    /*
+     * Magnetometer
+     */
+    package mag
+    {	// chip address, i2c hardware overwrites lo bit: 0=>WR, 1=>RD
+	const adr: _uint8 = 0b0011_1100;
+	type Regs:
+	(   CRA=0x00, CRB,  MR, 
+	    XH, XL, ZH, ZL, YH, YL,	// WARNING - Y,Z in reverse order
+	    SR, IRA, IRB, IRC,
+	    TEMPH=0x31, TEMPL
+	);
+	type DataRate: (R0_75, R1_5, R3_0, R7_5, R15, R30, R75, R220);
+	type CRAInfo:
+	{   _:       0..0b11;		// must be zero
+	    dor:     DataRate;
+	    _:       0..0b11;		// must be zero
+	    tempenb: boolean;
+	}: packed, lsb;
+	type Range: (_, R1_3, R1_9, R2_5, R4_0, R4_7, R5_6, R8_1);
+	type CRBInfo:
+	{   _:       0..0b11111;	// must be zero
+	    range:   Range;
+	}: packed, lsb;
+	type Mode: (CONTINUOUS, SINGLE, SLEEP, SLEEP2);
+	type MRInfo:
+	{   mode:    Mode;
+	    _:       0..0b11_1111;	// must be zero
+	}: packed, lsb;
+
+	const XYScale: [Range]_uint16 =	// least significant bit in micro-gauss
+	{   0,
+	    1_000_000/1100,	// 909
+	    1_000_000/855,	//1169
+	    1_000_000/670,	//1492
+	    1_000_000/450,	//2222
+	    1_000_000/400,	//2500
+	    1_000_000/330,	//3030
+	    1_000_000/230	//4347
+	};
+	const ZScale: [Range]_uint16 =	// least significant bit in micro-gauss
+	{   0,
+	    1_000_000/980,
+	    1_000_000/760,
+	    1_000_000/600,
+	    1_000_000/400,
+	    1_000_000/355,
+	    1_000_000/295,
+	    1_000_000/205
+	};
+	
+	
+	const CRAinit: CRAInfo = { .dor=R30, .tempenb=false };
+	const CRBinit: CRBInfo = { .range=R8_1 };
+	const MRinit: MRInfo = { .mode=CONTINUOUS };
+	
+	proc Write(reg: Regs, data: _uint8)
+	{
+	    ic.Write(adr, _uint8(reg), data);
+	}
+
+	proc Read(reg: Regs): _uint8
+	{   var rv: _uint8;
+
+	    return ic.Read(adr, _uint8(reg));
+	}
+
+	proc Init(i2cdev: i2c.I2cDev)
+	{
+	    ic = i2cdev;
+	    Write(CRA, _uint8(CRAinit));
+	    Write(CRB, _uint8(CRBinit));
+	    Write(MR, _uint8(MRinit));
+	}
+    }
+}
+

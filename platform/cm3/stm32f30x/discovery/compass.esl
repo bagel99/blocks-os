@@ -1,0 +1,120 @@
+/*
+ * Compass interface
+ *
+ * Copyright (c) 2012, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+import i2c;
+import lsm303dlhc;
+alias lsm303dlhc.mag as mag;
+alias lsm303dlhc.acc as acc;
+
+package compass
+{
+    const I2CSCK:  gpio.PortInit = { { 6,B}, ALT, PP, S50, DOWN,  4 };
+    const I2CSDA:  gpio.PortInit = { { 7,B}, ALT, PP, S50, DOWN,  4 };
+    const DRDY:    gpio.PortInit = { { 2,E}, IN,  PP, S50, NONE,  0 };
+    const DRDYIntr: exti.Desc = { INT, .rise=true };
+    const INT2:    gpio.PortInit = { { 4,E}, IN,  PP, S50, NONE,  0 }; 
+
+
+    proc ReadAcc(data: @[3]_int32)
+    {
+	var cr4: acc.CR4Info;
+	var scale: _uint16;
+	var raw:
+	{   xl: _uint8;
+	    xh: _uint8;
+	    yl: _uint8;
+	    yh: _uint8;
+	    zl: _uint8;
+	    zh: _uint8;
+	};
+
+	// FIXME - keep scale as state variable; don't recalculate
+	cr4 = acc.CR4Info(acc.Read(CR4));
+	scale = acc.Scale[cr4.fs];	
+debug.chr('s'); debug.uint16(scale);
+	// assume little-endian
+	acc.ReadMultiple(XL, raw, 6);
+	var tmp: _int16;
+	tmp = (_int16(raw.xh) << 8)|raw.xl;
+debug.chr('x'); debug.int16(tmp);
+	data[0] = tmp * scale;
+	tmp = (_int16(raw.yh) << 8)|raw.yl;
+debug.chr('y'); debug.int16(tmp);
+	data[1] = tmp * scale;
+	tmp = (_int16(raw.zh) << 8)|raw.zl;
+debug.chr('z'); debug.int16(tmp);
+	data[2] = tmp * scale;
+//	data[0] = _int16((raw.xh<<8)|raw.xl) * scale;
+//	data[1] = _int16((raw.yh<<8)|raw.yl) * scale;
+//	data[2] = _int16((raw.zh<<8)|raw.zl) * scale;
+    }
+
+    proc ReadMag(data: @[3]_int32)
+    {
+	var crb: mag.CRBInfo;
+	var xyscale, zscale: _uint16;
+	var raw:
+	{   xh: _uint8;
+	    xl: _uint8;
+	    yh: _uint8;
+	    yl: _uint8;
+	    zh: _uint8;
+	    zl: _uint8;
+	};
+
+	// FIXME - keep xyscale, zscale as state variables; don't recalculate
+	crb = mag.CRBInfo(mag.Read(CRB));
+	xyscale = mag.XYScale[crb.range];
+	zscale  = mag.ZScale[crb.range];
+	// FIXME - can this be a multiple read into a big-endian buffer?
+	raw.xh = mag.Read(XH);
+	raw.xl = mag.Read(XL);
+	raw.yh = mag.Read(YH);
+	raw.yl = mag.Read(YL);
+	raw.zh = mag.Read(ZH);
+	raw.zl = mag.Read(ZL);
+//debug.chr('a'); debug.uint16(xyscale);
+//debug.chr('b'); debug.uint16(zscale);
+	var tmp: _int16;
+	tmp = (_int16(raw.xh) << 8)|raw.xl;
+debug.chr('x'); debug.int16(tmp);
+	data[0] = tmp * xyscale;
+	tmp = (_int16(raw.yh) << 8)|raw.yl;
+debug.chr('y'); debug.int16(tmp);
+	data[1] = tmp * xyscale;
+	tmp = (_int16(raw.zh) << 8)|raw.zl;
+debug.chr('z'); debug.int16(tmp);
+	data[2] = tmp * zscale;
+
+//	data[0] = ((_int16(raw.xh) << 8)|raw.xl) * xyscale;
+//	data[1] = ((_int16(raw.yh) << 8)|raw.yl) * xyscale;
+//	data[2] = ((_int16(raw.zh) << 8)|raw.zl) * zscale;
+    }
+
+    proc Init()
+    {   var ic: i2c.I2cDev;
+
+	rcc.ClockEnable(I2C1);
+	gpio.Init(I2CSCK);
+	gpio.Init(I2CSDA);
+	gpio.Init(DRDY);
+	exti.GPIOEnable(DRDY.port, DRDYIntr);
+	// FIXME - no NVIC config?
+
+	ic = i2c.Init(1);	// FIXME - more config parameters?
+
+	gpio.Init(INT2);
+	// FIXME - no EXTI config?, no NVIC config?
+
+
+	mag.Init(ic);
+	acc.Init(ic);
+	acc.FilterConfig(NORM, 1);
+    }
+
+}
+

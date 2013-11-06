@@ -1,0 +1,79 @@
+/*
+ * STM32F30x GPIO and pin remapping.
+ *
+ * Copyright (c) 2012, Brian G. Lucas.  See LICENSE file.
+ * $Id: gpio.esl 235 2012-12-13 22:09:19Z bgl $
+ */
+
+import rcc;
+
+import gpiodef;     // if not already imported
+
+package gpio
+{
+    // GPIO Registers can be accessed as bytes or halfwords.
+    // But we don't.
+    type GPIORegs:
+    {   mode:  [16] Mode: packed, lsb, out;				// 00
+	otype: [16] OType: packed, lsb, bits(32), out;			// 04
+	ospeed:[16] OSpeed: packed, lsb, out;				// 08
+	pupdn: [16] Pull: packed, lsb, out;				// 0C
+	idr:   _uint16: bits(32), in, ro;				// 10
+	odr:   _uint16: bits(32), out;					// 14
+	bsrr:								// 18
+	{   bs: _uint16;    // bits to be set
+	    br: _uint16;    // bits to be reset
+	}: packed, lsb, wo, out;
+	lckr:								// 1C
+	{   lck:_uint16;
+	    lckk: 0..1;     // magic lock sequence bit
+	}: packed, lsb, bits(32), in, out;
+	aflo:  [8] 0..15: packed, lsb, out;				// 20
+	afhi:  [8] 0..15: packed, lsb, out;				// 24
+	brr:   _uint16: bits(32), out, wo;				// 28
+    };
+    type GPIO: @GPIORegs;
+    const gpio: [NumGPIO]GPIO =
+    { 0x4800_0000, 0x4800_0400, 0x4800_0800, 0x4800_0C00,
+      0x4800_1000, 0x4800_1400
+    };
+
+    proc Clr(which: PortDesc)
+    {
+	gpio[which.port].brr  = 1 << which.bit;
+    }
+
+    proc Set(which: PortDesc)
+    {
+	gpio[which.port].bsrr = 1 << which.bit;
+    }
+
+    proc Tst(which: PortDesc): boolean
+    {
+	return gpio[which.port].idr & (1 << which.bit) != 0;
+    }
+
+    proc Init(which: PortInit)
+    {   var g: GPIO;
+
+	// First, make sure the clock is enabled to the GPIO port
+	rcc.ClockEnable(IOPA + _uint(which.port.port));
+	g = gpio[which.port.port];
+	// If alternate function, set it
+	if which.mode == ALT then
+	{   if which.port.bit < 8 then
+		g.aflo[which.port.bit] = which.af;
+	    else
+		g.afhi[which.port.bit-8] = which.af;
+	}
+	// Then configure the pin
+	if which.mode == OUT || which.mode == ALT then
+	{   g.ospeed[which.port.bit] = which.os;
+	    g.otype[which.port.bit]  = which.ot;
+	}
+	g.mode[which.port.bit] = which.mode;
+	g.pupdn[which.port.bit] = which.pu;
+    }
+}
+// vim: ts=8 sw=4 noet nowrap
+
