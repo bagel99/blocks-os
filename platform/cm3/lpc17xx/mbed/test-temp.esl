@@ -1,0 +1,157 @@
+import sys;
+import trace;	// use trace as debug port
+import debug;
+import uart;
+
+package debug
+{   const db_timer = 0;
+    const db_block = 0;
+}
+
+import fault;
+import syscb;
+import sysctl;
+import nvic;
+
+import block;
+
+const TimerID: block.BlockID = 1;
+const AppID:   block.BlockID = 2;
+
+import timer;
+import lm75b;
+//import wait;
+
+package app
+{
+    const db = 1;
+    alias event.Event  as Event;
+    alias event.pEvent as pEvent;
+    alias timer.TimerEvent  as TimerEvent;
+    alias timer.pTimerEvent as pTimerEvent;
+    alias block.Block  as Block;
+    alias block.pBlock as pBlock;
+
+    type AppBlock(Block):
+    {   ics: i2c.State;
+	lm:  lm75b.LM;
+    };
+    type pAppBlock: @AppBlock;
+
+    proc (ab: pAppBlock) GetTemp()
+    {   var temp: _int8;
+
+	temp = ab.lm.GetTempInt();
+debug.str("Temp="); debug.int8(temp); debug.str("C\n");
+    }
+
+    proc (ab: pAppBlock) SetTimer(seconds: _uint16)
+    {   var te: pTimerEvent;
+
+//debug.str("app.SetTimer: "); debug.uint16(seconds); debug.nl();
+	te = _new(TimerEvent);
+	te.code = TSTART;
+	te.tag  = ab.id;
+	te.ticks = timer.SecondsToTicks(seconds);
+	TimerID.Send(te);
+    }
+
+    proc (ab: pAppBlock) CancelTimer()
+    {   var te: pTimerEvent;
+
+	te = _new(TimerEvent);
+	te.code = TSTOP;
+	te.tag  = ab.id;
+	TimerID.Send(pEvent(te));
+   }
+
+
+    proc Run(b: pBlock, e: pEvent)
+    {   var te: pTimerEvent;
+	var ab: pAppBlock;
+
+	ab = pAppBlock(b);
+	te = pTimerEvent(e);
+// debug.str("app.Timer: ");
+	if e.code
+	is TSTOPPED then
+	{
+// debug.str("cancelled");
+	    event.Free(e);	
+	}
+	is TDONE then
+	{
+// debug.str("done");
+	    ab.GetTemp();
+	    te.ticks = timer.SecondsToTicks(10);
+	    te.code = TSTART;
+	    te.tag  = b.id;
+	    TimerID.Send(te);
+	}
+	else
+	{
+// debug.str("unknown event");
+	    event.Free(e);
+	}	
+    }
+
+    proc (ab: pAppBlock) Init()
+    { 
+if db > 0 then debug.str("app.Init\n");
+sys.ledon(2);
+	ab.ics.Init(2);		// initialize I2C2
+	ab.lm = lm75b.Init(ab.ics);
+sys.ledoff(2);
+
+	ab.SetTimer(10);
+
+    }
+
+    proc NewBlock(id: block.BlockID): pBlock
+    {   var ab: pAppBlock;
+
+	ab = _new(AppBlock);
+if db > 0 then { debug.str("app.AppBlock ");
+debug.uint8(id); debug.chr(' ');
+debug.hex(_uint(ab)); debug.nl(); }
+	ab.BlockInit(id, Run);
+
+	return ab;
+    }
+}
+
+
+proc meminit(addr: _address, size: _uint, pool: _uint): : external;
+
+proc main(): _int
+{
+    var ab: app.pAppBlock;
+    var u: uart.Uart;				// for debug print
+    var c: _byte;				// for debug print
+
+    sys.Init();
+    sysctl.Init();
+    fault.Init();
+    debug.Init();
+    sys.ledon(0);
+debug.str("Starting test-temp...\n");
+    meminit(0x2007C100, 0x7F00, 0);	// FIXME
+
+    timer.NewBlock(TimerID);
+    ab = app.pAppBlock(app.NewBlock(AppID));
+    ab.Init();
+    sys.ledoff(0);
+
+    u = uart.Init(sys.DebugPort);		// for debug print
+    loop
+    {
+    	c = debug.Empty();			// for debug print
+    	if c != 0 then				// for debug print
+    	    u.Send(c);				// for debug print
+	block.Sched();
+//        wait.Wait();
+    }
+
+    return 0;
+}
+

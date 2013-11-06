@@ -1,0 +1,120 @@
+// TEST: Test lower level internet via ping
+
+import sys;
+import trace;
+import debug;
+import uart;	// use trace as debug port
+
+package debug
+{
+    const db_fault   = 1;
+    const db_block   = 1;
+    const db_timer   = 1;
+    const db_eth     = 1;
+    const db_ipv4    = 1;
+    const db_ipv6    = 1;
+}
+
+import fault;
+import syscb;
+import sysctl;
+import nvic;
+
+import mbuf;
+import block;
+
+var MyMAC:  [6]_byte;
+const TimerID: block.BlockID = 2;
+const MemmonID:block.BlockID = 1;
+const EthID:   block.BlockID = 15;
+const IPv4ID:  block.BlockID = 14;
+const IPv6ID:  block.BlockID = 13;
+
+
+// Chip stuff
+import chip;	// for GetSerialNumber()
+import timer;
+import enetsys;
+
+import inet;
+const MyIPv4Addr: inet.IPv4Addr = { 192,156,205,18 };
+const MyIPv4Mask: inet.IPv4Addr = { 255,255,255,128 };
+import ipv6;
+import ipv4;
+import memmon;
+
+alias event.Event as Event;
+alias event.pEvent as pEvent;
+alias block.Block as Block;
+alias block.pBlock as pBlock;
+alias block.BlockID as BlockID;
+
+var HeapStart: _memory: external("_end");
+
+proc wait()::external;
+
+proc meminit(addr: _address, size: _uint, pool: _uint): : external;
+
+const Connections: []block.ConnectionInfo =
+{   {   IPv4ID, EthID,   LOWER,  1, 0 },
+    {	EthID,  IPv4ID,  UPPER,  1, _uint16(eth.Proto.IPV4) },
+    {	EthID,  IPv4ID,  UPPER,  1+0x80, 0x0806 },
+    {   IPv6ID, EthID,   LOWER,  1, 0 },
+    {	EthID,  IPv6ID,  UPPER,  1, _uint16(eth.Proto.IPV6) },
+};
+
+
+proc main(): _int
+{   var serialno: _uint32;
+
+    sys.Init();
+    sysctl.Init();
+    fault.Init();
+    debug.Init();
+    sys.ledon(0);							// 01
+debug.str("Starting test-inet...\n");
+    meminit(0x2007C100, 0x7F00, 0);	// FIXME
+    // create MAC from serial number
+    serialno = chip.GetSerialNumber();
+    MyMAC[0] = 0x02;
+    MyMAC[1] = 0x00;
+    MyMAC[2] = _byte(serialno >> 24);
+    MyMAC[3] = _byte(serialno >> 16);
+    MyMAC[4] = _byte(serialno >> 8);
+    MyMAC[5] = _byte(serialno);
+    debug.str("MyMAC="); ipv6.MACPrint(MyMAC); debug.nl();
+
+    timer.NewBlock(TimerID);
+    memmon.NewBlock(MemmonID);
+    eth.NewBlock(EthID);
+    ipv4.NewBlock(IPv4ID);
+    ipv6.NewBlock(IPv6ID);
+    block.InitConnections(Connections, Connections?len);
+    {   var e: pEvent;
+	e = _new(Event);
+	e.code = START;
+	IPv4ID.Send(e);
+	e = _new(Event);
+	e.code = START;
+	IPv6ID.Send(e);
+	e = _new(Event);
+	e.code = START;
+	MemmonID.Send(e);
+    }
+
+    sys.ledon(1);							// 11
+    var u: uart.Uart;				// for debug print
+    var c: _byte;				// for debug print
+    u = uart.Init(sys.DebugPort);		// for debug print
+    loop
+    {
+    	c = debug.Empty();			// for debug print
+    	if c != 0 then				// for debug print
+    	    u.Send(c);				// for debug print
+	block.Sched();
+    	/* wait(); screws jtag */
+    }
+
+    return 0;
+}
+

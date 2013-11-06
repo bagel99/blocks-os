@@ -1,0 +1,736 @@
+/*
+ * LPC17xx Ethernet
+ *
+ * Copyright (c) 2009-2011, Brian G. Lucas.  See LICENSE file.
+ * $Id: enet.esl 364 2012-05-21 21:12:51Z bgl $
+ *
+ * Notes:
+ * 1. There is no way to be informed by interrupt when the link status changes.
+ *    a. We can either delay initialization until the link is up and from then
+ *       on just check the status whenever there is something to transmit, or
+ *    b. Have to have a timer interrupt poll the link status.
+ */
+
+package eth
+{
+    if !_defined(db) then
+    {   if _defined(debug.db_eth) then
+	    alias debug.db_eth as db;
+	else
+	    const db = 0;
+    }
+
+    type PhyRegAddr: 0..31;
+    type Speed:  (S10, S100);
+    type Duplex: (HALF, FULL);
+
+    // DESCRIPTORS IN MEMORY
+    type BufrAddr: @[]_byte;
+    type RxDesc:
+    {   addr:       BufrAddr;
+	cntl:
+	{   size:   0..0x7FFF;
+	    _:      0..0xFFFF;
+	    intr:   boolean;
+	}: packed, lsb;
+    };
+    type pRxDesc: @[]RxDesc;
+    type RxStat:
+    {   info:
+	{   size:   0..0x7FF;
+	    _:      0..0x7F;
+	    cntlfrm:boolean;
+	    vlan:   boolean;
+	    filterr:boolean;
+	    multic: boolean;
+	    broadc: boolean;
+	    crcerr: boolean;
+	    symerr: boolean;
+	    lenerr: boolean;
+	    rngerr: boolean;
+	    algnerr:boolean;
+	    overrun:boolean;
+	    nodesc: boolean;
+	    lastflg:boolean;
+	    error:  boolean;
+	}: packed, lsb;
+	hash:
+	{   sacrc:  0..0x1FF;
+	    _:      0..0x7F;
+	    dascr:  0..0x1FF;
+	    _:      0..0x7F;
+	}: packed, lsb;
+    };
+    type pRxStat: @[]RxStat;
+    type TxDesc:
+    {   addr:       BufrAddr;
+	cntl:
+	{   size:   0..0x7FF;
+	    _:      0..0x7FFF;
+	    ovride: boolean;
+	    huge:   boolean;
+	    pad:    boolean;
+	    crc:    boolean;
+	    last:   boolean;
+	    intr:   boolean;
+	}: packed, lsb;
+    };
+    type pTxDesc: @[]TxDesc;
+    type TxStat:
+    {   info:
+	{   _:      0..0x1F_FFFF;
+	    colcnt: 0..15;
+	    deferd: boolean;
+	    exdefr: boolean;
+	    excoll: boolean;
+	    latecol:boolean;
+	    undrrun:boolean;
+	    lastflg:boolean;
+	    error:  boolean;
+	}: packed, lsb;
+    };
+    type pTxStat: @[]TxStat;
+
+    type IntStat:
+    {   RxOvrn:	boolean;
+	RxErr:	boolean;
+	RxFini: boolean;
+	RxDone: boolean;
+	TxUnrn: boolean;
+	TxErr:	boolean;
+	TxFini: boolean;
+	TxDone:	boolean;
+	_:	0..0b1111;
+	Soft:	boolean;
+	Wake:	boolean;
+	_:	0..0x3FFFF;
+    }: packed, lsb;
+	
+	
+    // HARDWARE REGISTERS
+    type EnetRegs:
+    {
+	mac1:								// 0x000
+	{   recvenb:boolean;		// .00
+	    passall:boolean;		// .01
+	    txflowc:boolean;		// .02
+	    rxflowc:boolean;		// .03
+	    loopbk: boolean;		// .04
+	    _:      0..0b111;		// .05-07
+	    rsttx:  boolean;		// .08
+	    rsttxmac:boolean;		// .09
+	    rstrx:  boolean;		// .10
+	    rstrxmac:boolean;		// .11
+	    _:      0..0b11;		// .12-13
+	    rstrng: boolean;		// .14
+	    rst:    boolean;		// .15
+	    _:      _uint16;		// .16-31
+        }: packed, lsb, out;
+	mac2:								// 0x004
+	{   fulldpx:boolean;		// .00
+	    flchk:  boolean;		// .01
+	    hfenb:  boolean;		// .02
+	    dlrcrc: boolean;		// .03
+	    crcenb: boolean;		// .04
+	    padenb: boolean;		// .05
+	    vpadenb:boolean;		// .06
+	    apadenb:boolean;		// .07
+	    ppenb:  boolean;		// .08
+	    lpenb:  boolean;		// .08
+	    _:      0..0b11;		// .09-10
+	    noback: boolean;		// .11
+	    backpr: boolean;		// .12
+	    exdefr: boolean;		// .13
+	    _:      0..0x1_FFFF;	// .14-31
+        }: packed, lsb, out;
+	ipgt:								// 0x008
+	{   gap:    0..0x7F;		// .00-06
+	    _:      0..0x1FF_FFFF;	// .07-31
+        }: packed, lsb, out;
+	ipgr:								// 0x00C
+	{   gap2:   0..0x7F;		// .00-06
+	    _:      0..1;		// .07
+	    gap1:   0..0x7F;		// .08-14
+	    _:      0..0x1_FFFF;	// .15-31
+        }: packed, lsb, out;
+	clrt:								// 0x010
+	{   maxtry: 0..15;		// .00-03
+	    _:      0..0b1111;		// .04-07
+	    colwin: 0..63;		// .08-13
+	    _:      0..0x3_FFFF;	// .14-31
+        }: packed, lsb, out;
+	maxf:								// 0x014
+	{   len:    _uint16;		// .00-15
+	    _:      _uint16;		// .16-31
+        }: packed, lsb, out;
+	supp:								// 0x018
+	{   _:      0..0xFF;		// .00-07
+	    speed:  (s10mb, s100mb);    // .08
+	    _:      0..0x7F_FFFF;	// .09-31
+        }: packed, lsb, out;
+	test:								// 0x01C
+	{   shtpas: boolean;		// .00
+	    tstpas: boolean;		// .01
+	    tstbkp: boolean;		// .02
+	    _:      0..0x1FFF_FFFF;	// .03-31
+        }: packed, lsb, out;
+	mcfg:								// 0x020
+	{   scninc: boolean;		// .00
+	    preamb: (yes, no);		// .01
+	    clksel: (div4,  _,     div6,  div8,
+		     div10, div14, div20, div28,
+		     div36, div40, div44, div48,
+		     div52, div56, div60, div64); // .02-05
+	    _:      0..0x1FF;		// .06-14
+	    rstmii: (off, on);		// .15
+	    _:      _uint16;		// .16-31
+        }: packed, lsb, out;
+	mcomd:								// 0x024
+	{   read:   boolean;		// .00
+	    scan:   boolean;		// .01
+	    _:      0..0x3FFF_FFFF;	// .02-31
+        }: packed, lsb, out;
+	maddr:								// 0x028
+	{   regadr: 0..31;		// .00-04
+	    _:      0..0b111;		// .05-07
+	    phyadr: 0..31;		// .08-12
+	    _:      0..0x7_FFFF;	// .13-31
+        }: packed, lsb, out;
+	mwrite:     _uint32: out, wo;   // only low 16-bits valid	// 0x02C
+	mread:      _uint32: in, ro;    // only low 16-bits valid	// 0x030
+	mind:								// 0x034
+	{   busy:   boolean;		// .00
+	    scan:   boolean;		// .01
+	    valid:  boolean;		// .02
+	    linkfail: boolean;		// .03
+	    _:      0..0xFFF_FFFF;	// .04-31
+        }: packed, lsb, in, ro;
+	_: [2]_uint32;						  // 0x038-0x03C
+	sa0:								// 0x040
+	{   a1:     _byte;		// .00-07
+	    a0:     _byte;		// .08-15
+	    _:      _uint16;		// .15-31
+	}: packed, lsb, out;
+	sa1:								// 0x044
+	{   a3:     _byte;		// .00-07
+	    a2:     _byte;		// .08-15
+	    _:      _uint16;		// .15-31
+	}: packed, lsb, out;
+	sa2:								// 0x048
+	{   a5:     _byte;		// .00-07
+	    a4:     _byte;		// .08-15
+	    _:      _uint16;		// .15-31
+	}: packed, lsb, out;
+	_: [45]_uint32;						  // 0x04C-0x0FC
+	comd:								// 0x100
+	{   rxenb:  boolean;		// .00
+	    txenb:  boolean;		// .01
+	    _:      0..1;		// .02
+	    regrst: boolean;		// .03
+	    txrst:  boolean;		// .04
+	    rxrst:  boolean;		// .05
+	    runt:   (ignore, allow);	// .06
+	    rxfilt: boolean;		// .07
+	    txflow: boolean;		// .08
+	    rmii:   boolean;		// .09
+	    fulldpx:boolean;		// .10
+	    _:      0..0x1F_FFFF;	// .11-31
+	}: packed, lsb, out;
+	stat:								// 0x104
+	{   rxactv: boolean;		// .00
+	    txactv: boolean;		// .01
+	    _:      0..0x3FFF_FFFF;	// .02-31
+        }: packed, lsb, in, ro;
+	rxdesc:    @[]RxDesc: out;	// address word aligned		// 0x108
+	rxstat:    @[]RxStat: out;	// address double-word aligned	// 0x10C
+	rxnumd:    _uint32: out;	// minus-1 only 16-bits valid	// 0x110
+	rxprod:    _uint32: in, ro;	// only 16-bits valid		// 0x114
+	rxcons:    _uint32: out; 	// only 16-bits valid		// 0x118
+	txdesc:    @[]TxDesc: out;	// address word aligned		// 0x11C
+	txstat:    @[]TxStat: out;	// address word aligned		// 0x120
+	txnumd:    _uint32: out;	// minus-1 only 16-bits valid	// 0x124
+	txprod:    _uint32: out; 	// only 16-bits valid		// 0x128
+	txcons:    _uint32: in, ro;	// only 16-bits valid		// 0x12C
+	_: [10] _uint32;					  // 0x130-0x154
+	tsv0:								// 0x158
+	{   crcerr: boolean;		// .00
+	    lenchk: boolean;		// .01
+	    lenrng: boolean;		// .02
+	    done:   boolean;		// .03
+	    multic: boolean;		// .04
+	    broadc: boolean;		// .05
+	    deferd: boolean;		// .06
+	    exdefr: boolean;		// .07
+	    excoll: boolean;		// .08
+	    latecol:boolean;		// .09
+	    giant:  boolean;		// .10
+	    undrrun:boolean;		// .11
+	    bytes:  0..0xFFFF;		// .12-27
+	    cntlfrm:boolean;		// .28
+	    pause:  boolean;		// .29
+	    backprs:boolean;		// .30
+	    vlan:   boolean;		// .31
+        }: packed, lsb, in, ro;
+	tsv1:								// 0x15C
+	{   txbcnt: _uint16;		// .00-15
+	    txcoll: 0..15;		// .16-19
+	    _:      0..0xFFF;		// .20-31
+        }: packed, lsb, in, ro;
+	rsv:								// 0x160
+	{   bytes:  _uint16;		// .00-15
+	    ignore: boolean;		// .16
+	    short:  boolean;		// .17
+	    carrier:boolean;		// .18
+	    recverr:boolean;		// .19
+	    crcerr: boolean;		// .20
+	    lenchk: boolean;		// .21
+	    lenrng: boolean;		// .22
+	    recvok: boolean;		// .23
+	    multic: boolean;		// .24
+	    broadc: boolean;		// .25
+	    dribble:boolean;		// .26
+	    cntlfrm:boolean;		// .27
+	    pause:  boolean;		// .28
+	    badopc: boolean;		// .29
+	    vlan:   boolean;		// .30
+	    _:      0..1;		// .31
+	}: packed, lsb, in, ro;
+	_: [3]_uint32;						  // 0x164-0x16C
+	flowcntlcounter:						// 0x170
+	{   mirror: _uint16;
+	    pause:  _uint16;
+	}: packed, lsb, out;
+	flowcntlstat:							// 0x174
+	{   mirror: _uint16;
+	    _:      _uint16;
+	}: packed, lsb, in, ro;
+	_: [34]_uint32;
+	rxfiltcntl:							// 0x200
+	{   unicast:boolean;		// .00
+	    broadc: boolean;		// .01
+	    multic: boolean;		// .02
+	    unihash:boolean;		// .03
+	    mulhash:boolean;		// .04
+	    perfect:boolean;		// .05
+	    _:      0..0x3F;		// .06-11
+	    magpwol:boolean;		// .12
+	    filtwol:boolean;		// .13
+	    _:      0..0x3_FFFF;	// .14-31
+	}: packed, lsb, out;
+	rxfiltwolstat:							// 0x204
+	{   unicast:boolean;		// .00
+	    broadc: boolean;		// .01
+	    multic: boolean;		// .02
+	    unihash:boolean;		// .03
+	    mulhash:boolean;		// .04
+	    perfect:boolean;		// .05
+	    _:      0..1;		// .06	
+	    filtwol:boolean;		// .07
+	    magpwol:boolean;		// .08
+	    _:      0..0x7F_FFFF;	// .09-31
+	}: packed, lsb, in, ro;
+	rxfiltwolclear:							// 0x208
+	{   unicast:boolean;		// .00
+	    broadc: boolean;		// .01
+	    multic: boolean;		// .02
+	    unihash:boolean;		// .03
+	    mulhash:boolean;		// .04
+	    perfect:boolean;		// .05
+	    _:      0..1;		// .06
+	    filtwol:boolean;		// .07
+	    magpwol:boolean;		// .08
+	    _:      0..0x7F_FFFF;	// .09-31
+	}: packed, lsb, out, wo;
+	_:	   _uint32;						// 0x20C
+	hashfiltlo: _uint32: out;				        // 0x210
+	hashfilthi: _uint32: out;				        // 0x214
+	_:	   [882]_uint32;				  // 0x218-0xFDC
+	IntStatus: IntStat: in, ro;				        // 0xFE0
+	IntEnable: IntStat: in, out;				        // 0xFE4
+	IntClear:  IntStat: out, wo;				        // 0xFE8
+	IntSet:    IntStat: out, wo;				        // 0xFEC
+	_:	   _uint32;						// 0xFF0
+	PowerDown: _uint32;						// 0xFF4
+    };
+
+    type Enet: @EnetRegs;
+    const enet: Enet = 0x5000_0000;
+    const vector:_uint8 = 28;
+
+    const PhyRWTimeout =  500;
+
+    /*
+     * The following bound procedures operate directly on the device registers
+     */
+    proc (en: Enet) PhyWrite(reg: PhyRegAddr, data: _uint16): boolean
+    {   var n: _uint;
+
+if db > 4 then {debug.str("PhyWrite: ");
+debug.hex8(_uint8(reg)); debug.chr(','); debug.hex16(data); debug.nl();}
+	en@.mcomd = {.read=false};
+	en@.maddr = {.regadr=reg, .phyadr=sys.PhyAddr};
+	en@.mwrite = data;
+	n = PhyRWTimeout;
+	while en@.mind.busy && n > 0 do n -= 1;
+if db > 5 then {debug.str("PhyWrite: n="); debug.uint(n); debug.nl();}
+	return n > 0;
+    }
+
+    proc (en: Enet) PhyRead(reg: PhyRegAddr): _uint16, boolean
+    {   var n: _uint;
+	var data: _uint16;
+
+	en@.mcomd = {.read=true};
+	en@.maddr = {.regadr=reg, .phyadr=sys.PhyAddr};
+	n = PhyRWTimeout;
+	while en@.mind.busy && n > 0 do n -= 1;
+if db > 5 then {debug.str("PhyRead: n="); debug.uint(n); debug.nl();}
+	// FIXME: check for en@.mind.valid?
+    	if n == 0 then return 0, false;
+	en@.mcomd = {.read=false};
+	data = _uint16(en@.mread);
+if db > 4 then {debug.str("PhyRead: ");
+debug.hex8(_uint8(reg)); debug.chr(','); debug.hex16(data); debug.nl();}
+	return data, true;
+    }
+
+    proc (en: Enet) LinkUp(speed: Speed, duplex: Duplex)
+    {
+
+if db > 0 then {debug.str("LinkUp: speed="); debug.uint8(_uint8(speed));
+debug.str(" duplex="); debug.uint8(_uint8(duplex)); debug.nl(); }
+	en@.supp = { .speed=speed };
+	if duplex == FULL then
+	{   en@.mac2.fulldpx = true;
+	    en@.comd.fulldpx = true;
+	    en@.ipgt = { .gap = 15 };
+	}
+	else
+	{   en@.mac2.fulldpx = false;
+	    en@.comd.fulldpx = false;
+	    en@.ipgt = { .gap = 12 };
+	}
+    }
+
+    proc (en: Enet) Dump()
+    {   var i: _uint32;
+
+	debug.dumpw("MAC:", 0x5000_0000, 10);
+	debug.dumpw("",     0x5000_0040, 3);
+	debug.dumpw("CMD:", 0x5000_0100, 12);
+	debug.dumpw("INT:", 0x5000_0FE0, 2);
+
+	debug.str("txcons="); debug.uint32(en@.txcons); debug.chr(' ');
+	debug.str("txprod="); debug.uint32(en@.txprod); debug.nl();
+	i = 0;
+	while i <= en@.txnumd do
+	{   debug.uint32(i);
+	    debug.str(": adr="); debug.hex32(_uint32(en@.txdesc@[i].addr));
+	    debug.str(" ctl=");  debug.hex32(_uint32(en@.txdesc@[i].cntl));
+	    debug.str(" sts=");  debug.hex32(_uint32(en@.txstat@[i].info));
+	    debug.nl();
+	    i += 1;
+	}
+
+	debug.str("rxcons="); debug.uint32(en@.rxcons); debug.chr(' ');
+	debug.str("rxprod="); debug.uint32(en@.rxprod); debug.nl();
+	i = 0;
+	while i <= en@.rxnumd do
+	{   debug.uint32(i);
+	    debug.str(": adr="); debug.hex32(_uint32(en@.rxdesc@[i].addr));
+	    debug.str(" ctl=");  debug.hex32(_uint32(en@.rxdesc@[i].cntl));
+	    debug.str(" sts=");  debug.hex32(_uint32(en@.rxstat@[i].info));
+	    debug.nl();
+	    i += 1;
+	}
+    }
+}
+
+import phy_dp83848;
+//import (sys.phy);
+
+package eth
+{
+    proc (en: Enet) Init(mac: @[6]_byte)
+    {	var sc: sysctl.SysCtl;
+
+if db > 0 then {debug.str("en.Init\n");}
+	// Turn on the ethernet block.
+	sc = sysctl.SysCtlAddr;
+	sc@.pconp.enet = on;
+
+	// Reset the ethernet modules.
+	en = enet;
+	en@.mac1 = { .rsttx=true, .rsttxmac=true, .rstrx=true, .rstrxmac=true,
+		     .rstrng=true, .rst=true };
+	en@.comd = { .regrst=true, .txrst=true, .rxrst=true };
+	// FIXME: do we have to delay here?
+
+	// Initialize MAC registers.
+	en@.mac1 = { .passall=true };		// release resets
+	en@.mac2 = { .crcenb=true, .padenb=true };
+	en@.maxf = { .len=1536 };
+	en@.clrt = { .maxtry=15, .colwin=55 };	// recommended values
+	en@.ipgr = { .gap2=18, .gap1=12 };	// recommended values
+	en@.comd = { .runt=allow, .rmii=true };	// release resets
+
+	// SetStationAddress
+	en@.sa0 = { mac[1], mac[0], 0 };
+	en@.sa1 = { mac[3], mac[2], 0 };
+	en@.sa2 = { mac[5], mac[4], 0 };
+
+	phy.PhyInit(en);
+	phy.SetAuto(en);
+    }
+
+    proc (en: Enet) Start()
+    {
+if db > 0 then debug.str("en.Start\n");
+	en@.rxfiltcntl = { .unicast=true, .broadc=true, .multic=true, .perfect=true };
+	en@.comd.rxenb = true;
+	en@.comd.txenb = true;
+	en@.mac1.recvenb = true;
+if db > 2 then {debug.str("comd="); debug.hex32(_uint32(en@.comd));
+debug.str(" stat="); debug.hex32(_uint32(en@.stat));
+debug.str(" mac1="); debug.hex32(_uint32(en@.mac1));
+debug.str(" mac2="); debug.hex32(_uint32(en@.mac2)); debug.nl();}
+	nvic.Enable(vector);
+	en@.IntEnable = { .RxDone=true, .TxDone=true };
+    }
+    
+    proc (en: Enet) DescInit(adr: _address, nrecv: _uint, nxmit: _uint)
+    {   var prstat: pRxStat;
+	var prdesc: pRxDesc;
+	var ptstat: pTxStat;
+	var ptdesc: pTxDesc;
+	var addr: _uint32;
+	var i: _uint;
+
+	addr = _uint32(adr);
+	// Ethernet DMA engine must be off when we do this
+	// Allocate xmit status and xmit descriptors and initialize
+	// 
+	ptstat = pTxStat(addr);
+	addr += nxmit * TxStat?size;
+	ptdesc = pTxDesc(addr);
+if db > 1 then {debug.str("TxI ptstat="); debug.hex32(_uint32(ptstat));
+debug.str(" ptdesc="); debug.hex32(_uint32(ptdesc)); debug.nl();}
+	addr += nxmit * TxDesc?size;
+	en@.txstat = ptstat;
+	en@.txdesc = ptdesc;
+	i = 0;
+	while i < nxmit do
+	{   ptstat@[i].info = {0};
+	    ptdesc@[i].addr = 0;
+	    ptdesc@[i].cntl = {0};
+	    i += 1;
+	}
+	en@.txnumd = nxmit-1;
+	en@.txprod = 0;
+
+	// Allocate recv status align(8), and recv descriptors align(4)
+	prstat = pRxStat(addr);
+	addr += nrecv * RxStat?size;
+	prdesc = pRxDesc(addr);
+if db > 1 then {debug.str("RxI prstat="); debug.hex32(_uint32(prstat));
+debug.str(" prdesc="); debug.hex32(_uint32(prdesc)); debug.nl();}
+	addr += nrecv * RxDesc?size;
+	en@.rxstat = prstat;
+	en@.rxdesc = prdesc;
+	i = 0;
+	while i < nrecv do
+	{   prstat@[i].info = {0};
+	    prstat@[i].hash = {0};
+	    prdesc@[i].addr = 0;
+	    prdesc@[i].cntl = {0};
+	    i += 1;
+	}
+	en@.rxnumd = nrecv-1;
+	en@.rxcons = 0;
+    }
+
+    /*
+     * The following bound procedures operate on additional state
+     * The memory for the state must be allocated elsewhere.
+     */
+    type State:
+    {   rxnext: _uint8;		// next Rx descriptor to unload
+	txnext: _uint8;		// next Tx descriptor to unload
+    };
+    type pState: @State;
+    // FIXME: kludge so interrupt know how to find state
+    var eths: pState;
+
+    proc (es: pState) RecvLoad(buf: _address, len: _uint): boolean
+    {   var i, n: _uint;
+        var prstat: pRxStat;
+	var prdesc: pRxDesc;
+	var e: Enet = enet;
+   
+	i = e@.rxcons;
+	n = i + 1;
+	if n > e@.rxnumd then n = 0;
+if db > 1 then {
+debug.str("RxL "); debug.uint(e.rxprod); debug.uint(i); debug.nl(); }
+	if n != e@.rxprod then
+	{   prstat = e@.rxstat;
+	    prdesc = e@.rxdesc;
+	    prstat@[i].info = {0};
+	    prstat@[i].hash = {0};
+	    prdesc@[i].addr = buf;
+	    prdesc@[i].cntl = {.size=len, .intr=true};
+	    e@.rxcons = n;
+	    return true;
+	}
+	return false;
+    }
+
+    proc (es: pState) XmitLoad(buf: _address, len: _uint): boolean
+    {   var pc, pn: _uint32;
+	var pdesc: pTxDesc;
+	var desc: TxDesc;
+	var e: Enet = enet;
+
+	pc = e@.txprod;
+	pn = pc + 1;
+	if pn > e@.txnumd then pn = 0;
+if db > 1 then {
+debug.str("TxL "); debug.uint(pc); debug.uint(e@.txcons); debug.nl(); }
+	if pn != e@.txcons then
+	{   desc.addr = buf;
+	    desc.cntl = { .size=len-1, .crc=true, .last=true, .intr=true };
+	    e@.txdesc@[pc] = desc;
+	    e@.txprod = pn;
+	    return true;
+	}
+	return false;	// no free descriptor
+    }
+
+    proc (es: pState) RecvUnload(): _address, _uint
+    {   var i: _uint;
+	var adr: _address;
+	var len: _uint;
+	var e: Enet = enet;
+
+	i = es@.rxnext;
+if db > 1 then {
+debug.str("RxD "); debug.uint(e@.rxprod); debug.uint(e@.rxcons);
+debug.uint(i); debug.nl(); }
+	if i != e@.rxprod then
+	{   adr = e@.rxdesc@[i].addr;
+	    len = e@.rxstat@[i].info.size + 1 - 4;	// incl CRC?
+	    i += 1;
+	    if i > e@.rxnumd then i = 0;
+	    es@.rxnext = i;
+	    return adr, len;
+	}
+	return 0, 0;
+    }
+    
+    proc (es: pState) XmitUnload(): _address, _uint
+    {   var i: _uint;
+	var adr: _address;
+	var len: _uint;
+	var e: Enet = enet;
+
+	i = es@.txnext;
+if db > 1 then {
+debug.str("TxD "); debug.uint(e@.txprod); debug.uint(e@.txcons);
+debug.uint(i); debug.nl(); }
+	if i != e@.txcons then
+	{   adr = e@.txdesc@[i].addr;
+	    len = e@.txdesc@[i].cntl.size + 1;
+	    e@.txdesc@[i].addr = 0;
+	    i += 1;
+	    if i > e@.txnumd then i = 0;
+	    es@.txnext = i;
+	    return adr, len;
+	}
+	return 0, 0;
+    }
+
+    proc (es: pState) Start()
+    {
+if db > 0 then debug.str("eb.Start\n");
+	enet.Start();
+    }
+
+    proc (es: pState) Init(mac: @[6]_byte)
+    {
+if db > 0 then { debug.str("es.Init "); debug.hex32(_uint32(es)); debug.nl(); }
+	eths = es;      // save pointer to state
+	// Initialize device
+	enet.Init(mac);
+	// Initialize descriptors and other state
+	enet.DescInit(0x2007C000, 4, 4);    // FIXME AHB memory
+	es.rxnext = 0;
+	es.txnext = 0;
+    }
+
+    proc RecvFull(es: pState, adr: _address, len: _uint);	// forward
+    proc XmitEmpty(es: pState, adr: _address, len: _uint);      // forward
+    /*
+     * These are called from the interrupt
+     */
+    proc (es: pState) RecvDone()
+    {   var adr: _address;
+	var len: _uint;
+
+if db > 3 then debug.str("eth.RecvDone\n");
+	loop
+	{   adr, len = es.RecvUnload();
+	  exit adr == 0;
+	    RecvFull(es, adr, len);       // call to generic code
+	}
+    }
+
+    proc (es: pState) XmitDone()
+    {   var adr: _address;
+	var len: _uint;
+
+if db > 3 then debug.str("eth.XmitDone\n");
+	loop
+	{   adr, len = es.XmitUnload();
+	  exit adr == 0;
+	    XmitEmpty(es, adr, len);  // call to generic code
+	}
+    }
+
+    proc (es: pState) GetLinkState(wasup: boolean): boolean
+    {   var en: Enet = enet;
+
+	if phy.GetLinkState(en) then      // link is up
+	{   var speed: Speed;
+	    var duplex: Duplex;
+	    if !wasup then
+	    {   speed, duplex = phy.GetLinkSpeed(en);
+		en.LinkUp(speed, duplex);
+	    }
+	    return true;
+	}
+	else				// link is down
+	{
+	    return false;
+	}
+    }
+/*
+    proc Interrupt():: global("ENET_IRQ")
+    {   var istatus: eth.IntStat;
+        var es: pState;
+
+	es = eths;    
+	istatus = enet.IntStatus;
+if eth.db > 3 then {debug.str("eth.irq ");
+debug.hex32(_uint32(istatus)); debug.nl(); }
+	if istatus.RxDone then
+	{   es.RecvDone();
+	}
+	if istatus.TxDone then
+	{   es.XmitDone();
+	}
+	enet.IntClear = istatus;	// FIXME    
+    }
+*/
+}
+// vim: ts=8 sw=4 noet nowrap
+

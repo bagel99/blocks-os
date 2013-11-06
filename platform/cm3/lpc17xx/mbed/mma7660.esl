@@ -1,0 +1,129 @@
+/*
+ * Freescale MMA7660FC accelerator chip
+ *
+ * References:
+ *   1. Freescale Data Sheet, Document Number MMA7660FC, Rev 8, 03/2012.
+ *   2. Freescale App. Note, Document Number AN3837, Rev 2, 9/2009.
+ *   Note on table 9, page 14:  "To write to the registers the MODE bit in the
+ *   MODE (0x07) register must be set to 0, placing the device in Standby Mode."
+ *
+ * The angle values do not appear to be linear.
+ *
+ * Copyright (c) 2013, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+
+
+import i2c;
+
+package mma7660
+{
+    const i2caddr = 0x4c;	// factory address not shifted for R/W bit
+
+    type Regs:
+    (	XOUT=0x00, YOUT=0x01, ZOUT=0x02, TILT=0x03,
+	SRST=0x04, SPCNT=0x05,INTSU=0x06,MODE=0x07,
+	SR=0x08,   PDET=0x09, PD=0x0A
+    );
+    const ALERT: _uint8 = 0b0100_0000;	// Reg. invalid, under update when read
+
+    type TiltReg:
+    {	bf:    (UNKN, FRONT, BACK, _);
+	pl:    (UNKN, LEFT, RIGHT, _, _, DOWN, UP, _);
+	tap:   boolean;
+	alert: boolean;
+	shake: boolean;
+    };
+
+    // The g values for acceleration appears to be linear with slope 0.046875.
+    const g_scale: _uint16 = (46 * 8) + 7;	// units of milli-g * 8
+
+    type Dir: (X, Y, Z, T);
+    type State:
+    {   ics:   @i2c.State;
+	xyz:   [Dir]_uint8;
+    };
+    type AC: @State;
+
+    proc Compute_mg(n: _uint8): _int16
+    {   var neg: boolean;
+	var mg: _uint32;
+
+	neg = n & 0b100000 != 0;
+	mg =  ((n & 0b011111) * g_scale);
+	if mg & 0b100 != 0 then	// round
+	    mg += 0b1000;
+	if neg then
+	    mg = -mg;
+	return mg / 8;
+    }
+	
+    proc (ac: AC) UpdateXYZ()
+    {   var reg: [1]_byte;
+
+	reg[0] = _uint8(Regs.XOUT);
+	ac.ics.Write(i2caddr, reg, 1);
+	do
+	    ac.ics.Read(i2caddr, ac.xyz[X:3], 3);
+	while (ac.xyz[X] & ALERT != 0 ||
+	       ac.xyz[Y] & ALERT != 0 ||
+	       ac.xyz[Z] & ALERT != 0);
+debug.str("xyz="); debug.uint8(ac.xyz[X]); debug.chr(' ');
+debug.uint8(ac.xyz[Y]); debug.chr(' ');
+debug.uint8(ac.xyz[Z]); debug.nl();
+	
+    }
+
+    proc (ac: AC) ReadTilt(): _uint8
+    {   var buf: [2]_byte;
+
+	buf[0] = _uint8(Regs.TILT);
+	ac.ics.Write(i2caddr, buf[0:1], 1);
+	ac.ics.Read(i2caddr, buf[1:1], 1);
+	return buf[1];
+    }
+
+    proc (ac: AC) DumpRegs()
+    {   var reg: [1]_byte;
+	var dump: [11]_byte;
+	var i: _uint;
+
+	reg[0] = _uint8(Regs.XOUT);
+	ac.ics.Write(i2caddr, reg, 1);
+	ac.ics.Read(i2caddr, dump, 11);
+	debug.str("mma dump:");
+	for i from 0 to 10 do
+	{   debug.chr(' '); debug.hex8(dump[i]);
+	}
+	debug.nl();
+    }
+
+    /*
+     * The chip must be in standby mode to change the registers.
+     */
+    proc (ac: AC) Write(reg: Regs, data: _uint8)
+    {   var buf: [2]_byte;
+
+	buf[0] = _uint8(reg);
+	buf[1] = data;
+	ac.ics.Write(i2caddr, buf, 2);    
+    }
+
+    proc (ac: AC) Init(ics: i2c.ICS)
+    {
+	// assume i2c state already initialized
+	ac.ics = ics;
+	ac.Write(MODE,  0x00);		// standby
+	ac.Write(SPCNT, 0x00);		// no sleep count
+	ac.Write(INTSU, 0x00);		// no interrupts
+	ac.Write(PDET,  0xE0);		// disable tap detection
+	ac.Write(SR,    0x34);
+	ac.Write(PD,    0x00);
+	ac.Write(MODE,  0x01);		// active mode
+ac.DumpRegs();
+//	ac.UpdateXYZ();
+//	ac.UpdateTilt();
+    }
+}
+

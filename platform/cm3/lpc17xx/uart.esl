@@ -1,0 +1,220 @@
+/*
+ * LPC17xx UARTs
+ * There are 4 UARTs.
+ *
+ * Copyright (c) 2009, Brian G. Lucas.  See LICENSE file.
+ * $Id: uart.esl 308 2012-02-11 18:23:37Z bgl $
+ */
+
+import sysctl;
+
+package uart
+{
+    // This is an ugly '550 compatible UART
+    // Registers are byte wide but on word alignments.
+    // Some registers have different functions depending on read or write.
+    // In addition, some registers are different depending on mode (DLAB).
+    // We will define two UART types:
+    // UartRegisters - for normal use when DLAB=0
+    // UartAlternate - for setup when DLAB=1
+
+    type OFF_ON: (off, on);
+    type WIDTH:  (bits5, bits6, bits7, bits8);
+    type STOP:   (stop1, stop2);
+    type PARITY: (none, odd=1, even=3, one=5, zero=7);
+
+    // Define register bits.
+    type IER_T:
+    {	rbr:	OFF_ON;
+	thre:	OFF_ON;
+	rxline:	OFF_ON;
+	modem:	OFF_ON;
+	_:	0..7;
+	cts:	OFF_ON;
+	abeo:	OFF_ON;
+	abto:	OFF_ON;
+    }: packed, lsb;
+    type IIR_T:
+    {   status:	(none, pending);
+	id:	(modem, thre, rda, rls, cti=6);
+	_:	0..3;
+	fifoenb:(off, on=3);
+	abeo:	OFF_ON;
+	abto:	OFF_ON;
+    }: packed, lsb;
+    type LCR_T:
+    {   width:	WIDTH;
+	stop:	STOP;
+	parity:	PARITY;
+	break:	OFF_ON;
+	dlab:	OFF_ON;
+    }: packed, lsb;
+    type FCR_T:
+    {   fifoenb:OFF_ON;
+	rxreset:(none, reset);
+	txreset:(none, reset);
+	dmamode:(off, on);
+	_:	0..3;
+	rxtrig:	(char1, char4, char8, char14);
+    }: packed, lsb;
+    type MCR_T:
+    {   dtrpin:	OFF_ON;
+	rtspin:	OFF_ON;
+	_:	0..3;
+	loopbk:	OFF_ON;
+	_:	0..1;
+	rtsflc:	OFF_ON;
+	ctsflc:	OFF_ON;
+    }: packed, lsb;
+    type LSR_T:
+    {	rdr:	(empty, valid);
+	oe:	(none, error);
+	pe:	(none, error);
+	fe:	(none, error);
+	bi:	(none, active);
+	thre:	(valid, empty);
+	temt:	(active, empty);
+	rxfe:	(none, error);
+    }: packed, lsb;
+    type MSR_T:
+    {	ctschg:	(none, changed);
+	dsrchg:	(none, changed);
+	richg:	(none, changed);
+	dcdchg:	(none, changed);
+	cts:	(up, down);
+	dsr:	(up, down);
+	ri:	(up, down);
+	dcd:	(up, down);
+    }: packed, lsb;
+    type FDR_T:
+    {   div:	0..15;
+	mul:	0..15;
+    }: packed, lsb;
+
+    // used during normal operation
+    type UartRegisters:
+    {   data:	_byte: in, out, align(4);	// recv/xmit data	// 0x00
+	ier:	IER_T: in, align(4);					// 0x04
+	iir:	IIR_T: in, ro, align(4);	// in=iir out=fcr 	// 0x08
+	lcr:	LCR_T: out, align(4);				// 0x0C
+	mcr:	MCR_T: in, out, align(4);				// 0x10
+	lsr:	LSR_T: in, ro, align(4);				// 0x14
+	msr:	MSR_T: in, ro, align(4);				// 0x18
+	scr:	_byte: align(4);					// 0x1C	
+	acr:	_byte: in, out, align(4);				// 0x20
+	_:	_byte : align(4);					// 0x24
+	fdr:	FDR_T: out, align(4);				// 0x28
+	ter:	_byte: in, out, align(4);				// 0x30
+	_:	_byte: align(4);					// 0x34
+	_:	_byte: align(4);					// 0x38
+	_:	_byte: align(4);					// 0x3C
+	_:	_byte: align(4);					// 0x40
+	_:	_byte: align(4);					// 0x44
+	_:	_byte: align(4);					// 0x48
+	rs485ctl: _byte: in, out, align(4);				// 0x4C
+	adrmatch: _byte: in, out, align(4);				// 0x50
+	rs485dly: _byte: in, out, align(4);				// 0x54
+	fifolvl:  _byte: in, ro, align(4);				// 0x58
+    }: lsb;
+
+    // used during setup or when dlab=1
+    type UartAlternate:
+    {   dll:	_byte: in, out, align(4);	// divisor lo		// 0x00
+	dlm:	_byte: in, out, align(4);	// divisor hi		// 0x04
+	fcr:	FCR_T: out, wo, align(4);	// in=iir out=fcr	// 0x08
+	lcr:	LCR_T: out, align(4);				// 0x0C
+	mcr:	MCR_T: in, out, align(4);				// 0x10
+	lsr:	LSR_T: in, ro, align(4);				// 0x14
+	msr:	MSR_T: in, ro, align(4);				// 0x18
+	scr:	_byte: align(4);					// 0x1C	
+	acr:	_byte: in, out, align(4);				// 0x20
+	_:	_byte : align(4);					// 0x24
+	fdr:	_byte: in, out, align(4);				// 0x28
+	ter:	_byte: in, out, align(4);				// 0x30
+	_:	_byte: align(4);					// 0x34
+	_:	_byte: align(4);					// 0x38
+	_:	_byte: align(4);					// 0x3C
+	_:	_byte: align(4);					// 0x40
+	_:	_byte: align(4);					// 0x44
+	_:	_byte: align(4);					// 0x48
+	rs485ctl: _byte: in, out, align(4);				// 0x4C
+	adrmatch: _byte: in, out, align(4);				// 0x50
+	rs485dly: _byte: in, out, align(4);				// 0x54
+	fifolvl:  _byte: in, ro, align(4);				// 0x58
+    }: lsb;
+
+    type Uart:    @UartRegisters;
+    type UartAlt: @UartAlternate;
+
+    const uarts: [4]Uart = {0x4000_C000,0x4001_0000,0x4009_8000,0x4009_C000};
+
+    // Methods
+
+    proc (u: Uart) SetSpeed(speed: _uint32)
+    {   var us: UartAlt;
+	var divisor: 0..0xFFFF;
+
+	us = UartAlt(u);
+	us@.lcr.dlab = on;		// turn on access to dll/dlm
+	// FIXME: hardwired to 9600 baud with PCLK = 18mHz
+	divisor = 117;
+	us@.dll = divisor & 0xFF;
+	us@.dlm = divisor >> 8;
+	us@.lcr.dlab = off;		// turn off access to dll/dlm
+    }	
+
+    proc (u: Uart) SetFormat(w: WIDTH, s: STOP, p: PARITY)
+    {
+	u@.lcr = { .width=w, .stop=s, .parity=p };
+    }
+
+    proc (u: Uart) Send(data: _byte)
+    {
+	while u@.lsr.thre != empty do
+	    {}		// spin until xmit ready
+	u@.data = data;
+    }
+
+    proc Init(n: 0..3): Uart
+    {   var u: Uart;
+	var us: UartAlt;
+	var sc: sysctl.SysCtl;
+
+	u = uarts[n];
+	// enable power to the block and set peripheral clock
+	sc = sysctl.SysCtlAddr;
+	if n
+	is 0 then { sc@.pconp.uart0 = on; sc@.pclk0.uart0 = div4; }
+	is 1 then { sc@.pconp.uart1 = on; sc@.pclk0.uart1 = div4; }
+	is 2 then { sc@.pconp.uart2 = on; sc@.pclk1.uart2 = div4; }
+	is 3 then { sc@.pconp.uart3 = on; sc@.pclk1.uart3 = div4; }
+	else return 0;
+	// set FIFO mode
+	us = UartAlt(u);
+	us@.fcr = { .fifoenb=on };	// enable FIFO
+	u@.ier = { off };		// all interrupts disabled
+	// set default character format and speed
+	u.SetFormat(bits8, stop1, none);
+	u.SetSpeed(9600);
+	return u;
+    }
+
+} // end package
+
+// For debugging
+package debug
+{
+    // If Init not defined, they we are the debug port
+    if !_defined(Init) then {
+	var u: uart.Uart;
+	proc Init()
+	{
+	u = uart.Init(sys.DebugPort);
+	}
+	proc PutC(c: _byte)
+	{
+	u.Send(c);
+	}
+    }
+}
+

@@ -1,0 +1,68 @@
+/*
+ * The Nested Vectored Interrupt Control is part of the ARM Cortex-M3 core.
+ *
+ * Copyright (c) 2009, Brian G. Lucas.  See LICENSE file.
+ * $Id: nvic.esl 283 2012-02-02 22:32:42Z bgl $
+ */
+
+package nvic
+{
+    type NvicRegisters:
+    {	iser: [16]_uint32: out, in;     // set enable
+	_:    [16]_uint32;
+	icer: [16]_uint32: out, in;     // clear enable
+	_:    [16]_uint32;
+	ispr: [16]_uint32: out, in;     // set pending
+	_:    [16]_uint32;
+	icpr: [16]_uint32: out, in;     // clear pending
+	_:    [16]_uint32;
+	iabr: [16]_uint32: in, ro;      // active
+	_:    [16]_uint32;
+	_:    [16]_uint32;
+	_:    [16]_uint32;
+	ipr:  [124] 0..255: out, in;
+    };
+
+    var nv: NvicRegisters: external(0xE000_E100);
+
+    /*
+     * Cortex-M3 devices connected the the NVIC have exception vectors 
+     * starting at 16.  But we will use a zero base for NVIC controller vectors.
+     */
+    proc Enable(iv: _uint)
+    {
+        nv.iser[iv/32] = 1 << (iv%32);
+    }
+
+    proc Disable(iv: _uint)
+    {
+        nv.icer[iv/32] = 1 << (iv%32);
+    }
+
+    proc Clear(iv: _uint)
+    {
+        nv.icpr[iv/32] = 1 << (iv%32);
+    }
+
+    proc Set(iv: _uint)
+    {
+        nv.ispr[iv/32] = 1 << (iv%32);
+    }
+
+    proc SetPriority(iv: _uint, pri: 0..255)
+    {
+	nv.ipr[iv] = pri;
+    }
+
+    proc EnableAll():: inline
+    {
+	asm "cpsie\ti";
+    }
+
+    proc DisableAll():: inline
+    {
+	asm "cpsid\ti";
+    }
+}
+// vim: ts=8 sw=4 noet nowrap
+

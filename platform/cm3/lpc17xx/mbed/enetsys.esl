@@ -1,0 +1,64 @@
+/*
+ * The MBED has Ethernet PHY link status hooked to a GPIO pin without
+ * interrupt capability.  So we must use a timer to poll the pin.
+ * This file extends the enet driver to do that.
+ *
+ * Copyright (c) 2012, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+import enet;
+import timer;
+import eth;
+
+package eth	// Extend the package
+{
+    alias timer.TimerEvent as TimerEvent;
+    alias timer.pTimerEvent as pTimerEvent;
+
+    proc (eb: pEthBlock) ContinuePolling(te: pTimerEvent)
+    {
+	te.code = TSTART;
+	te.tag = eb.id;
+	te.ticks = timer.SecondsToTicks(2);	// 2 second polling interval
+	TimerID.Send(te);	
+    }
+
+    proc (eb: pEthBlock) EnablePolling()
+    {   var te: timer.pTimerEvent;
+
+	te = _new(timer.TimerEvent);
+	eb.ContinuePolling(te);
+    }
+
+    proc (eb: pEthBlock) CheckLinkStatus(e: pEvent): boolean
+    {   var te: pTimerEvent;
+
+	te = pTimerEvent(e);
+	eb.ContinuePolling(te);
+	// Port 1 pin 25 is low if PHY signals link up.
+	return !gpio.Tst({ .bit=25, .port=1 });
+    }
+
+    proc (eb: pEthBlock) Intr()
+    {
+    	if eb.nintr == 1 then eb.state.RecvDone();
+    	if eb.nintr == 0 then eb.state.XmitDone();
+    }
+
+    // FIXME - temporary until unified interrupt handling
+    proc Interrupt():: global("ENET_IRQ")
+    {
+if db > 2 then debug.str("enet_irq\n");
+        var e: Enet = enet;
+	var istatus: eth.IntStat;
+
+	istatus = enet.IntStatus;
+	enet.IntClear = istatus;	// FIXME  - clear all interrupts   
+	if istatus.RxDone then
+	    EthID.Post(1);
+	if istatus.TxDone then
+	    EthID.Post(0);
+    }
+}
+

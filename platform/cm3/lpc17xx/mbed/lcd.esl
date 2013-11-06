@@ -1,0 +1,250 @@
+/*
+ * LCD Display on the MBED application board
+ *
+ * Controller is Sitronix ST7565R used in SPI mode
+ *
+ * Copyright (c) 2013, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+import timer;
+import ssp;
+import fontdef;
+
+package lcd
+{
+    type Command:
+    (	COLHI=		0x00,	// 0b0000_HHHH
+	COLLO=		0x10,	// 0b0001_LLLL
+	RESRAT0=	0x20,	// 0b0010_0RRR
+	RESRAT1=	0x21,
+	RESRAT2=	0x22,
+	RESRAT3=	0x23,
+	RESRAT4=	0x24,
+	RESRAT5=	0x25,
+	RESRAT6=	0x26,
+	RESRAT7=	0x27,
+	POWERON=	0x2F,	// 0b0010_1ABC
+	LINE=           0x40,	// 0b0100_LLLL
+	CONTRAST=	0x81,	// 2 byte command
+	DIRNORM=	0xA0,
+	DIRREV=		0xA1,
+	BIAS0=		0xA2,
+	BIAS1=		0xA3,
+	VIDNORM=	0xA6,	// normal
+	VIDREV=		0xA7,	// reverse video
+	DISPOFF=	0xAE,
+	DISPON=		0xAF,
+	PAGE=		0xB0,
+	SCANNORM=	0xC0,
+	SCANREV=	0xC8,
+	RESET=		0xE2,
+	ENDRMW=		0xEE,
+	BOOST=		0xF8,	// 2 byte command
+    );
+
+    alias sys.LCD_RST as RST;
+    alias sys.LCD_A0  as A0;
+    alias sys.LCD_CS  as CS;
+    type State:
+    {
+	spi:    ssp.Ssp;
+	width:  _uint16;	// display width in pixels
+	height: _uint16;	// display height in pixels
+	col:    _uint16;	// current column in pixels
+	row:    _uint16;	// current row(line) in pixels
+	fp:     @font.Font;	// current font
+	buf:    [512]_uint8;
+    };
+    type DS: @State;
+
+    proc (ds: DS) Data(data: _uint8)
+    {
+	gpio.Set(A0);
+	gpio.Clr(CS);
+	ds.spi.Send(data);
+	gpio.Set(CS);
+    }
+
+    proc (ds: DS) Comd(cmd: Command)
+    {
+	gpio.Clr(A0);
+	gpio.Clr(CS);
+	ds.spi.Send(cmd);
+	gpio.Set(CS);
+    }
+
+    proc (ds: DS) Comd2(cmd: Command, cmd2: _uint8)
+    {
+	ds.Comd(cmd);
+	ds.Comd(Command(cmd2));
+    }
+
+    proc (ds: DS) SetVideo(invert: boolean)
+    {
+	if invert then ds.Comd(VIDREV); else ds.Comd(VIDNORM);
+    }
+
+    proc (ds: DS) SetContrast(contrast: _uint)
+    {
+    	ds.Comd2(CONTRAST, contrast&0x3F);
+    }
+
+    proc (ds: DS) SetCol(col: _uint)
+    {
+	ds.Comd(COLLO + (col&0xF));
+	ds.Comd(COLHI + (col>>4)&0xF);
+    }
+
+    proc (ds: DS) SetPage(page: _uint)
+    {
+	ds.Comd(PAGE + (page&07));
+    }
+
+    proc (ds: DS) Refresh()
+    {   var page: 0..3;
+	var i, k: _uint;
+
+	k = 0;
+	for page from 0 to 3 do
+	{   ds.SetCol(0);
+	    ds.SetPage(page);
+	    gpio.Set(A0);
+	    for i from 0 to 127 do
+	    	ds.Data(ds.buf[k+i]);
+	    k += 128;
+	}	    
+    }
+
+    proc (ds: DS) Clear()
+    {
+	_zero(ds.buf);
+	ds.Refresh();
+    }
+
+    proc (ds: DS) Reset()
+    {
+	gpio.Clr(A0);
+	gpio.Set(CS);
+	gpio.Clr(RST);		// assert reset
+	timer.Delay_us(50);	// wait 50 uS
+	gpio.Set(RST);		// de-assert reset
+	timer.Delay_ms(5);	// wait 5 mS
+	
+	ds.Comd(DISPOFF);	// display off
+	ds.Comd(BIAS0);		// bias voltage 0 setting
+	ds.Comd(DIRNORM);	// display normal
+	ds.Comd(SCANREV);
+	ds.Comd(RESRAT2);
+	ds.Comd(POWERON);
+	ds.Comd(LINE);		// line 0
+	ds.Comd(DISPON);
+	ds.SetContrast(0x17);
+	ds.Comd(VIDNORM);
+    }
+
+    proc (ds: DS) PutPixel(x: _uint, y: _uint, pix: boolean)
+    {   var pbyte: @_uint8;
+	var mask: _uint8;
+
+	if x > 128 || y > 32 then return;
+	pbyte = ds.buf[x + (y/8 * 128)];
+	mask = 1 << (y%8);
+	if pix != 0 then
+	    pbyte@ = pbyte@ | mask;
+	else
+	    pbyte@ = pbyte@ & ~mask;
+    }
+
+    proc (ds: DS) PutNewLine()
+    {
+	if ds.fp == 0 then return;
+    }
+
+    proc (ds: DS) PutChar(c: _uint16)
+    {   var gp: @font.Glyph;
+	var k, n, h, w, x, y: _uint;
+	var bm: _uint8;
+
+//debug.str("PutChar ");  debug.hex16(c); debug.nl();
+	if ds.fp == 0 then return;
+	if c == 0x0020 then	// space
+	{   ds.col += ds.fp.space;
+	}
+	else
+	{   gp = ds.fp.GetGlyph(c);
+//debug.str("gp="); debug.hex32(_uint32(gp)); debug.nl();
+	    if gp == 0 then return;	// no glyph
+	    x = ds.col + gp.xoffs;
+	    y = ds.row + gp.yoffs;
+	    k = gp.bitmap;	// bit map starting index
+//debug.str("x="); debug.uint(x);
+//debug.str(" y="); debug.uint(y);
+//debug.str(" k="); debug.uint(k); debug.nl();
+	    for h from 0 to gp.height-1 do
+	    {   for w from 0 to gp.width-1 do
+		{   if (w%8) == 0 then
+		    {   bm = ds.fp.bitmaps[k];
+			k += 1;
+		    }
+		    if (bm&0x80) != 0 then
+		    	ds.PutPixel(x+w, y+h, 1);
+		    bm = bm << 1;
+		}
+	    }
+	    ds.col += gp.xoffs + gp.width;
+	}
+    }
+
+    proc (ds: DS) PutString(s: @[]_byte)
+    {   var i: _uint;
+	var c: _uint16;
+
+//debug.str("PutString\n");
+	if ds.fp == 0 then return;
+	i = 0;
+	loop
+	{   c = _uint16(s[i]);	// FIXME - UTF8
+	  exit c == 0;
+	    ds.PutChar(c);
+	    i += 1;
+	}
+    }
+
+    proc (ds: DS) SetXY(x: _uint, y: _uint)
+    {
+//debug.str("SetXY\n");
+	ds.col = x;
+	ds.row = y;
+    }
+
+    proc (ds: DS) GetXY(): _uint, _uint
+    {
+	return ds.col, ds.row;
+    }
+
+    proc (ds: DS) SetFont(newfont: @font.Font)
+    {
+//debug.str("SetFont\n");
+//newfont.Dump();
+	ds.fp = newfont;
+    }
+
+    proc (ds: DS) Init()
+    {
+	ds.spi = ssp.Init(1, MODE3);
+	if ds.spi == 0 then return;
+	ds.spi.SetFrequency(10_000_000);	// try 10MHz
+	ds.spi.Enable(true);
+	ds.width = 128;
+	ds.height = 32;
+	ds.row = 0;
+	ds.col = 0;
+	ds.fp = 0;	// must be set by SetFont() before use
+
+	ds.Reset();	
+	ds.Clear();	// clear screen
+    } 
+ }
+ 
+ 

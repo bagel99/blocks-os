@@ -1,0 +1,85 @@
+/*
+ * Implementation of system timer using the Cortex-M tick timer.
+ *
+ * Copyright (c) 2012, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+import timerbase;
+
+import systick;
+
+package timer
+{
+    var tickcnt: _uint32: in, out;	// free running clock in ticks
+    var remains: _uint32;		// remaining time in ticks
+
+    proc Delay(nticks: _uint32, ncnt: _uint32)
+    {   var tick, cnt: _uint32;
+
+if db > 2 then {debug.str("nticks="); debug.uint32(nticks);
+debug.str(" ncnt="); debug.uint32(ncnt); debug.nl();}
+	nvic.DisableAll();			// mask systick irq
+	tick = tickcnt + nticks;
+	cnt  = systick.st.current + ncnt;
+	if cnt >= systick.st.reload then
+	{   cnt -= systick.st.reload;
+	    tick += 1;
+	}
+	nvic.EnableAll();			// unmask systick irq
+	while tickcnt < tick && systick.st.current < cnt do {}
+    }
+
+    proc Delay_ms(msec: _uint16)
+    {   var nticks, ncnt: _uint32;
+	var rate: _uint16;
+
+	rate = 1000/sys.TicksPerSecond;		// tick rate
+	nticks, ncnt = msec / rate, msec % rate;
+	ncnt = ncnt * (sys.CoreClock/1000);
+	Delay(nticks, ncnt);
+    }
+
+    proc Delay_us(usec: _uint16)
+    {   var ncnt: _uint32;
+
+	ncnt = usec * (sys.CoreClock/1000000);
+	Delay(0, ncnt);
+    }
+
+    proc (tb: pTimer) Set(delta: _uint32)
+    {
+if db > 2 then {debug.str("tmr.Set "); debug.uint32(delta); debug.nl();}
+	remains = delta;
+    }
+
+    proc (tb: pTimer) Get(): _uint32
+    {
+	return remains;
+    }
+
+    proc (tb: pTimer) Init()
+    {
+    	systick.Init(sys.CoreClock, sys.TicksPerSecond);
+if db > 0 then {debug.str("tmr.Init reload=");
+debug.hex32(systick.st.reload); debug.nl();}
+    	systick.EnableIntr(0);		// FIXME
+    }
+
+    proc (gtb: pTimer) Intr()
+    {
+if db > 8 then {debug.str("tmr.Intr "); debug.uint32(remains); debug.nl();}
+	tickcnt += 1;
+	if remains != 0 then
+	{   remains -= 1;
+	    if remains == 0 then
+		gtb.Elapsed();
+	}   
+    }
+
+    proc Interrupt(): : global("SYSTICK_IRQ")
+    {
+
+	TimerID.Post(0);
+    }
+}

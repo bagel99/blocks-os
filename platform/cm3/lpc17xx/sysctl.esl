@@ -1,0 +1,254 @@
+/*
+ * LPC17xx System Control
+ *
+ * Copyright (c) 2009, Brian G. Lucas.  See LICENSE file.
+ * $Id: sysctl.esl 239 2012-12-14 23:04:13Z bgl $
+ */
+
+package sysctl
+{
+    type OFF_ON_T: (off, on);
+    type RSID_T:
+    {   por:        boolean;		// power-on reset
+        extr:       boolean;		// external reset
+        wdtr:       boolean;		// watch-dog timer reset
+        bodr:       boolean;		// brown-out condition
+        _:          0..0xFFF_FFFF;	// reserved
+    }: packed, lsb;
+    type EXTINT_T:
+    {   eint0:      boolean;
+        eint1:      boolean;
+        eint2:      boolean;
+        eint3:      boolean;
+        _:	    0..0xFFF_FFFF;	// reserved
+    }: packed, lsb;
+    type SCS_T:
+    {   _:          0..15;		// reserved
+        oscrange:   (lo, hi);
+        oscenb:     boolean;
+        oscrdy:     boolean;
+        _:          0..0x1FF_FFFF;	// reserved
+    } : packed, lsb, in, out;
+    type CLK_T:
+    {	_:	0..0xFFFF_FFFF;		// what is at 0x100?		// 0x0
+	cpu:								// 0x4
+	{   sel:    0..255;	// divide PLL0 outout to get CPU clock
+	    _:      0..0xFF_FFFF;
+	}: packed, lsb, out;
+	usb:								// 0x8
+	{   sel:    0..15;	// divide PLL0 output to get USB clock
+	    _:      0..0xFFF_FFFF;
+	}: packed, lsb, out;
+	src:								// 0xC
+	{   sel:    (internalrc, main, rtc, invalid);
+	    _:	    0..0x3FFF_FFFF;
+	}: packed, lsb, out;
+    };
+    type PLL0_T:
+    {   ctl:
+	{   enb:    boolean;	// enable
+	    con:    boolean;	// connect
+	    _:	    0..0x3FFFFFFF;
+    	} : packed, lsb, out;
+	cfg:
+	{   m:      0..0x7FFF;		// M-1 in PLL calculations
+	    _:	    0..1;
+	    n:      0..0xFF;		// N in PLL calculations
+	    _:	    0..0xFF;
+    	} : packed, lsb, out;
+	sts:
+	{   m:      0..0x7FFF;
+	    _:	    0..1;
+	    n:      0..0xFF;
+	    enb:    boolean;
+            con:    boolean;
+	    lock:   boolean;
+	    _:	    0..0x1F;
+    	} : packed, lsb, ro, in;
+	feed:	    0..0xFFFF_FFFF: out;// sequence AA,55 to load configuration
+    };
+    type PLL1_T:
+    {   ctl:
+	{   enb:    boolean;	// enable
+	    con:    boolean;	// connect
+	    _:	    0..0x3FFFFFFF;
+    	} : packed, lsb, out;
+	cfg:
+	{   m:      0..31;		// M-1 in PLL calculations
+	    p:      0..3;		// log2(P) in PLL calculations
+	    _:	    0..0x1FFFFFF;
+    	} : packed, lsb, out;
+	sts:
+	{   m:      0..31;
+	    p:      0..3;
+	    _:      0..1;
+	    enb:    boolean;
+            con:    boolean;
+	    lock:   boolean;
+	    _:	    0..0x1FFFF;
+    	} : packed, lsb, ro, in;
+	feed:	    0..0xFFFF_FFFF: out;// sequence AA,55 to load configuration
+    };
+    type PCON_T:
+    {   pm:	(mode0, mode1, mode3=3);
+	bodrpm:	boolean;
+	bogd:	boolean;
+	bord:	boolean;
+	_:	0..0x7;		// typo in doc, 7:3 reserved should be 7:5
+	smflag:	boolean;
+	dsflag:	boolean;
+	pdflag:	boolean;
+	dpdflag:boolean;
+	_:	0..0xF_FFFF;
+    }: packed, lsb;
+    type PCONP_T:		// power control for peripherals
+    {	_:	OFF_ON_T;
+	timer0:	OFF_ON_T;
+	timer1:	OFF_ON_T;
+	uart0:	OFF_ON_T;
+	uart1:	OFF_ON_T;
+	_:	OFF_ON_T;
+	pwm1:	OFF_ON_T;
+	i2c0:	OFF_ON_T;
+	spi:	OFF_ON_T;
+	rtc:	OFF_ON_T;
+	ssp1:	OFF_ON_T;
+	_:	OFF_ON_T;
+	adc:	OFF_ON_T;
+	can1:	OFF_ON_T;
+	can2:	OFF_ON_T;
+	gpio:	OFF_ON_T;
+	rit:	OFF_ON_T;
+	mcpwn:	OFF_ON_T;
+	qei:	OFF_ON_T;
+	i2c1:	OFF_ON_T;
+	_:	OFF_ON_T;
+	ssp0:	OFF_ON_T;
+	timer2:	OFF_ON_T;
+	timer3:	OFF_ON_T;
+	uart2:	OFF_ON_T;
+	uart3:	OFF_ON_T;
+	i2c2:	OFF_ON_T;
+	i2s:	OFF_ON_T;
+	_:	OFF_ON_T;
+	gpdma:	OFF_ON_T;
+	enet:	OFF_ON_T;
+	usb:	OFF_ON_T;
+    }: packed, lsb;
+
+    type CLKOUT_T:
+    {	sel:	(cpu, main, rc, usb, rtc, rsvd=15);
+	div:	0..15;		// divide by div+1
+	enb:	(off, on);
+	act:	(off, on);
+	_:	0..0x3F_FFFF;
+    }: packed, lsb;
+
+    type PCLKDIV_T: (div4, div1, div2, div8);
+    type PCLKSEL0_T:
+    {   wdt:    PCLKDIV_T;
+	timer0:	PCLKDIV_T;
+	timer1:	PCLKDIV_T;
+	uart0:	PCLKDIV_T;
+	uart1:	PCLKDIV_T;
+	_:	PCLKDIV_T;
+	pwm1:	PCLKDIV_T;
+	i2c0:	PCLKDIV_T;
+	spi:	PCLKDIV_T;
+	_:	PCLKDIV_T;
+	ssp1:	PCLKDIV_T;
+	dac:	PCLKDIV_T;
+	adc:	PCLKDIV_T;
+	can1:	PCLKDIV_T;
+	can2:	PCLKDIV_T;
+	acf:	PCLKDIV_T;
+    }: packed, lsb;
+
+    type PCLKSEL1_T:
+    {   qei:	PCLKDIV_T;
+	gpio:	PCLKDIV_T;
+	pcb:	PCLKDIV_T;
+	i2c1:	PCLKDIV_T;
+	_:	PCLKDIV_T;
+	ssp0:	PCLKDIV_T;
+	timer2:	PCLKDIV_T;
+	timer3:	PCLKDIV_T;
+	uart2:	PCLKDIV_T;
+	uart3:	PCLKDIV_T;
+	i2c2:	PCLKDIV_T;
+	i2s:	PCLKDIV_T;
+	_:	PCLKDIV_T;
+	rit:	PCLKDIV_T;
+	syscon:	PCLKDIV_T;
+	mc:	PCLKDIV_T;
+    }: packed, lsb;
+    
+	
+    type SYSCTL_T:
+    {
+        _:      [16]_uint32;					// 000-03C
+	_:	_uint32;					// 040 - MEMMAP
+        _:      [15]_uint32;					// 044-07C
+        pll0:   PLL0_T;						// 080-08C
+        _:      [4]_uint32;					// 090-09C
+        pll1:   PLL1_T;						// 0A0-0AC
+        _:      [4]_uint32;					// 0B0-0BC
+        pcon:   PCON_T;						// 0C0
+        pconp:  PCONP_T;					// 0C4
+        _:      [14]_uint32;					// 0C8-0FC
+        clk:    CLK_T;						// 100-10C
+        _:      [12]_uint32;					// 110-13C
+	_:	_uint32;					// 140 EXTINT
+        _:      _uint32;					// 144 EXTMODE
+        _:      _uint32;					// 148 EXTPOLAR
+        _:      _uint32;					// 14C
+        _:      [12]_uint32;					// 150-17C
+        rsid:   RSID_T;						// 180
+	_:      [7]_uint32;					// 184-19C
+        scs:    SCS_T;						// 1A0
+        _:      _uint32;					// 1A4
+	pclk0:	PCLKSEL0_T;					// 1A8
+	pclk1:	PCLKSEL1_T;					// 1AC
+        _:      [6]_uint32;					// 1B0-1C4
+        clkout: CLKOUT_T;					// 1C8
+        _:      _uint32;					// 1CC
+        _:      [12]_uint32;					// 1D0-1FC
+    };
+
+    type SysCtl: @SYSCTL_T;
+    const SysCtlAddr: SysCtl = 0x400F_C000;
+
+    proc Init()
+    {   var sc: SysCtl = SysCtlAddr;
+
+        sc@.scs = { .oscrange=lo, .oscenb=true };	// enable XTAL
+	while !sc@.scs.oscrdy do
+	    {}	// loop until ready
+	sc@.clk.cpu = 3;		// PLL divisor for CPU (minus 1)
+	sc@.clk.src = { .sel=main };		// select XTAL as clock source
+	sc@.pll0.cfg = { .m=11, .n=0 };	// FIXME: assumes 12->72 MHz
+	sc@.pll0.ctl = { .enb=true, .con=false };	// enable
+	sc@.pll0.feed = 0xAA;  sc@.pll0.feed = 0x55;
+	while !sc@.pll0.sts.lock do
+	    {}	// loop until locked
+	sc@.pll0.ctl = { .enb=true, .con=true };	// enable and connect
+	sc@.pll0.feed = 0xAA;  sc@.pll0.feed = 0x55;
+	while !sc@.pll0.sts.enb || !sc@.pll0.sts.con do
+	    {}	// loop until enabled and connected
+    }
+
+    proc PLL1Init()
+    {   var sc: SysCtl = SysCtlAddr;
+
+	sc@.pll1.ctl = { .enb=true, .con=false };	// enable
+	sc@.pll1.cfg = { .m=3, .p=2 };	// FIXME: assumes 12MHz xtal
+	sc@.pll1.feed = 0xAA;  sc@.pll1.feed = 0x55;
+	while !sc@.pll1.sts.lock do
+	    {}	// loop until locked
+	sc@.pll1.ctl = { .enb=true, .con=true };	// enable and connect
+	sc@.pll1.feed = 0xAA;  sc@.pll1.feed = 0x55;
+	while !sc@.pll1.sts.enb || !sc@.pll1.sts.con do
+	    {}	// loop until enabled and connected
+    }
+}
+

@@ -1,0 +1,21 @@
+/*
+ * Cortex-M Floating Point Unit
+ *
+ * Copyright (c) 2013, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+import syscb;
+
+package fpu
+{
+
+
+    proc Init()
+    {
+	syscb.scb.cpacr[10] = FULL;	// enable access to CP10, CP11
+	syscb.scb.cpacr[11] = FULL;
+	asm "vmsr\tFPSCR,$0", "r", _uint32(0x200_0000);	
+    }
+}
+

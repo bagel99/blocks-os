@@ -1,0 +1,134 @@
+/*
+ * SSP on LPC17xx
+ * (ARM PrimeCell PL022)
+ *
+ * Reference: LCP17xx User Manual, UM10360, Rev 2., Chapter 18.
+ *
+ * Copyright (c) 2013, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+import chip;
+
+package ssp
+{
+    type ModeT:	// ckpol ckpha  For SPI format only
+    (   MODE0,	//   0     0
+	MODE1,	//   0     1
+	MODE2,	//   1     0
+	MODE3	//   1     1
+    );
+    type FormatT:
+    (	SPI,	// Motorola SPI
+    	TI,	// Texas Instruments Sync. Serial 
+    	MW,	// National Semiconductor Microwire
+    	_
+    );
+    /*
+     * Registers are 32-bits, but only the low bits are used.
+     */
+    type SSPRegs:
+    {	cr0:
+	{   dss:  0..15;	// .0-3 - one less than data bits, 0..2 illegal
+	    frf:  FormatT;	// .4-5
+	    mode: ModeT;	// .6-7
+	    scr:  0..0xFF;	// .8-15
+	}: packed, lsb, bits(32), out;
+	cr1:
+	{   lbm:  boolean;	// .0 - loop back mode
+	    enb:  boolean;	// .1 - enable
+	    slave:boolean;	// .2 - slave mode
+	    sod:  boolean;	// .3 - slave output disable
+	}: packed, lsb, bits(32), out;
+	dr:  0..0xFFFF: bits(32), in, out;
+	sr:
+	{   tfe:  boolean;
+	    tnf:  boolean;
+	    rne:  boolean;
+	    rff:  boolean;
+	    bsy:  boolean;
+	}: packed, lsb, bits(32), in;
+	cpsr: 0..0xFF: bits(32);
+	imsc:
+	{   ror:  boolean;
+	    rto:  boolean;
+	    rx:   boolean;
+	    tx:   boolean;
+	}: packed, lsb, bits(32), out;
+	RISR:
+	{   ror:  boolean;
+	    rto:  boolean;
+	    rx:   boolean;
+	    tx:   boolean;
+	}: packed, lsb, bits(32), in;
+	misr:
+	{   ror:  boolean;
+	    rto:  boolean;
+	    rx:   boolean;
+	    tx:   boolean;
+	}: packed, lsb, bits(32), in;
+	icr:
+	{   ror:  boolean;
+	    rto:  boolean;
+	}: packed, lsb, bits(32), in;
+    };
+    type Ssp: @SSPRegs;
+
+    proc (ssp: Ssp) Send(data: _uint16)
+    {
+//	while !ssp.sr.tnf do {}
+	ssp.dr = data;
+	while ssp.sr.bsy do {}
+    }
+
+    proc (ssp: Ssp) Enable(enb: boolean)
+    {
+    	ssp.cr1.enb = enb;
+    }
+
+    /*
+     * PCLK_SSPx is CoreClock/4
+     */
+    proc (ssp: Ssp) SetFrequency(freq: _uint)
+    {   const sspclk = sys.CoreClock/4;
+	var scr1: _uint;
+	var div:  _uint16;
+
+	scr1 = 1;
+	loop
+	{   div = sspclk / (scr1 * freq);
+	  exit div < 255;
+	    scr1 += 1;
+	}
+	div = _max(div, 2);
+	div = _min(div, 254);
+	div = (div+1) & ~1;	// next higher even
+	ssp.cpsr = div;
+	ssp.cr0.scr = scr1-1;
+    }
+
+    proc Init(n: _uint, mode: ModeT): Ssp
+    {   var ssp: Ssp;
+	var sc: sysctl.SysCtl;
+
+	sc = sysctl.SysCtlAddr;
+	if n
+	is 0 then
+	{   sc.pconp.ssp0 = on;
+	    sc.pclk1.ssp0 = div4;
+	    ssp = Ssp(chip.GetDeviceAddress(SSP0));
+	}
+	is 1 then
+	{   sc.pconp.ssp1 = on;
+	    sc.pclk0.ssp1 = div4;
+	    ssp = Ssp(chip.GetDeviceAddress(SSP1));
+	}
+	else
+	    return 0;
+	// Default to SPI mode, 8-bits
+	ssp.cr0 = { .dss=8-1, .frf=SPI, .mode=mode };
+	ssp.cr1 = { .slave=false };
+	return ssp;
+    } 
+}
+

@@ -1,0 +1,66 @@
+/*
+ *  NXP LM75B Temperature Sensor
+ *
+ * Copyright (c) 2013, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+import i2c;
+
+package lm75b
+{
+    // FIXME - This driver would be better with fixed-point types.
+
+    /*
+     * Temperatures are in Centigrade.  They are 16-bit 2-s complement fractions,
+     * most significant byte first.  The binary bit is between the two bytes and
+     * the low 5 bits of the fractional part are garbage.
+     *
+     * The i2c address depends on chip strapping.  If can vary from 0x48 to 0x4F.
+     * The following is a 7-bit address not shifted left for the R/W bit.
+     */
+    const i2caddr = 0x48;
+
+    type Regs:
+    (	TEMP, 	// ro: 16-bit temperature, signed 16-bits, MSB first, low 5 bits unused
+	CONF,	// rw: configuration, 8-bits just 1 used
+	HYST,	// rw: temperature hysteris, signed 16-bits
+	TOS	// rw: over temperature shutdown, signed 16-bits
+    );
+    type ConfReg:
+    {	_:      0..0b111;	// should be zero
+	queue:  (Q1,Q2,Q4,Q6);	// overtemp shutdown (0S) queue size
+	pol:    (LO,HI);	// OS signal polarity
+	mode:   (COMP,INTR);	// OS signal mode: comparator or interrupt
+	shutdn: boolean;	// to turn off chip operation
+    }: packed, msb;
+
+    type State:
+    {   ics:     i2c.ICS;
+    };
+    type LM: @State;
+
+    proc (lm: LM) GetTempInt(): _int8
+    {   var reg: [1]_byte;
+	var data: [2]_byte;
+	var temp: _int8;
+
+	reg[0] = _uint8(Regs.TEMP);
+	lm.ics.Write(i2caddr, reg, 1);
+	lm.ics.Read(i2caddr, data, 2);
+	temp = _int8(data[0]);	// MSB
+	if data[0] & 0x80 != 0 then
+	    temp += 1;		// round up
+	return temp;
+    }
+
+    proc Init(ics: i2c.ICS): LM
+    {   var lm: LM;
+
+	// assume i2c state already initialized
+	lm = LM(_new(State));
+	lm.ics = ics;
+	return lm;	
+    }
+}
+

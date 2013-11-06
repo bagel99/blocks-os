@@ -1,0 +1,149 @@
+/*
+ * Memory allocation using "first-fit" algorithm
+ * Includes alignment.
+ * Includes memory pools.
+ *
+ * Each memory chunk consists of a _int sized header followed by the
+ * usable memory.  The header is the size of the chunk and thus can be used
+ * to find the next chunk.  The size is negative if the chunk is allocated.
+ * WARNING: Maximum chunk size is half the address range. This is not checked.
+ *
+ * Alignment is on a power of 2 boundary, this is currently not checked.
+ * The minimum alignment is also the minimum allocation unit.
+ *
+ * Copyright (c) 2009-2013, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+package mem
+{
+    if !_defined(NPools) then
+	const NPools = 1;
+
+    type Chunk:
+    {   size: _int;		// negative if allocated, zero if end of list
+	data: _memory;
+    };
+    type pChunk: @Chunk;
+    const MinSize = _uint?size;	// minimum allocated size
+    const SplitSize:_int = 2*_uint?size; // minimum leftover worth splitting
+
+    type Pool:
+    {   clist: pChunk;		// all chunks previous to this are allocated
+	start: pChunk;		// first chunk in pool
+    };
+    var pools: [NPools]Pool: global("mempools");
+
+    proc Next(pc: pChunk): pChunk
+    {   var size: _uint;
+
+	size = _abs(pc@.size);
+	if size == 0 then
+	    return 0;
+	else
+	    return pChunk(_uint(pc) + size);
+    }
+
+    proc Remaining(pool: _uint): _uint
+		: global("memleft")
+    {   var pc: pChunk;
+	var free: _uint;
+
+	free = 0;
+	pc = pools[pool].start;
+	while pc != 0 do
+	{   if pc@.size > 0 then
+		free += pc@.size;
+	    pc = Next(pc);
+	}
+	return free;
+    }
+
+    // Init creates two chunks:
+    // The first chunk contains all the memory except the terminator.
+    // The second is of size 0 and acts as a terminator.
+    proc Init(addr: _address, size: _uint, pool: _uint)
+		: : global("meminit")
+    {   var pc: pChunk;
+
+	pc = pChunk(addr);
+	pools[pool].start = pc;
+	pools[pool].clist = pc;
+	size = size & _uint(~(_uint?size-1)); // round down
+	pc@.size = size - _uint?size;
+	pc = Next(pc);
+	pc@.size = 0;
+    }
+
+    // align must be a power of two, not checked
+    proc Alloc(uneed: _uint, align: _uint, pool: _uint): _address
+   		: global("memalloc") 
+    {   var pc, nc: pChunk;
+	var need: _int;		// signed
+	var addr, offs, mask: _uint;
+
+	need = (uneed + (MinSize-1)) & _uint(~(MinSize-1)); // round up
+	need += Chunk?size;	// include header size for comparisons
+	align = _max(align, _int?size);		// must be power of 2
+	mask = align-1;
+	pc = pools[pool].clist;
+	// skip over any allocated chunks
+	while pc != 0 && pc@.size < 0 do
+	    pc = Next(pc);
+	pools[pool].clist = pc;				// update first unallocated
+	while pc != 0 do
+	{   if pc@.size > 0 then			// unallocated
+	    {   if pc@.size >= need then
+		{   // size ok, can we align it?
+		    addr = _uint(pc) + Chunk?size;
+		    offs = addr & mask;
+		    if offs != 0 then
+		    	offs = align - offs;
+		    if pc@.size - offs >= need then
+		    {	// large enough after alignment
+		    	if offs != 0 then	// split off the alignment part
+		    	{   nc = pChunk(_uint(pc) + offs);
+		    	    nc@.size = pc@.size - offs;
+		    	    pc@.size = offs;
+		    	    pc = nc;
+		    	    addr += offs;
+		    	}
+			if pc@.size - need > SplitSize then // too big, split
+			{   nc = pChunk(_uint(pc) + need);
+			    nc@.size = pc@.size - need;
+			    pc@.size = need;
+			}
+			pc@.size = -pc@.size;		// mark allocated
+			if pc == pools[pool].clist then
+			    pools[pool].clist = Next(pc);
+			return _address(addr);
+		    }
+		    else
+			pc = Next(pc);
+		}
+		else		// too small, try to merge with next chunk
+		{   nc = Next(pc);
+		    if nc@.size > 0 then		// Next chunk also free
+			pc@.size += nc@.size;		// merge and try again
+		    else
+			pc = nc;			// otherwise, move on
+		}
+	    }
+	    else
+		pc = Next(pc);
+	}
+if _defined(debug) then debug.str("Out of Memory!\n");
+	return 0;				// no free memory large enough!
+    }
+
+    proc Free(addr: _address, size: _uint, pool: _uint)
+		: : global("memfree")
+    {   var pc: pChunk;
+
+	pc = pChunk(_uint(addr) - Chunk?size);
+	pc@.size = -pc@.size;
+	if _uint(pc) < _uint(pools[pool].clist) then
+	    pools[pool].clist = pc;
+    }
+}
+

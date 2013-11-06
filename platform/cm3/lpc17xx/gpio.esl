@@ -1,0 +1,246 @@
+/*
+ * LPC17xx General Purpose Input/Output
+ *
+ * Copyright (c) 2009, Brian G. Lucas.  See LICENSE file.
+ * $Id: gpio.esl 239 2012-12-14 23:04:13Z bgl $
+ */
+
+import nvic;
+
+package gpio
+{
+    // A compact way to describe a port/pin designation
+    type PortDesc:
+    {   bit:  0..31;
+        port: 0..4;
+    }: packed;
+
+    type PortFunction:
+    (   INPUT, INTFE, INTRE, INTBOTH, OUTPUT, ALT1, ALT2, ALT3 );
+    type PortInMode:
+    (   UP, REPEAT, NONE, DOWN );
+    type PortInit:
+    {   port: PortDesc;
+	func: PortFunction;
+	pull: PortInMode;
+	isod: boolean;
+	init: 0..1;
+	_:    0..1;
+    }: packed;
+
+    /*
+     * GPIO pins are organized into 5 ports of 32 bits each. 
+     * Not all bits in all ports are implemented in all chips.
+     * GPIO registers can be accessed as bytes, half-words, or words.
+     * For now, just use word wide registers.
+     */
+    type GPIOArray: [32] boolean: packed, lsb;
+    type GPIOReg:
+    {   dir:	[32] (IN, OUT): packed, lsb, out;		// 00
+	_:	[3] _uint32;					// 04-0C
+	mask:   [32] (no, yes): packed, lsb, out;		// 10
+	val:	GPIOArray: in;					// 14
+	set:	GPIOArray: out;					// 18
+	clr:	GPIOArray: out, wo;				// 1C
+    };
+    type GPIORegs: [5] GPIOReg;		// There are 5 ports of 32 bits.
+    type Gpio: @GPIORegs;
+    const GpioAddr: Gpio = 0x2009_C000;
+
+    proc Tst(pd: PortDesc): boolean
+    {   var gpio: Gpio = GpioAddr;
+
+	return gpio@[pd.port].val[pd.bit];
+    }	
+
+    proc Clr(pd: PortDesc)
+    {   var gpio: Gpio = GpioAddr;
+        var reg: GPIOArray;
+
+	reg = { [0..31]=false };
+	reg[pd.bit] = true;
+	gpio@[pd.port].clr = reg;
+    }	
+
+    proc Set(pd: PortDesc)
+    {   var gpio: Gpio = GpioAddr;
+        var reg: GPIOArray;
+
+	reg = { [0..31]=false };
+	reg[pd.bit] = true;
+	gpio@[pd.port].set = reg;
+    }	
+
+    /*
+     * GPIO interrupt registers
+     * Only port 0 and port 2 support interrupts
+     * The interrupt is via External Interrupt 3
+     */
+    type GPIOIntrRegSet:
+    {	rsts:   GPIOArray: ro, in;				// -4
+    	fsts:   GPIOArray: ro, in;				// -8
+    	iclr:   GPIOArray: wo, out;				// -C
+    	renb:   GPIOArray: out;					// -0
+    	fenb:   GPIOArray: out;					// -4
+    };
+    type GPIOIntrRegs:
+    {   sts:							// 80
+    	{   p0int:  boolean;
+    	    _:      0..1;
+    	    p2int:  boolean;
+    	    _:      0..0x1FFF_FFFF;
+    	}: packed, lsb, in;
+    	p0:     GPIOIntrRegSet;					// 84-94
+    	_:      [3]_uint32;					// 98-A0
+    	p2:     GPIOIntrRegSet;					// A4-B4
+    };
+    type GpioIntr: @GPIOIntrRegs;
+    const GpioIntrAddr: GpioIntr = 0x4002_8080;
+    const vector = 21;		// shared with external interrupt 3
+
+    type IntrType: (NONE, RISING, FALLING);
+
+    proc IntrClr(pd: PortDesc)
+    {   var gint: GpioIntr = GpioIntrAddr;
+	var clr: GPIOArray;
+
+	clr = {[0..31]=false};
+	clr[pd.bit] = true;
+	if pd.port
+	is 0 then gint.p0.iclr = clr;
+	is 2 then gint.p2.iclr = clr;
+    }
+	
+    proc IntrGet(): IntrType, PortDesc
+    {   var gint: GpioIntr = GpioIntrAddr;
+	var sts: GPIOArray;
+	var pin: 0..31;
+	var port: 0..4;
+	var which: IntrType;
+
+	sts = gint.p0.rsts;
+	if sts != {[0..31]=false} then
+	{   port = 0;  which = RISING;
+	}
+	else
+	{   sts = gint.p0.fsts;
+	    if sts != {[0..31]=false} then
+	    {   port = 0;  which = FALLING;
+	    }
+	    else
+	    {   sts = gint.p2.rsts;
+		if sts != {[0..31]=false} then
+		{   port = 2;  which = RISING;
+		}
+		else
+		{   sts = gint.p2.fsts;
+		    if sts != {[0..31]=false} then
+		    {   port = 2;  which = FALLING;
+		    }
+		    else
+			return NONE, {0,0};
+		}
+		    
+	    }
+	}	
+	pin = 0;
+	while pin <= 31 do
+	{   if sts[pin] then
+	    {   IntrClr({.bit=pin, .port=port});
+	    	return which, {.bit=pin, .port=port};
+	    }
+	    pin += 1;
+	}
+	return NONE, {0,0};
+    }
+
+    proc IntrEnable()
+    {
+	nvic.Enable(vector);
+    }
+
+
+    /*
+     * Pin control registers
+     */
+    type Selection: (GPIO, ALT1, ALT2, ALT3);
+    type SelectReg: [16] Selection: packed, lsb;
+    type ModeReg:   [16] PortInMode: packed, lsb;
+    type DrainReg:  [32] boolean: packed, lsb;
+    type PinCtlRegs:
+    {   sel:    [10]SelectReg: out;				// 00-24
+        sel10:  						// 28
+	{   _:      0..0b11;
+	    tpiu:   (disabled, enabled);
+	    _:      0..0x1FFF_FFFF;
+	}: packed, lsb, out;
+	_:      [5] _uint32;
+	mode:   [10]ModeReg: out;				// 40-64
+	odrain: [5] DrainReg: out;				// 68
+    };
+    type PinCtl: @PinCtlRegs;
+    const PinCtlAddr: PinCtl = 0x4002_C000;
+
+
+    //  INPUT  INTFE  INTRE INTBOT OUTPUT   ALT1   ALT2   ALT3
+    const Falling: [PortFunction] boolean =
+    {	false,  true, false,  true, false, false, false, false };
+    const Rising:  [PortFunction] boolean =
+    {	false, false,  true,  true, false, false, false, false };
+
+    proc Init(pi: PortInit)
+    {   var gpio: Gpio = GpioAddr;
+	var gint: GpioIntr = GpioIntrAddr;
+	var pinc: PinCtl = PinCtlAddr;
+	var p2, b2: _uint;
+
+	p2 = pi.port.port*2 + pi.port.bit/16;
+	b2 = pi.port.bit%16;
+	if pi.func
+	is INPUT, INTRE, INTFE, INTBOTH then	// input
+	{   gpio[pi.port.port].dir[pi.port.bit] = IN;
+	    pinc.sel[p2][b2] = GPIO;
+	    pinc.mode[p2][b2] = pi.pull;	// set pullup/dn mode	    
+	    pinc.odrain[pi.port.port][pi.port.bit] = false;
+	    if pi.port.port == 0 then
+	    {   
+		gint.p0.renb[pi.port.bit] = Rising[pi.func];
+		gint.p0.fenb[pi.port.bit] = Falling[pi.func];
+	    }
+	    else if pi.port.port == 2 then
+	    {
+		gint.p2.renb[pi.port.bit] = Rising[pi.func];
+		gint.p2.fenb[pi.port.bit] = Falling[pi.func];
+	    }
+	}   
+	is OUTPUT then				// output
+	{   // FIXME: check for correct order to prevent glitches
+	    gpio[pi.port.port].dir[pi.port.bit] = OUT;
+	    pinc.sel[p2][b2] = GPIO;
+	    if pi.isod then	// if open drain, pullups apply
+		pinc.mode[p2][b2] = pi.pull;
+	    else
+	    	pinc.mode[p2][b2] = NONE;	    
+	    pinc.odrain[pi.port.port][pi.port.bit] = pi.isod;
+	    if pi.init == 0 then
+	    	Clr(pi.port);
+	    else
+	    	Set(pi.port);
+	}
+	is ALT1 then
+	{
+	    pinc.sel[p2][b2] = ALT1;
+	    pinc.mode[p2][b2] = NONE;	// set pullup/dn mode	    
+	}
+	is ALT2 then
+	{
+	    pinc.sel[p2][b2] = ALT2;
+	    pinc.mode[p2][b2] = NONE;	// set pullup/dn mode	    
+	}
+	is ALT3 then
+	{
+	    pinc.sel[p2][b2] = ALT3;
+	}
+    }
+}
+

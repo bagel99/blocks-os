@@ -1,0 +1,746 @@
+/*
+ * LPC17xx USB Device Mode
+ *
+ * Copyright (c) 2012, Brian G. Lucas.  See LICENSE file.
+ * $Id: usbdev.esl 284 2013-03-01 19:45:12Z bgl $
+ */
+
+import sysctl;
+import usb;
+
+package usbdev
+{
+    if _defined(debug.db_usbdev) then
+	alias debug.db_usbdev as db;
+    else
+	const db = 0;
+
+    type USBClocks:
+    {   _:      0..1;			// .00
+	devclk: boolean;		// .01 device-mode clocks
+	_:      0..1;			// .02
+	portsel:boolean;		// .03
+	ahbclk: boolean;		// .04
+    }: packed, lsb, bits(32);
+    type USBClockRegs:
+    {   ctl:    USBClocks: out;						// FF4
+	sts:    USBClocks: ro, in;					// FF8
+    };
+    type USBClkCtl: @USBClockRegs;
+    const usbccr: USBClkCtl = 0x5000_CFF4;
+
+    type USBIntrReg:
+    {   lp:     boolean: ro;		// .00
+	hp:     boolean: ro;		// .01
+	dma:    boolean: ro;		// .02
+	_:      0..0x1F;		// .03-07
+	needclk:boolean: ro;		// .08
+	_:      0..0x3F_FFFF;		// .09-30
+	enable: boolean;		// .31
+    }: packed, lsb, in;
+    type USBIntr: @USBIntrReg;
+    const usbint: USBIntr = 0x400F_C1C0;
+
+    /*
+     * Device Mode Registers
+     *
+     * There are 32 device endpoints with fixed functionality.
+     * Even endpoints are OUT, odd are IN.
+     * These map directly into 16 endpoint addresses.
+     * CTRL and BULK packet sizes are 8,16,32,64 bytes.
+     * INTR packet sizes are 1..64.
+     * ISOC packet sizes are 1..1023.
+     * ISOC and BULK endpoints are double buffered.
+     */
+    const NumEP = 32;
+    type EPnum: 0..NumEP-1;
+    const EP0Rx = 0;
+    const EP0Tx = 1;
+    type EPadr: 0..15;
+
+    type EPType: (CTRL, ISOC, BULK, INTR);
+    type EPDescriptor:
+    {   num:   _uint8;  // ored with 0x80 if IN
+        type:  EPType: bits(8);
+        maxpkt:_uint16;
+    }: packed;
+    const EPUse: [EPadr]EPType =
+    {   CTRL,	INTR,	BULK,	ISOC,	INTR,	BULK,	ISOC,	INTR,
+	BULK,	ISOC,   INTR,	BULK,	ISOC,	INTR,	BULK,	BULK
+    };
+
+    type DevInterrupts:
+    {   frame:  boolean;		// .00
+	epfast: boolean;		// .01
+	epslow: boolean;		// .02
+	devstat:boolean;		// .03
+	ccempty:boolean;		// .04
+	cdfull: boolean;		// .05
+	rxep:   boolean;		// .06
+	txep:   boolean;		// .07
+	epreal: boolean;		// .08
+	error:  boolean;		// .09
+	_:      0..0x3F_FFFF;		// .10-31
+    }: packed, lsb;
+    type EPArray: [NumEP]boolean: packed, lsb;
+
+    type USBDevRegs:
+    {
+	intsts:	 DevInterrupts: ro, in;					// 200
+	intenb:  DevInterrupts: out;					// 204
+	intclr:  DevInterrupts: wo, out;				// 208
+	intset:  DevInterrupts: wo, out;				// 20C
+	cmdcode:							// 210
+	{   _:    0..0xFF;		// .00-07
+	    phase:(WRITE=1,READ=2,COMD=5): bits(8);
+	    data: _uint8;		// .16-23
+	}: packed, lsb, bits(32), wo, out;
+	cmddata: _uint32: ro, in;	// only low 8 bits valid	// 214
+	rxdata:	_uint32: le, ro, in;					// 218
+	txdata:	_uint32: le, wo, out;					// 21C
+	rxplen:								// 220
+	{   len:   0..1023;		// .00-09
+	    dv:    boolean;		// .10
+	    rdy:   boolean;		// .11
+	}: packed, lsb, bits(32), ro, in;
+	txplen:								// 224
+	{   len:   0..1023;		// .00-09
+	}: packed, lsb, bits(32), wo, out;
+	ctl:								// 228
+	{   rden:  boolean;		// .00
+	    wren:  boolean;		// .01
+	    epnum: 0..15;		// .02-05
+	}: packed, lsb, bits(32), in, out;
+	intpri:								// 22C
+	{   frame: boolean;		// .00
+	    epfast:boolean;		// .01
+	}: packed, lsb, bits(32), wo, out;
+	epists:  EPArray: ro, in;					// 230
+	epienb:  EPArray: out;						// 234
+	epiclr:  EPArray: wo, out;					// 238
+	episet:  EPArray: wo, out;					// 23C
+	epipri:  EPArray: wo, out;	// true means fast interrupt	// 240
+	epreal:  EPArray: out;						// 244
+	epindx:	 0..31: bits(32), wo, out;				// 248
+	maxpkt:	 0..1023: bits(32), out;// indirect via epindx		// 24C
+	dmarsts: EPArray: ro, in;					// 250
+	dmarclr: EPArray: wo, out;					// 254
+	dmarset: EPArray: wo, out;					// 258
+	udcahd: _address: out;	// address aligned to 128 bytes		// 280
+	epdsts: EPArray: ro, in;					// 284
+	epdenb: EPArray: wo, out;					// 288
+	epddis: EPArray: wo, out;					// 28C
+	dmaists:							// 290
+	{   eot:   boolean;		// .00
+	    nddr:  boolean;		// .01
+	    err:   boolean;		// .02
+	}: packed, lsb, bits(32), in;
+	dmaienb:							// 294
+	{   eot:   boolean;		// .00
+	    nddr:  boolean;		// .01
+	    err:   boolean;		// .02
+	}: packed, lsb, bits(32), out;
+	eotists: EPArray: ro, in;					// 2A0
+	eoticlr: EPArray: wo, out;					// 2A4
+	eotiset: EPArray: wo, out;					// 2A8
+	nddrsts: EPArray: ro, in;					// 2AC
+	nddrclr: EPArray: wo, out;					// 2B0
+	nddrset: EPArray: wo, out;					// 2B4
+	sysests: EPArray: ro, in;					// 2B8
+	syseclr: EPArray: wo, out;					// 2BC
+	syseset: EPArray: wo, out;					// 2C0
+    };
+    type usbd: @USBDevRegs;
+    const usbda: usbd = 0x5000_C200;
+    const vector = 24;
+
+    type SIEComd:
+    {   cmd:    _uint8;
+	dir:    (WR, RD);
+	siz:    0..3;
+    }: packed;
+    const SIESetAddress: SIEComd=   {.cmd=0xD0,.dir=WR,.siz=1};
+	const SIEAddressValid =0x80;		// with SetAddress
+    const SIEConfigDevice: SIEComd= {.cmd=0xD8,.dir=WR,.siz=1};
+    const SIESetMode: SIEComd=      {.cmd=0xF3,.dir=WR,.siz=1};
+	type SIEMode:
+	{   aclk:   boolean;	// .0 clock cannot be stopped
+	    nakci:  boolean;	// .1 interrupt on NAK control in
+	    nakco:  boolean;	// .2 interrupt on NAK control iout
+	    nakii:  boolean;	// .3 interrupt on NAK interrupt in
+	    nakio:  boolean;	// .4 interrupt on NAK interrupt out
+	    nakbi:  boolean;	// .5 interrupt on NAK bulk in
+	    nakbo:  boolean;	// .6 interrupt on NAK bulk out
+	}: packed, lsb, bits(8);
+    const SIECurFrameNo: SIEComd=   {.cmd=0xF5,.dir=RD,.siz=2};
+    const SIEReadTestReg: SIEComd=  {.cmd=0xFD,.dir=RD,.siz=2};
+    const SIEGetErrCode: SIEComd=   {.cmd=0xFF,.dir=RD,.siz=1};
+    const SIEReadErrStatus: SIEComd={.cmd=0xFB,.dir=RD,.siz=1};
+    const SIESelectEP: SIEComd=     {.cmd=0x00,.dir=RD,.siz=1};// +EPnum
+	type SIESelect:
+	{   fe:     boolean;	// .0 full/empty
+	    st:     boolean;	// .1 stalled
+	    stp:    boolean;	// .2 setup packet
+	    po:     boolean;	// .3 packet overwritten
+	    epn:    boolean;	// .4 NAK sent
+	    b1full: boolean;	// .5 buffer 1 is full
+	    b2full: boolean;	// .6 buffer 2 is full
+	}: packed, lsb, bits(8);
+    const SIEClearEPIntr: SIEComd=  {.cmd=0x40,.dir=RD,.siz=1};// +EPnum
+    const SIESetEPStatus: SIEComd=  {.cmd=0x40,.dir=WR,.siz=1};// +EPnum
+    const SIEClearBuf: SIEComd=     {.cmd=0xF2,.dir=RD,.siz=1};
+    const SIEValidateBuf: SIEComd=  {.cmd=0xFA,.dir=RD,.siz=0};
+    const SIEGetDevStatus: SIEComd= {.cmd=0xFE,.dir=RD,.siz=1};
+    const SIESetDevStatus: SIEComd= {.cmd=0xFE,.dir=WR,.siz=1};
+	type SIEDevStatus:
+	{   con:    boolean;	// .0 connected
+	    conchg: boolean;	// .1 connect changed
+	    sus:    boolean;	// .2 suspended
+	    suschg: boolean;	// .3 suspend changed
+	    rst:    boolean;	// .4 reset
+	}: packed, lsb, bits(8);
+
+
+    const DumpRegsTable: []_address =
+    {	0x400F_C1C0,
+	0x5000_CFF4,
+	0x5000_CFF8,
+    	0x5000_C200,
+    	0x5000_C204,
+    	0x5000_C230,
+    	0x5000_C234,
+    	0x5000_C244
+    };
+    proc DumpRegs()
+    {   type pwa: @_uint32;
+	var adr: pwa;
+	var i: _uint;
+	i = 0;
+	while i < DumpRegsTable?len do
+	{   adr = pwa(DumpRegsTable[i]);
+	    debug.hex32(_uint32(adr));
+	    debug.str(": ");
+	    debug.hex32(adr@);
+	    debug.nl();
+	    i += 1;
+	}
+    }
+
+    proc (ud: usbd) Command(comd: SIEComd, data: _uint8): _uint16
+    {   var rv: _uint16;
+
+	rv = 0;
+	ud.intclr = { .ccempty=true };
+	ud.cmdcode = { .phase=COMD, .data=comd.cmd };
+if db > 7 then { debug.chr('c'); debug.hex8(_uint8(comd.cmd)); }
+	while !ud.intsts.ccempty do {};		// spin until true
+	ud.intclr = { .ccempty=true };
+	if comd.dir == WR then
+	{
+if db > 7 then { debug.chr('<'); debug.hex8(data); debug.nl(); }
+	    ud.cmdcode = { .phase=WRITE, .data=data };
+	    while !ud.intsts.ccempty do {};	// spin until true
+	    ud.intclr = { .ccempty=true };
+	}
+	else	// read
+	{   if comd.siz != 0 then
+	    {
+
+		ud.cmdcode = { .phase=READ, .data=comd.cmd };
+		while !ud.intsts.cdfull do {};	// spin until true
+		ud.intclr = {.cdfull = true };
+		rv = _uint8(ud.cmddata);
+		if comd.siz > 1 then
+		{
+		    ud.cmdcode = { .phase=READ, .data=comd.cmd };
+		    while !ud.intsts.cdfull do {};	// spin until true
+		    ud.intclr = {.cdfull = true };
+		    rv = (_uint8(ud.cmddata) << 8) | rv;
+		}
+if db > 7 then { debug.chr('>'); debug.hex16(rv); debug.nl(); }
+	    }
+	}
+	return rv;
+    }
+
+    proc (ud: usbd) Status(): SIESelect
+    {   var rv: _uint8;
+
+	while !ud.intsts.cdfull do {};	// spin until true
+	rv = _uint8(ud.cmddata);
+if db > 7 then { debug.chr('s'); debug.hex8(rv); debug.nl(); }
+	return SIESelect(rv);
+    }
+
+    proc (ud: usbd) Read(epn: EPnum,
+    			   bb: @[]_byte /*align(4)*/, nb: _uint)
+    {   var nw, i, len: _uint;
+	type pwa: @[]_uint32;
+	var bw: pwa;
+
+    	// Set read enable bit
+    	ud.ctl = {.rden=true, .epnum=_uint8(epn)>>1};
+    	// Wait for ready
+    	while !ud.rxplen.rdy do
+    	    {}
+    	len = ud.rxplen.len;
+if db > 6 then { debug.chr('r'); debug.uint(len); debug.nl(); }
+    	// Copy in the data
+	bw = pwa(bb);
+	i = 0;
+    	while ud.rxplen.dv do	// FIXME: could check ud.ct.rden?
+    	{   // FIXME: buffer overflow
+    	    bw[i] = ud.rxdata;
+    	    i += 1;
+    	}
+    	// Finish up
+    	ud.ctl = {.rden=false};
+	ud.Command({.cmd=_uint8(epn), .dir=RD, .siz=1}, 0);
+	ud.Command(SIEClearBuf, 0);    	
+    }
+
+    proc (ud: usbd) Write(epn: EPnum,
+    			   bb: @[]_byte /*align(4)*/, nb: _uint)
+    {   var nw, i: _uint;
+	type pwa: @[]_uint32;
+	var bw: pwa;
+
+    	// Set write enable bit
+    	ud.ctl = {.wren=true, .epnum=_uint8(epn)>>1};
+    	// Set packet length
+    	ud.txplen = {.len=nb};
+if db > 6 then { debug.chr('w'); debug.uint(nb); debug.nl(); }
+    	// Copy out the data
+	bw = pwa(bb);
+	i = 0;
+	loop
+	{
+	    if nb != 0 then
+	    {   ud.txdata = bw[i];
+	   	i += 1;
+	    }
+	    else
+	    	ud.txdata = 0;		// zero length packet
+	  exit !ud.ctl.wren;
+	}
+
+	// Finish up
+	ud.ctl = {.wren=false};		// zero length needs this?
+	ud.Command({.cmd=_uint8(epn), .dir=RD, .siz=1}, 0);
+	ud.Command(SIEValidateBuf, 0);
+    }
+
+    const MaxEP = 3;	// FIXME - only implement 4 endpoints
+    type EPRange: 0..(MaxEP*2)+1;
+    type EPState:
+    {   num:     EPnum;
+	t:
+	{   isconf:  boolean;	// used in current configuration
+	    isin:    boolean;
+	    type:    EPType;
+	    zlp:     boolean;	// need zero length packet
+	    fixsized:boolean;	// max packet is one of several fixed sizes
+	    _:       0..0b11;
+	}: packed;
+	maxpkt:  _uint16;
+	xferlen: _uint16;
+	xfercnt: _uint16;
+	xferbuf: _address;
+    };
+    type eps: @EPState;
+    type DeviceState:       // generic device state
+    {   ep:      [EPRange]EPState;
+	buf:     [8]_byte: align(4);    // for receiving setup
+    };
+    type udevst: @DeviceState;
+
+    var usbds: DeviceState;		// FIXME - allocate?
+
+    /*
+     * The following are callbacks into the device "gadget" code
+     */
+    proc SetupOut(rqst: @usb.SetupPkt): _address, _uint;
+    proc SetupIn(rqst: @usb.SetupPkt): _address, _uint;
+    proc DataSent(ep: eps);
+    proc DataRcvd(ep: eps);
+
+    /*
+     * Endpoint State Methods
+     */
+    proc (ep: eps) Dump()
+    {
+debug.str("EP"); debug.uint8(_uint(ep.num));
+debug.str(" max="); debug.uint16(ep.maxpkt);
+debug.str(" len="); debug.uint16(ep.xferlen);
+debug.str(" cnt="); debug.uint16(ep.xfercnt);
+debug.nl();
+    }
+
+    proc (ep: eps) In()
+    {   var ud: usbd = usbda;
+	var len: _uint;
+
+if db > 4 then debug.str("Ix\n");
+	if ep.xfercnt == ep.xferlen then	// then we are done
+	    DataSent(ep);
+	else
+	{   len = ep.xferlen - ep.xfercnt;
+	    if len == 0 then	
+	    {   if ep.t.zlp then
+		{   ep.t.zlp = false;
+		    ud.Write(ep.num, 0, 0);
+		}
+	    }
+	    else
+	    {   if len >= ep.maxpkt then	
+		{   ep.t.zlp = len == ep.maxpkt;
+		    len = ep.maxpkt;
+		}
+		ud.Write(ep.num, ep.xferbuf[ep.xfercnt:len], len);
+		ep.xfercnt += len;
+	    }
+	}	
+    }
+
+    proc (ep: eps) Out()
+    {   var ud: usbd = usbda;
+	var len: _uint;
+
+if db > 4 then debug.str("Ox\n");
+	// FIXME - make sure this endpoint is "busy"
+	len = ep.xferlen - ep.xfercnt;
+	len = _min(len, ep.maxpkt);
+	ud.Read(ep.num, ep.xferbuf, len);
+	ep.xfercnt += len;
+	if ep.xferlen == ep.xfercnt then
+	    DataRcvd(ep);
+    }
+
+    proc (ep: eps) StartIn(buf: _address, len: _uint)
+    {   var ud: usbd = usbda;
+
+if db > 4 then debug.str("Si\n");
+	ep.xferbuf = buf;
+	ep.xferlen = len;
+	ep.xfercnt = 0;
+	len = _min(len, ep.maxpkt);
+	ud.Write(ep.num, ep.xferbuf[0: len], len);	
+	ep.xfercnt += len;
+    }
+
+    proc (ep: eps) StartOut(buf: _address, len: _uint)
+    {
+if db > 4 then debug.str("So\n");
+	ep.xferbuf = buf;
+	ep.xferlen = len;
+	ep.xfercnt = 0;
+    }
+
+    proc (ep: eps) EPInit()
+    {   var ud: usbd = usbda;
+	var epn: EPnum;
+
+	epn = ep.num;
+if db > 4 then { debug.chr('e'); debug.uint(_uint8(epn)); debug.nl(); }
+	ud.intclr = {.epreal=true};
+	ud.epreal[epn] = true;
+	ud.epindx = epn;
+	ud.maxpkt = ep.maxpkt;		// Set max packet size
+	while !ud.intsts.epreal do	// Wait for hardware to do its thing
+	    {}
+	ud.intclr = {.epreal=true};
+	ud.epienb[epn] = true;		// enable EP interrupt
+    }
+
+    /*
+     * Endpoint 0 (Control Endpoint) Routines
+     */
+    proc (ep: eps) EP0StartIn()
+    {   var len: _uint;
+
+if db > 4 then debug.str("Si0\n");
+	len = ep.xferlen - ep.xfercnt;
+	if len == 0 then
+	{   if ep.t.zlp then
+		usbda.Write(EP0Tx, 0, 0);
+	}
+	else
+	{   if len >= ep.maxpkt then
+	    {   ep.t.zlp = len == ep.maxpkt;
+		len = ep.maxpkt;
+	    }
+	    usbda.Write(EP0Tx, ep.xferbuf[ep.xfercnt:len], len);
+	    ep.xfercnt += len;
+	}
+    }
+
+    proc (ep: eps) EP0StartOut()
+    {
+if db > 4 then debug.str("So0\n");
+//	usbda.EPWrite(EP0Tx, ep.xferbuf, ep.xferlen);
+    }
+
+    proc (ep: eps) EP0In()
+    {
+if db > 4 then debug.str("I0\n");
+	if ep.xfercnt < ep.xferlen then
+	    ep.EP0StartIn();	// continue transfer
+	else
+	    usbda.Write(EP0Tx, 0, 0);	// Status out
+	
+    }
+
+    proc (ep: eps) EP0Out()
+    {
+if db > 4 then debug.str("O0\n");
+    }
+
+    proc (ep: eps) EP0Setup()
+    {   var ud: usbd = usbda;
+	var rqst: usb.pSetupPkt;
+	var buf: [usb.SetupPkt?size]_byte: align(4);
+	var adr: _address;
+	var len: _uint;
+
+if db > 4 then debug.str("SU\n");
+	ud.Read(EP0Rx, buf, buf?size);
+	rqst = usb.pSetupPkt(buf[0:usb.SetupPkt?size]);
+	if rqst.type.dir == IN then
+	{   // switch to IN endpoint
+	    ep = usbds.ep[EP0Tx];
+	    adr, len = SetupIn(rqst);
+	    ep.xferbuf = adr;
+	    ep.xferlen = _min(len, rqst.length);
+	    ep.xfercnt = 0;
+	    ep.t.zlp = false;	// FIXME?
+	    ep.EP0StartIn();
+	}
+	else	//dir == OUT
+	{   // handle SetAddress here
+	    if rqst.type == {.dir=OUT,.stype=Standard, .recip=Device} &&
+	       usb.StandardRequests(rqst.request) == SetAddress then
+		ud.Command(SIESetAddress, (rqst.value&0xFF)|SIEAddressValid);
+	    else
+	        adr, len = SetupOut(rqst);
+	    if rqst.length != 0 then
+	    {   ep.xferbuf = adr;
+		ep.xferlen = _min(len, rqst.length);
+		ep.xfercnt = 0;
+	    	ep.EP0StartOut();
+	    }
+	    else	// just status phase
+	    	ud.Write(EP0Tx, 0, 0);
+	}       
+	
+    }
+
+    proc (ud: usbd) DeviceReset()
+    {   var uds: udevst;
+
+if db > 4 then debug.str("R\n");
+	ud.epienb = {[0..31]=false};
+	ud.epiclr = {[0..31]=true};
+	ud.intclr = {.frame=true, .epfast=true, .epslow=true,
+		     .devstat=true, .error=true}; 
+	ud.Command(SIEConfigDevice, 0);
+	// Configure EP0 endpoints
+	uds =  usbds;
+	uds.ep[EP0Rx].EPInit();
+	uds.ep[EP0Tx].EPInit();
+	ud.intenb = {.epfast=true, .epslow=true,
+		     .devstat=true, .error=true};
+    }
+
+
+    proc (uds: udevst) EPInit0()
+    {
+
+	uds.ep[0].num = 0;
+	uds.ep[0].t = {.isconf = true, .isin=false, .type=CTRL };
+	uds.ep[0].maxpkt = 64;
+	uds.ep[1].num = 1;
+	uds.ep[1].t = {.isconf = true, .isin=true,  .type=CTRL };
+	uds.ep[1].maxpkt = 64;
+    }
+
+    proc (ep: eps) Activate()
+    {   var ud: usbd = usbda;
+	var epn: EPnum;
+
+if db > 4 then debug.str("A\n");
+	epn = ep.num;
+	ep.EPInit();
+	// must issue set EP status twice to initialize it
+	ud.Command({.cmd=_uint8(epn)+0x40, .dir=WR, .siz=1}, 0);
+	ud.Command({.cmd=_uint8(epn)+0x40, .dir=WR, .siz=1}, 0);
+	ud.Command(SIEConfigDevice, 1);	// this just turns on an indicator
+//DumpRegs();
+    }
+
+    proc EPAllocate(epd: EPDescriptor): eps
+    {   var ep: eps;
+	var epn: EPnum;
+	var epa: EPadr;
+	var isin: boolean;
+
+	isin = (epd.num & 0x80) != 0;
+	epa =   epd.num & 0x7F;
+	if epa == 0 || epa > MaxEP then return 0;
+	if EPUse[epa] != epd.type then return 0;
+	epn = epa * 2;
+	if isin then epn += 1;		// IN endpoints are odd numbers
+	ep = usbds.ep[epn];
+	ep.num = epn;
+	ep.t.isin = isin;
+	ep.t.type = epd.type;
+	ep.maxpkt = epd.maxpkt;
+	return ep;	
+    }
+
+    proc DeviceStart()
+    {   var ud: usbd = usbda;
+
+    }
+
+    proc DeviceInit()
+    {
+	var sc: sysctl.SysCtl = sysctl.SysCtlAddr;
+	var ucc: USBClkCtl = usbccr;
+	var ud: usbd = usbda;
+    	var ui: USBIntr = usbint;
+
+	usbds.EPInit0();
+	// Now turn on the hardware
+	// First, turn on the PLL providing USB clock
+	sysctl.PLL1Init();
+	// Next, power up the USB module to get register access
+	sc.pconp.usb = on;
+	// Next, turn clocks on in the USB module
+	ucc.ctl = { .devclk=true, .ahbclk=true };
+	// Then wait for clocks to be OK
+	while !ucc.sts.devclk || !ucc.sts.ahbclk do {}
+	
+	ui@.enable = false;		// disable master interrupt
+	ud.Command(SIESetMode, 0);	// Disable interrupts on NAKs
+	// Set address twice to force immediate action
+	ud.Command(SIESetAddress, 0|SIEAddressValid);
+	ud.Command(SIESetAddress, 0|SIEAddressValid);
+
+	ud.DeviceReset();
+	ud.Command(SIESetDevStatus, 1);	// Connect
+	
+	nvic.Enable(vector);
+	ui@.enable = true;		// enable master interrupt
+    }
+
+    /*
+     * First level interrupt handler
+     */
+    proc Interrupt():: global("USB_IRQ")
+    {
+	var ud: usbd = usbda;
+    	var ui: USBIntr = usbint;
+    	var gsts: USBIntrReg;
+    	var sts: DevInterrupts;
+    	var ep: eps;
+
+	gsts = ui@;
+	if gsts.lp || gsts.hp then
+	{   sts = ud.intsts;
+if db > 4 then
+{   debug.str("I "); debug.hex16(_uint32(sts)); debug.nl();
+}
+	    if sts.frame then
+	    {
+	    	ud.intclr = { .frame=true };
+	    }
+	    if sts.epfast then
+	    {
+	    	ud.intclr = { .epfast=true };
+	    }
+	    if sts.epslow then
+	    {   var eps: EPArray;
+	    	var epn: EPnum;
+	    	ud.intclr = { .epslow=true };
+	    	eps = ud.epists;
+if db > 4 then
+{  debug.str("EP "); debug.hex32(_uint32(eps)); debug.nl();
+}
+	    	// FIXME: loop twice, once for high priority, again for low
+	    	epn = 0;
+	    	while epn < 31 do
+	    	{   if eps[epn] then
+	    	    {   ud.epiclr[epn] = true;
+	    	    	ep = usbds.ep[epn];
+	    	    	if epn == 0 then
+	    	    	{   var es: SIESelect;
+	    	    	    es = ud.Status();
+	    	    	    if es.stp then
+	    	    	    	ep.EP0Setup();
+	    	    	    else
+	    	    	    	ep.EP0Out();
+	    	    	}
+	    	    	else
+	    	    	    ep.Out();
+	    	    }
+	    	    if eps[epn+1] then
+	    	    {   ud.epiclr[epn+1] = true;
+	    	    	ep = usbds.ep[epn+1];
+	    	    	if epn == 0 then
+	    	    	    ep.EP0In();
+	    	    	else
+	    	    	    ep.In();
+	    	    }
+	    	    epn += 2;
+	    	}
+	    }
+	    if sts.devstat then
+	    {   var ds: SIEDevStatus;
+	    	ud.intclr = { .devstat=true };
+	    	ds = SIEDevStatus(_uint8(ud.Command(SIEGetDevStatus, 0)));
+if db > 4 then
+{  debug.str("DS "); debug.hex8(_uint8(ds)); debug.nl();
+}
+	    	if ds.conchg then	// connection status change
+	    	{
+	    	}
+	    	if ds.suschg then	// suspend status change
+	    	{
+	    	}
+	    	if ds.rst then		// host reset device
+		{
+		    ud.DeviceReset();
+	    	}
+	    }
+	    if sts.ccempty then		// Never happens?
+	    {
+	    	ud.intclr = { .ccempty=true };
+	    }
+	    if sts.cdfull then		// Never happens?
+	    {
+	    	ud.intclr = { .cdfull=true };
+	    }
+	    if sts.rxep then
+	    {
+	    	ud.intclr = { .rxep=true };
+	    }
+	    if sts.txep then
+	    {
+	    	ud.intclr = { .txep=true };
+	    }
+	    if sts.epreal then
+	    {
+	    	ud.intclr = { .epreal=true };
+	    }
+	    if sts.error then
+	    {   var errcode: _uint8;
+	    	ud.intclr = { .error=true };
+	    	errcode = ud.Command(SIEReadErrStatus,0) & 0xF;
+if db > 4 then
+{  debug.str("ER "); debug.hex8(errcode); debug.nl();
+}
+	    }
+	}
+    }	
+}
+

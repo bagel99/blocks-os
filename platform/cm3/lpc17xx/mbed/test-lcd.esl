@@ -1,0 +1,80 @@
+/*
+ * Test of LCD on MBED App Board
+ */
+
+// Board specific stuff
+import sys;
+import trace;
+import debug;
+import uart;
+
+package debug
+{   const db_timer = 3;
+    const db_block = 2;
+    const db_ssp = 3;
+}
+
+// Cortex M3 stuff
+import fault;
+import systick;
+import nvic;
+
+// LPC1768 stuff
+import sysctl;
+
+import block;
+
+const TimerID: block.BlockID = 1;
+
+import timer;
+
+import lcd;
+// import font_mono5x8;  alias font_mono5x8 as myfont;
+import font_sans20x27b;  alias font_sans20x27b as myfont;
+
+var ds: lcd.State;	// FIXME - dynamic allocation
+
+proc meminit(addr: _address, size: _uint, pool: _uint): : external;
+
+proc main(): _int
+{
+    var u: uart.Uart;				// for debug print
+
+    sysctl.Init();
+    sys.Init();
+    debug.Init();
+
+debug.str("Starting test-lcd...\n");
+    meminit(0x2007C100, 0x7F00, 0);	// FIXME
+
+    timer.NewBlock(TimerID);
+sys.ledon(0);
+    ds.Init();
+sys.ledoff(0);
+    u = uart.Init(sys.DebugPort);		// for debug print
+var i, j: _uint;
+for i from 0 to 127 do ds.PutPixel(i, 0, 1);
+for j from 0 to 31  do ds.PutPixel(0, j, 1);
+for i from 0 to 127 do ds.PutPixel(i, 31, 1);
+for j from 0 to 32  do ds.PutPixel(127, j, 1);
+    ds.Refresh();
+sys.ledon(3);
+    ds.SetFont(myfont.fonttab);
+    ds.SetXY(4, 4);
+    ds.PutString("Hello world!");
+    ds.Refresh();
+sys.ledoff(3);
+
+    var c: _byte;				// for debug print
+    loop
+    {
+    	c = debug.Empty();			// for debug print
+    	if c != 0 then				// for debug print
+    	    u.Send(c);				// for debug print
+//	block.Sched();
+    	/* wait(); screws jtag */
+    }
+
+    return 0;
+}
+

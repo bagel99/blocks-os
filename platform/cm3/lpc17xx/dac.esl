@@ -1,0 +1,44 @@
+/*
+ * DAC on LPC17xx
+ *
+ * Reference: LCP17xx User Manual, UM10360, Rev 2., Chapter 30.
+ *
+ * Copyright (c) 2013, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+import chip;
+
+package dac
+{
+
+    type DACRegs:
+    {   cr:
+	{   _:     0..0x3F;	// reserved
+	    value: 0..0x3FF;
+	    bias:  0..1;
+	}: packed, lsb, bits(32), out;
+	ctrl:
+	{   req:   boolean;	// cleared by write to cr
+	    dblbuf:boolean;
+	    cntenb:boolean;
+	    dmaenb:boolean;
+	}: packed, lsb, bits(32), in, out;
+	cntr: _uint16: bits(32), out;
+    };
+
+
+
+    proc Init()
+    {   var sc: sysctl.SysCtl;
+
+	sc = sysctl.SysCtlAddr;
+	// Power is always connected.
+	// Select clock divider
+	sc.pclk0.dac = div4;
+	// Registers are not enabled until pin selection and mode.
+	// This is currently done in sys.Init()
+	
+    }    
+}
+

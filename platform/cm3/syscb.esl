@@ -1,0 +1,158 @@
+/*
+ * The System Control Block is part of the ARM Cortex-M3 core.
+ *
+ * Copyright (c) 2009-2010, Brian G. Lucas.  See LICENSE file.
+ * $Id: syscb.esl 283 2012-02-02 22:32:42Z bgl $
+ */
+
+package syscb
+{
+    const VectKey: _uint16 = 0x05FA;	// see aircr.vectkey
+
+    type SysCBRegisters:
+    {   cpuid:								// 0x00
+	{   rev:    0..15;
+	    partno: 0..0xFFF;	// 0xC23=Cortex-M3
+	    const:  0..0xF;	// always 0xF, indicates format
+	    var:    0..15;
+	    impl:   0..0xFF;	// 0x41=ARM
+	}: packed, lsb , ro;
+	icsr:								// 0x04
+	{   vectact:0..0x1FF: ro;	// .00-08
+	    _:      0..0b11;
+	    preempt:(yes, no): ro;	// .11
+	    vectpen:0..0x1FF: ro;	// .12-20
+	    _:      0..1;
+	    isrpend:boolean: ro;	// .22
+	    isrprem:boolean: ro;	// .23
+	    _:      0..1;
+	    stclr:  boolean: wo;	// .25 clear SysTick pending
+	    stset:  boolean;		// .26
+	    svclr:  boolean: wo;	// .27
+	    svset:  boolean;		// .28
+	    _:      0..0b11;
+	    nmiset: boolean;		// .31
+	}: packed, lsb, in, out;
+	vtor:								// 0x08
+	{   _:      0..0xFF;	// bottom 8 bits should be zero
+	    tbloff: 0..0x1FFF_FF;
+	    tblbase:(code, SRAM);
+	    _:      0..0b11;
+	}: packed, lsb, out;
+	aircr:								// 0x0C
+	{   vecreset:  boolean;
+	    clractive: boolean;
+	    resetreq:  boolean;
+	    _:         0..0x1F;
+	    prigroup:  0..7;
+	    _:         0..0xF;
+	    endian:    (LITTLE, BIG);
+	    vectkey:   _uint16;
+	}: packed, lsb, in, out;
+	scr:								// 0x10
+	{   _:		0..1;		// 0
+	    sleeponexit:boolean;	// 1
+	    sleepdeep:	boolean;	// 2
+	    _:		0..1;		// 3
+	    sevoppend:	boolean;	// 4
+	    _:      0..0x7FF_FFFF;
+	}: packed, lsb, out;
+	ccr:								// 0x14
+	{   nonbasethrdena:boolean;	// 0
+	    usersetmpend:boolean;	// 1
+	    _:		0..1;		// 2
+	    unalign:	boolean;	// 3
+	    div0:	boolean;	// 4
+	    _:		0..0b111;	// 5-7
+	    bfhfnmign:	boolean;	// 8
+	    stkalign:	boolean;	// 9
+	    _:		0..0x3F_FFFF;	// 10-31
+	}: packed, lsb, out;
+	shpr: [12] 0..0xFF;	// priorities of exceptions 4..15	// 0x18
+	shcrs:								// 0x24
+	{   mfact:	boolean;	// 0
+	    bfact:	boolean;	// 1
+	    _:		boolean;	// 2
+	    ufact:	boolean;	// 3
+	    _:		0..0b111;	// 4-6
+	    svcact:	boolean;	// 7
+	    dbmact:	boolean;	// 8
+	    _:		boolean;	// 9
+	    peindsvact:	boolean;	//10
+	    systickact:	boolean;	//11
+	    ufpend:	boolean;	//12
+	    mfpend:	boolean;	//13
+	    bfpend:	boolean;	//14
+	    svcpend:	boolean;	//15
+	    mfenb:	boolean;	//16
+	    bfenb:	boolean;	//17
+	    ufenb:	boolean;	//18
+	    _:		0..0x1FFF;	//19-31
+	}: packed, lsb, in, out;
+	mfsr:	_uint8;							// 0x28
+	bfsr:								// 0x29
+	{   ifetch:	boolean;
+	    precise:	boolean;
+	    imprecise:	boolean;
+	    unstk:	boolean;
+	    stk:	boolean;
+	    lsp:	boolean;
+	    _:		boolean;
+	    adrvalid:	boolean;
+	}: packed, lsb, in;
+	ufsr:								// 0x2A
+	{   undefinst:  boolean;
+	    invstate:   boolean;
+	    invpc:      boolean;
+	    nocp:       boolean;
+	    _:          0..0b1111;
+	    unaligned:  boolean;
+	    divbyzero:  boolean;
+	    _:          0..0b111111;
+	}: packed, lsb, in;
+	hfsr:								// 0x2C
+		_uint32;
+	_:	_uint32;						// 0x30
+	mfadr:	_uint32;						// 0x34
+	bfadr:	_uint32;						// 0x38
+	_:	_uint32;						// 0x3C
+	pfr0:   _uint32: ro;						// 0x40
+	pfr1:   _uint32: ro;						// 0x44
+	dfr0:   _uint32: ro;						// 0x48
+	afr0:   _uint32: ro;						// 0x4C
+	mmfr0:  _uint32: ro;						// 0x50
+	mmfr1:  _uint32: ro;						// 0x54
+	mmfr2:  _uint32: ro;						// 0x58
+	mmfr3:  _uint32: ro;						// 0x5C
+	isar0:  _uint32: ro;						// 0x60
+	isar1:  _uint32: ro;						// 0x64
+	isar2:  _uint32: ro;						// 0x68
+	isar3:  _uint32: ro;						// 0x6C
+	isar4:  _uint32: ro;						// 0x70
+	isar5:  _uint32: ro;						// 0x74
+	_:      _uint32: ro;						// 0x78
+	_:      _uint32: ro;						// 0x7C
+	_:      _uint32;						// 0x80
+	_:      _uint32;						// 0x84
+	cpacr:  [16](NONE,PRIV,_,FULL): packed, lsb, out;		// 0x88
+	_:      _uint32;						// 0x8C
+    };
+
+    var scb: SysCBRegisters: external(0xE000_ED00);
+
+    proc SetPriority(vec: _uint, pri: 0..255)
+    {
+	scb.shpr[vec-4] = pri;
+    }
+
+    type ACTLR_T:
+    {   mcycint:(enable, disable);
+	defwbuf:(enable, disable);
+	fold:   (enable, disable);
+	_:      0..0x1FFF_FFFF;
+    }: packed, lsb, out;
+
+    const ActlrAddr: @ACTLR_T = 0xE000_E008;
+
+}
+

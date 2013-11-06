@@ -1,0 +1,112 @@
+/*
+ * ADC on LPC17xx
+ *
+ * 8 input channels, 12-bit conversion
+ *
+ * Reference: LCP17xx User Manual, UM10360, Rev 2., Chapter 29.
+ *
+ * Copyright (c) 2013, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+import chip;
+
+package adc
+{
+    const NChan = 8;
+    type ChanRange: 0..NChan-1;
+    type ChanArray: [NChan]boolean: packed, lsb;
+    type StartMode:
+    (	NONE,		// do not start
+	NOW,
+	MODE2,
+	MODE3,
+	MAT0_1,
+	MAT0_3,
+	MAT1_0,
+	MAT1_1
+    );
+
+    type DR:	// data register, one for each channel
+    {   _:     0..0xF;	// .00-03
+	value: 0..0xFFF;	// .04-15
+	_:     0..0x3FFF;	// .16-29
+	ovrn:  boolean;	// .30
+	done:  boolean;	// .31
+    }: packed, lsb, in;
+
+    type ADCRegs:							// 00
+    {   cr:
+	{   sel:   ChanArray;	// .00-07
+	    clkdiv:0..0xFF;	// .08-15
+	    burst: boolean;	// .16
+	    _:     0..0b1111;	// .17-20
+	    power: (OFF,ON);	// .21
+	    _:     0..0b11;	// .22-23
+	    start: StartMode;	// .24-26
+	    edge:  (RISE,FALL);	// .27
+	}: packed, lsb, bits(32), out;
+	gdr:								// 04
+	{   _:     0..0xF;	// .00-03
+	    value: 0..0xFFF;	// .04-15
+	    _:     0..0xFF;	// .16-23
+	    chan:  ChanRange;	// .24-26
+	    _:     0..3;	// .27-29
+	    ovrn:  boolean;	// .30
+	    done:  boolean;	// .31
+	}: packed, lsb, in;
+	_:    _uint32;							// 08
+	ien:								// 0C
+	{   chan:   ChanArray;
+	    global: boolean;
+	}: packed, lsb, bits(32), out;
+	dr: [NChan] DR: in;						// 10-2C
+	st:								// 30
+	{   done:   ChanArray;	// .00-07
+	    ovrn:   ChanArray;	// .08-15
+	    intf:   boolean;	// .16
+	}: packed, lsb, in;
+	trim:  _uint32;	// FIXME					// 34
+    };
+    type ADC: @ADCRegs;
+
+    proc (ad: ADC) Dump()
+    {   var i: _uint;
+	type PW: @[]_uint32;
+	var pw: PW;
+	pw = PW(ad);
+	for i from 0 to 13 do
+	{   debug.hex8(_uint8(i*4));  debug.chr(' ');
+	    debug.hex32(pw[i]);  debug.nl();
+	}
+	debug.nl();
+    }
+
+    proc (ad: ADC) SampleNow(chan: ChanRange): _uint16
+    {
+//    	ad.cr = {.power=ON, .sel=chan, .start=NOW};
+	ad.cr.sel[chan] = true;
+	ad.cr.start = NOW;
+var i: _uint;
+i = 10000;
+while !ad.dr[chan].done && i != 0 do { i -= 1;}
+//    	while !ad.dr[chan].done do {}
+	ad.cr.sel[chan] = false;
+    	return ad.dr[chan].value;
+    }
+
+    proc Init(): ADC
+    {   var sc: sysctl.SysCtl;
+	var ad: ADC;
+
+	sc = sysctl.SysCtlAddr;
+	sc.pconp.adc = on;	// Enable power.
+	sc.pclk0.adc = div4;	// Select clock divider
+	// Pin selection and mode currently done in sys.Init()
+	ad = ADC(chip.GetDeviceAddress(ADC0));
+	ad.cr = {.power=ON, .clkdiv=6};
+	ad.ien = {.global=false};	// all false
+	return ad;	
+    }    
+}
+

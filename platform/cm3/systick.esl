@@ -1,0 +1,46 @@
+/*
+ * The System Tick Timer is part of the ARM Cortex-M3 core.
+ *
+ * Copyright (c) 2009, Brian G. Lucas.  See LICENSE file.
+ * $Id: systick.esl 283 2012-02-02 22:32:42Z bgl $
+ */
+
+package systick
+{
+   type Registers:
+    {   ctrl:								//0x00
+	{   enable: boolean;
+	    tickint:boolean;
+	    clksrc: (EXTERNAL, CPUCLOCK);// reset value is CPUCLOCK
+	    _:      0..0x1FFF;
+	    cntflg: boolean: ro;	// cleared by read		
+	    _:      0..0x7FFF;
+	}: packed, lsb, in, out;
+	reload: _uint32: out;     	// only low 24-bits valid	//0x04
+	current:_uint32: in, out; 	// only low 24-bits valid	//0x08
+	calib:								//0x0C
+	{   tenms:	0..0xFF_FFFF;	// reset value is 0x0F_423F
+	    _:      0..0x3F;
+	    skew:	(PRECISE, SKEWED);
+	    noref:  boolean;
+	}: packed, lsb, in, ro;
+    };
+
+    var st: Registers: external(0xE000_E010);
+
+
+    // Initialize systick with scaling value and start
+    proc Init(cpuclock: _uint32, tickrate: _uint32)
+    {
+	st.reload = (cpuclock / tickrate) - 1;
+	st.current = 0;
+	st.ctrl = { .enable=true, .tickint=false, .clksrc=CPUCLOCK };
+    }
+
+    proc EnableIntr(priority: _uint8)
+    {
+	syscb.scb.shpr[11] = priority;
+	st.ctrl.tickint = true;
+    }
+}
+

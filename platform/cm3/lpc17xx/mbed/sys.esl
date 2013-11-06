@@ -1,0 +1,186 @@
+/*
+ * MBED App Board specific stuff.
+ *
+ * Copyright (c) 2009, Brian G. Lucas.  See LICENSE file.
+ * $Id: sys.esl 327 2012-02-24 22:07:36Z bgl $
+ */
+
+import chip;
+import gpio;
+import syscb;
+import nvic;
+
+package sys
+{
+    const CpuXtal   = 12_000_000;	// 12MHz crystal
+    const CoreClock = 72_000_000;	// Now 72MHz, can be as high as 100MHz
+    /*
+     * PLL1 calculation for USB 48MHz
+     * let Fx be Xtal frequency an
+     *     Fo be the frequency of the PLL oscillator
+     *     Fu be the USB frequency, Fu=48
+     * let P = 2, then Fo = 2*P*Fu = 192
+     * then M = Fu/Fx = 4
+     */
+    const TopOfStack = 0x10008000;
+
+    const TicksPerSecond = 50;
+
+    const DebugPort = 0;
+
+    alias nvic.EnableAll as IntrEnableAll;
+    alias nvic.DisableAll as IntrDisableAll;
+    alias nvic.Enable as IntrEnable;
+    alias nvic.Disable as IntrDisable;
+
+    // MBED internal to the board
+    const UARTTX: gpio.PortDesc =	{.port=0,.bit=2 };
+    const UARTRX: gpio.PortDesc =	{.port=0,.bit=3 };
+    const LED1: gpio.PortDesc =  	{.port=1,.bit=18};
+    const LED2: gpio.PortDesc =  	{.port=1,.bit=20};
+    const LED3: gpio.PortDesc =  	{.port=1,.bit=21};
+    const LED4: gpio.PortDesc =  	{.port=1,.bit=23};
+
+    // MBED 40 pin DIP assignments to ports
+    const PIN5:  gpio.PortDesc = {.port=0,.bit=9 };
+    const PIN6:  gpio.PortDesc = {.port=0,.bit=8 };
+    const PIN7:  gpio.PortDesc = {.port=0,.bit=7 };
+    const PIN8:  gpio.PortDesc = {.port=0,.bit=6 };
+    const PIN9:  gpio.PortDesc = {.port=0,.bit=0 };
+    const PIN10: gpio.PortDesc = {.port=0,.bit=1 };
+    const PIN11: gpio.PortDesc = {.port=0,.bit=18};
+    const PIN12: gpio.PortDesc = {.port=0,.bit=17};
+    const PIN13: gpio.PortDesc = {.port=0,.bit=15};
+    const PIN14: gpio.PortDesc = {.port=0,.bit=16};
+    const PIN15: gpio.PortDesc = {.port=0,.bit=23};
+    const PIN16: gpio.PortDesc = {.port=0,.bit=24};
+    const PIN17: gpio.PortDesc = {.port=0,.bit=25};
+    const PIN18: gpio.PortDesc = {.port=0,.bit=26};
+    const PIN19: gpio.PortDesc = {.port=1,.bit=30};
+    const PIN20: gpio.PortDesc = {.port=1,.bit=31};
+    const PIN21: gpio.PortDesc = {.port=2,.bit=5 };
+    const PIN22: gpio.PortDesc = {.port=2,.bit=4 };
+    const PIN23: gpio.PortDesc = {.port=2,.bit=3 };
+    const PIN24: gpio.PortDesc = {.port=2,.bit=2 };
+    const PIN25: gpio.PortDesc = {.port=2,.bit=1 };
+    const PIN26: gpio.PortDesc = {.port=2,.bit=0 };
+    const PIN27: gpio.PortDesc = {.port=0,.bit=11};
+    const PIN28: gpio.PortDesc = {.port=0,.bit=10};
+    const PIN29: gpio.PortDesc = {.port=0,.bit=5 };
+    const PIN30: gpio.PortDesc = {.port=0,.bit=4 };
+    const PIN31: gpio.PortDesc = {.port=0,.bit=29};
+    const PIN32: gpio.PortDesc = {.port=0,.bit=30};
+    const PIN33: gpio.PortDesc = {.port=1,.bit=0 };
+    const PIN34: gpio.PortDesc = {.port=1,.bit=1 };
+    const PIN35: gpio.PortDesc = {.port=1,.bit=9 };
+    const PIN36: gpio.PortDesc = {.port=1,.bit=10};
+
+    // MBED Application Board assignments
+    alias PIN6  as LCD_RST;
+    alias PIN11 as LCD_CS;
+    alias PIN8  as LCD_A0;
+    alias PIN5  as LCD_MOSI;
+    alias PIN7  as LCD_SCK;
+    alias PIN31 as USB_DP;
+    alias PIN32 as USB_DM;
+    alias PIN12 as SW_DN;
+    alias PIN13 as SW_LF;
+    alias PIN14 as SW_CT;
+    alias PIN15 as SW_UP;
+    alias PIN16 as SW_RT;
+    alias PIN17 as ANALOG_IN;	// ADC0.2
+    alias PIN18 as ANALOG_OUT;	// DAC-AOUT
+    alias PIN19 as POT_1;	// ADC0.4	
+    alias PIN20 as POT_2;	// ADC0.5
+    alias PIN21 as PWM_1;	// PWM1.6
+    alias PIN22 as PWM_2;	// PWM1.5
+    alias PIN23 as LED_RED;
+    alias PIN24 as LED_GREEN;
+    alias PIN25 as LED_BLUE;
+    alias PIN26 as SPEAKER;	// PWM1.1 Speaker
+    alias PIN27 as ACC_CLK;
+    alias PIN28 as ACC_DAT;
+
+    
+    const PinOut: [] gpio.PortInit =
+    {
+	{LED1,		   .func=OUTPUT},	// LED1 
+	{LED2,		   .func=OUTPUT},	// LED2 
+	{LED3,		   .func=OUTPUT},	// LED3 
+	{LED4,		   .func=OUTPUT},	// LED4
+	{UARTTX,	   .func=ALT1},		// UART0Tx
+	{UARTRX,	   .func=ALT1},		// UART0Rx
+	{LCD_A0,           .func=OUTPUT},	// LCD_A0
+	{LCD_RST,          .func=OUTPUT},	// LCD_RESET (not SSP1_MISO)
+	{LCD_CS,           .func=OUTPUT},	// LCD_CS~
+	{LCD_SCK,	   .func=ALT2},		// LCD_SCK (SSP1 SCK)
+	{LCD_MOSI,	   .func=ALT2},		// LCD_MOSI (SSP1 MOSI)
+	{LED_BLUE,	   .func=OUTPUT,.init=1}, // Multicolor LED FIXME-PWM5
+	{LED_GREEN,	   .func=OUTPUT,.init=1}, // Multicolor LED FIXME-PWM4
+	{LED_RED,	   .func=OUTPUT,.init=1}, // Multicolor LED FIXME-PWM3
+	{SW_DN,		   .func=INPUT,.pull=UP}, // nav switch
+	{SW_LF,		   .func=INPUT,.pull=UP}, // nav switch
+	{SW_CT,		   .func=INPUT,.pull=UP}, // nav switch
+	{SW_UP,		   .func=INPUT,.pull=UP}, // nav switch
+	{SW_RT,		   .func=INPUT,.pull=UP}, // nav switch
+	{ACC_CLK,	   .func=ALT2},		// MMA7660 clock
+	{ACC_DAT,	   .func=ALT2},		// MMA7660 data
+//	{ANALOG_OUT,	   .func=ALT2},		// DAC to Analog Out
+//	{ANALOG_IN,	   .func=ALT1},		// ADC0.2 to Analog_In
+	{SPEAKER,	   .func=ALT1},		// Speaker is PWM1.1
+	{POT_1,		   .func=ALT3},		// ADC0.4
+	{POT_2,		   .func=ALT3},		// ADC0.5
+	{{.port=1,.bit=0 },.func=ALT1},		// ETHTxD0
+	{{.port=1,.bit=1 },.func=ALT1},		// ETHTxD1
+	{{.port=1,.bit=4 },.func=ALT1},		// ETHTxEN
+	{{.port=1,.bit=8 },.func=ALT1},		// ETHCRS
+	{{.port=1,.bit=9 },.func=ALT1},		// ETHRxD0
+	{{.port=1,.bit=10},.func=ALT1},		// ETHRxD1
+	{{.port=1,.bit=14},.func=ALT1},		// ETHRxERR
+	{{.port=1,.bit=15},.func=ALT1},		// ETHREFCLK
+	{{.port=1,.bit=16},.func=ALT1},		// ETHMDC
+	{{.port=1,.bit=17},.func=ALT1},		// ETHMDIO
+	{{.port=1,.bit=25},.func=INPUT},	// PHYLINK
+	{{.port=1,.bit=26},.func=INPUT},	// PHYSPEED
+	{{.port=2,.bit=9 },.func=ALT1},		// USBCON
+	{USB_DP,	   .func=ALT1},		// USBDP
+	{USB_DM,	   .func=ALT1}		// USBDM
+    };
+
+    // Parameters for Ethernet PHY
+    const phy = "phy_dp83848";
+    const PhyAddr = 1;		// PHY chip strapped address;
+    const PhyId1 = 0x2000;	// high bits of PHY vendor code
+    const PhyId2 = 0x5C90;	// low bits of PHY vendor, model
+
+    const EnetLinkPolling: boolean = true;	// must poll for link status
+
+    const LEDPorts: [4]gpio.PortDesc = {LED1, LED2, LED3, LED4};
+
+    proc ledon(which: _uint)
+    {
+	gpio.Set(LEDPorts[which]);
+    }
+
+    proc ledoff(which: _uint)
+    {
+	gpio.Clr(LEDPorts[which]);
+    }
+
+    proc Init()
+    {   var i: _uint;
+
+	// configure pins
+	i = 0;
+	while i < PinOut?len do
+	{   gpio.Init(PinOut[i]);
+	    i += 1;
+	}
+	// Interrupt priorities  FIXME: move to device drivers
+	syscb.SetPriority(15 /*ticktimer*/,  0b11111000);
+	nvic.SetPriority(chip.Interrupt[TIMER3], 0b11110000);
+	nvic.SetPriority(chip.Interrupt[ENET],   0b11000000);
+    }
+
+}
+

@@ -1,0 +1,59 @@
+import sys;
+import trace;	// use trace as debug port
+import debug;
+import uart;
+
+package debug
+{   const db_timer = 3;
+    const db_block   = 2;
+    const db_connect = 1;
+}
+
+import fault;
+import syscb;
+import sysctl;
+import nvic;
+
+import block;
+
+const TimerID: block.BlockID = 1;
+const AppID:   block.BlockID = 2;
+
+import timer;
+import pwm;
+//import wait;
+
+
+proc meminit(addr: _address, size: _uint, pool: _uint): : external;
+
+proc main(): _int
+{
+    var u: uart.Uart;				// for debug print
+    var c: _byte;				// for debug print
+
+    sys.Init();
+    sysctl.Init();
+    fault.Init();
+    debug.Init();
+    sys.ledon(0);
+debug.str("Starting test-speaker...\n");
+    meminit(0x2007C100, 0x7F00, 0);	// FIXME
+    sys.ledon(1);
+    var pw: pwm.PWM;
+    pw = pwm.Init();
+    sys.ledon(1);
+    pw.SetPeriod_us(500);  
+    pw.SetWidth_us(1, 250);  
+    u = uart.Init(sys.DebugPort);		// for debug print
+    loop
+    {
+    	c = debug.Empty();			// for debug print
+    	if c != 0 then				// for debug print
+    	    u.Send(c);				// for debug print
+	block.Sched();
+//        wait.Wait();
+    }
+
+    return 0;
+}
+

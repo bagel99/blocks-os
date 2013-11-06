@@ -1,0 +1,129 @@
+/*
+ * Pulse Width Modulator (PWM) on LPC17xx
+ *
+ * Reference: LCP17xx User Manual, UM10360, Rev 2., Chapter 18.
+ *
+ * Copyright (c) 2013, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+import chip;
+
+package pwm
+{
+    type MCF:	// match control register functions
+    {   intr:   boolean;
+	reset:  boolean;
+	stop:   boolean;
+    }: packed, lsb, nopad;
+    type MCR: [7] MCF: packed, lsb, bits(32);
+
+    type PCR:
+    {	_:      0..0b11;	// .00-01
+    	sel:    [5] boolean;	// .02-06	// FIXME 2..6
+    	_:      0..0b11;	// .07-08
+    	enb:    [6] boolean;	// .09-14	// FIXME 1..6
+    }: packed, lsb, bits(32);
+
+    type LER:
+    {   enb:    [7] boolean;	// .00-06
+    }: packed, lsb, bits(32);
+
+    type CTCR:
+    {   mode:   (TMR, CNTRISE, CNTFALL, CNTBOTH);
+	cntsel: 0..1;
+    }: packed, lsb, bits(32);
+
+    type PWMRegs:
+    {   ir:								// 00
+	{   chan0:  boolean;
+	    chan1:  boolean;
+	    chan2:  boolean;
+	    chan3:  boolean;
+	    cap0:   boolean;
+	    cap1:   boolean;
+	    _:      0..0b11;
+	    chan4:  boolean;
+	    chan5:  boolean;
+	    chan6:  boolean;
+	}: packed, lsb, bits(32), in;
+	tcr:								// 04
+	{   cntenb: boolean;
+	    cntrst: boolean;
+	    _:      0..1;
+	    pwmenb: boolean;
+	}: packed, lsb, bits(32), out;
+	tc:   _uint32: in;						// 08
+	pr:   _uint32: out;						// 0C
+	pc:   _uint32: out;						// 10
+	mcr:  MCR: out;							// 14
+	mr0:  [4] _uint32: out;						// 18-24
+	ccr:								// 28
+	 _uint32;	// FIXME
+	cr:   [4] _uint32: out;						// 2C-38
+	_:    _uint32;							// 3C
+	mr4:  [3] _uint32: out;						// 40-48
+	pcr:  PCR: out;							// 4C
+	ler:  LER: out;							// 50
+	_:    [7] _uint32;						// 54-6C
+	ctcr: CTCR: out;						// 70
+    };
+    type PWM: @PWMRegs;
+
+
+    proc (pw: PWM) SetMatchReg(which: _uint, t: _uint32)
+    {
+	if which < 4 then
+	    pw.mr0[which] = t;
+	else
+	    pw.mr4[which-4] = t;
+    }
+
+    // match register 0 sets the overall PWM period
+    proc (pw: PWM) SetPeriod_us(t: _uint32)
+    {   var pclk: _uint32;
+	var cnt: _uint32;
+	var mr0: _uint32;
+
+	pclk = sys.CoreClock / 4;
+	cnt = t * (pclk/1_000_000);
+	mr0 = pw.mr0[0];
+	pw.tcr = {.cntrst=true};
+	pw.mr0[0] = cnt;
+	if mr0 != 0 then
+	{	// adjust other match registers?
+	}
+	pw.ler.enb[0] = true;
+	pw.tcr = {.cntenb=true, .pwmenb=true};		
+    }
+
+    // setup single edge pulse
+    proc (pw: PWM) SetWidth_us(chan: _uint, t: _uint32)
+    {   var pclk: _uint32;
+	var cnt: _uint32;
+
+	pclk = sys.CoreClock / 4;
+	cnt = t * (pclk/1_000_000);
+	pw.SetMatchReg(chan, cnt);
+	pw.ler.enb[chan] = true;	
+	if chan > 1 then	// channel 1 is only single edge
+	{   pw.pcr.sel[chan-2] = false;	// select single edge
+	}
+	pw.pcr.enb[chan-1] = true;	// enable output
+    }
+
+
+    proc Init(): PWM
+    {   var sc: sysctl.SysCtl;
+	var pw: PWM;
+
+	sc = sysctl.SysCtlAddr;
+	sc.pconp.pwm1 = on;
+	sc.pclk0.pwm1 = div4;
+	pw = PWM(chip.GetDeviceAddress(PWM1));
+	pw.pr = 0;
+	return pw;
+    }
+}
+
+

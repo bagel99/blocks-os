@@ -1,0 +1,48 @@
+/*
+ * Trace buffer for debugging.  Takes the place of a UART.
+ *
+ * Copyright (c) 2012, Brian G. Lucas.  See LICENSE file.
+ * $Id: trace.esl 325 2012-02-21 18:07:26Z bgl $
+ */
+
+package debug
+{
+    const NoWrap = true;
+    const BufSiz = 8192;
+    var Trace:
+    {   nxti: _uint16;
+	nxto: _uint16;
+	wrap: _uint16;
+	buf: [BufSiz]_byte;
+    }: global("TraceBuffer");	// LLVM generates bad code without this
+
+    proc Init()
+    {
+	Trace.nxti = 0;
+	Trace.nxto = 0;
+	Trace.wrap = 0;
+    }
+
+    proc PutC(c: _byte)
+    {
+	if NoWrap && Trace.wrap != 0 then return;
+	Trace.buf[Trace.nxti] = c;
+	Trace.nxti += 1;
+	if Trace.nxti == BufSiz then
+	{   Trace.nxti = 0;
+	    Trace.wrap += 1;
+	}
+    }
+
+    proc Empty(): _byte
+    {   var c: _byte;
+
+	if Trace.nxto == Trace.nxti then return 0;
+	c = Trace.buf[Trace.nxto];
+	Trace.nxto += 1;
+	if Trace.nxto == BufSiz then
+	    Trace.nxto = 0;
+	return c;
+    }	
+}
+

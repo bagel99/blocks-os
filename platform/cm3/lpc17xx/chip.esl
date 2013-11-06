@@ -1,0 +1,71 @@
+/*
+ * Interface to ROM routines on LPC1768.
+ * (This should have a better name.)
+ *
+ * Copyright (c) 2009-2011, Brian G. Lucas.  See LICENSE file.
+ * $Id: chip.esl 289 2012-02-03 19:10:08Z bgl $
+ */
+
+package chip
+{
+    type Devices:
+    (	// APB0
+	WDT,	TIMER0,	TIMER1,	UART0,	UART1,	_,	PWM1,	I2C0,	// 0-7
+	SPI,	RTC,	GPIO,	PINCON,	SSP1,	ADC0,	_,	_,	// 8-15
+	_,	CAN1,	CAN2,	_,	_,	_,	_,	I2C1,	//16-23
+	_,	_,	_,	_,	_,	_,	_,	_,	//24-31
+	// APB1
+	_,	_,	SSP0,	DAC,	TIMER2,	TIMER3,	UART2,	UART3,	//32-39
+	I2C2,	_,	I2S,	// FIXME more				//40..
+	// AHB
+	ENET=64,DMA,	_,	USB					//64-67
+    );	
+
+    const Interrupt: [Devices]_uint8 =
+    {	[WDT]=     0,
+	[TIMER0]=  1,
+	[TIMER1]=  2,
+	[TIMER2]=  3,
+	[TIMER3]=  4,
+	[UART0]=   5,
+	[UART1]=   6,
+	[UART2]=   7,
+	[UART3]=   8,
+	[PWM1]=    9,
+	[I2C0]=   10,
+	[I2C1]=   11,
+	[I2C2]=   12,
+	[SPI]=    13,
+	[SSP0]=   14,
+	[SSP1]=   15,
+	[RTC]=    17,
+	[ADC0]=   22,
+	[USB]=    24,
+	[DMA]=    26,
+	[I2S]=    27,
+	[ENET]=   28,
+    };
+
+    proc GetDeviceAddress(dev: Devices): _address
+    {
+	if dev < ENET then
+	    return _address(0x4000_0000 + (_uint8(dev) << 14));
+	else
+	    return _address(0x5000_0000 + ((_uint8(dev)-32) << 14));
+    }
+
+    proc IAP(command: @[]_uint32, result: @[]_uint32):: external(0x1FFF1FF1);
+
+    proc GetSerialNumber(): _uint32
+    {
+	var cmd: [5]_uint32;
+	var rsp: [5]_uint32;
+
+	cmd[0] = 58;
+	IAP(cmd, rsp);
+	if rsp[0] == 0 then
+	    return rsp[1];
+	return 0;
+    }
+}
+

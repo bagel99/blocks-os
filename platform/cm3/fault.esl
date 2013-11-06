@@ -1,0 +1,76 @@
+/*
+ * Report hardware detected faults.
+ *
+ * Copyright (c) 2011, Brian G. Lucas.  See LICENSE file.
+ * $Id: fault.esl 283 2012-02-02 22:32:42Z bgl $
+ */
+
+import syscb;
+import debug;
+
+package fault
+{
+    if _defined(debug.db_fault) then alias debug.db_fault as db;
+    				else const db = 0;
+    alias syscb.scb as scb;
+
+    proc Init()
+    {
+	scb.shcrs = { .ufenb=true, .bfenb=true, .mfenb=true };
+	scb.ccr = { .div0=true, .unalign=true };
+    }
+
+    const RegName: [8]@[]_byte =
+    { "R0 ", "R1 ", "R2 ", "R3 ", "R12", "LR ", "RA ", "PSR" };
+
+    proc ExceptionHandler(exno: _uint, sp: @[]_uint32, mask:_uint32): :
+    	global("ExceptionHandler")
+    {	var i: _uint;
+
+	debug.str("!!!!");	// something to search for
+	if exno
+	is 2 then	// NMI
+	{   debug.str("NMI");
+	}
+	is 3 then	// hard fault
+	{   debug.str("Hard Fault, HFSR="); debug.hex32(scb.hfsr);
+	}
+	is 4 then	// mem manage fault
+	{   debug.str("MM Fault, MFSR="); debug.hex8(scb.mfsr);
+	}
+	is 5 then	// bus fault	
+	{   debug.str("Bus Fault, BFSR="); debug.hex8(_uint8(scb.bfsr));
+	    if scb.bfsr.adrvalid then
+	    {   debug.str(" BFADR="); debug.hex32(scb.bfadr);
+	    }
+	}
+	is 6 then	// usage fault
+	{   var ufsr: ?scb.ufsr;
+	    ufsr = scb.ufsr;
+	    debug.str("Usage Fault, UFSR="); debug.hex16(_uint16(ufsr));
+	    if db > 0 then
+	    {	if ufsr.undefinst then debug.str(" UNDEFINST");
+	    	if ufsr.invstate  then debug.str(" INVSTATE");
+	    	if ufsr.invpc     then debug.str(" INVPC");
+	    	if ufsr.unaligned then debug.str(" UNALIGNED");
+	    	if ufsr.divbyzero then debug.str(" DIVBYZERO");
+	    }
+	}
+	else
+	{   debug.str("Exception "); debug.uint(exno);
+	}
+	debug.nl();
+	i = 0;
+	while i < 8 do
+	{   debug.str(RegName[i]); debug.chr('=');
+	    debug.hex32(sp[i]); debug.nl();
+	    i += 1;
+	}
+	debug.dumpw("Stack:", sp[8:], 
+	(_uint(sys.TopOfStack)-
+	_uint(sp))/
+	_uint?size - 8);
+	loop {}
+    }
+}
+

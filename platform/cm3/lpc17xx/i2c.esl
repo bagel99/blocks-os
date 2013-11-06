@@ -1,0 +1,229 @@
+/*
+ * I2C on LPC17xx
+ *
+ * Reference: LCP17xx User Manual, UM10360, Rev 2., Chapter 19.
+ *
+ * Copyright (c) 2013, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+import chip;
+
+package i2c
+{
+    if _defined(debug.db_i2c) then
+	alias debug.db_i2c as db;
+    else
+	const db = 0;
+
+    type CR:
+    {   _:	0..0b11;	// .00 reserved, should be zero
+	aa:	boolean;	// .02 assert acknowledge flag
+	intf:	boolean;	// .03 interrupt flag
+	stop:   boolean;	// .04 stop flag
+	start:  boolean;	// .05 start flag
+	enbl:   boolean;	// .06 enable
+    }: packed, lsb, bits(32);
+    type SR:
+    {   _:	0..0b111;	// reserved, read as zero
+	sts:	0..0b11111;	// state	
+    }: packed, lsb, bits(32);
+
+    type I2CRegs:
+    {	csr:	CR: in, out;	// on write only 1's set bits		// 00
+	sr:	SR: in;							// 04
+	dr:	_uint8: bits(32), in, out;				// 08
+	adr0:	_uint8: bits(32), out;					// 0C
+	sclh:	_uint16: bits(32), out;					// 10
+	scll:	_uint16: bits(32), out;					// 14
+    	ccr:	CR: wo, out;	// on write only 1's clear bits		// 18
+    	mmcr:   _uint32;	//FIXME					// 1C
+    	adr1:	_uint8: bits(32), out;					// 20
+    	adr2:	_uint8: bits(32), out;					// 24
+    	adr3:	_uint8: bits(32), out;					// 28
+    	dbuf:	_uint8: bits(32), ro, in;				// 2C
+	msk0:	_uint8: bits(32), out;					// 30
+	msk1:	_uint8: bits(32), out;					// 34
+	msk2:	_uint8: bits(32), out;					// 38
+	msk3:	_uint8: bits(32), out;					// 3C
+    };
+    type I2C: @I2CRegs;
+
+    type State:
+    {   dev:    I2C;
+	buf:    @[]_byte;
+	len:    _uint8;
+	cnt:    _uint8;
+	addr:   _uint8;
+	busy:   boolean: in, out;	// FIXME - for spinning
+    }: nopad;
+    type ICS: @State;
+
+    var irqmap: [3]@State;		// to map IRQ to state
+
+    proc (ic: I2C) SetFrequency(freq: _uint)
+    {   var cycle:  _uint;
+
+	cycle = sys.CoreClock / freq;
+	ic.sclh = cycle/2;
+	ic.scll = cycle/2;	
+if db > 2 then {debug.str("i2c.SetFreq ");
+debug.hex16(_uint16(_uint32(ic.sclh))); debug.chr(' ');
+debug.hex16(_uint16(_uint32(ic.sclh))); debug.nl();}
+    }
+
+    proc (ic: I2C) Enable()
+    {
+	ic.ccr = { .intf=true };
+	ic.csr = { .enbl=true };
+    }
+
+    proc (ic: I2C) Reset()
+    {
+	ic.csr = { .stop=true };
+	ic.ccr = { .intf=true };
+	while ic.csr.stop do {};	// wait for stop to clear
+    }
+
+    proc (s: ICS) Write(addr: _uint8, data: @[]_byte, len: _uint)
+    {
+if db > 2 then {debug.str("i2c.Write "); debug.hex32(_uint32(s.dev)); debug.chr(' ');
+debug.hex8(addr); debug.chr(' ');
+debug.uint(len); debug.nl();}
+	s.addr = addr << 1;
+	s.buf  = data;
+	s.len  = len;
+	s.cnt  = 0;
+	s.busy = true;			// FIXME
+sys.ledon(1);
+	s.dev.ccr = { .start=true, .intf=true };
+	s.dev.csr = { .start=true };
+var n: _uint: in, out;
+n = 1000000;
+	while s.busy && n != 0 do { n -= 1;}
+sys.ledoff(1);
+    }
+
+    proc (s: ICS) Read(addr: _uint8, data: @[]_byte, len: _uint)
+    {
+if db > 2 then {debug.str("i2c.Read "); debug.hex32(_uint32(s.dev)); debug.chr(' ');
+debug.hex8(addr); debug.chr(' ');
+debug.uint(len); debug.nl();}
+	s.addr = (addr << 1) | 0x01;
+	s.buf  = data;
+	s.len  = len;
+	s.cnt  = 0;
+	s.busy = true;			// FIXME
+sys.ledon(1);
+	s.dev.ccr = { .start=true, .intf=true };
+	s.dev.csr = { .start=true };
+var n: _uint: in, out;
+n = 1000000;
+	while s.busy && n != 0 do { n -= 1;}
+sys.ledoff(1);
+    }
+
+    proc (s: ICS) Init(n: _uint)
+    {   var sc: sysctl.SysCtl;
+	var dev: chip.Devices;
+
+	sc = sysctl.SysCtlAddr;
+	if n
+	is 0 then
+	{   sc.pconp.i2c0 = on;
+	    sc.pclk0.i2c0 = div1;
+	    dev = I2C0;
+	}
+	is 1 then
+	{   sc.pconp.i2c1 = on;
+	    sc.pclk1.i2c1 = div1;
+	    dev = I2C1;
+	}
+	is 2 then
+	{   sc.pconp.i2c2 = on;
+	    sc.pclk1.i2c2 = div1;
+	    dev = I2C2;
+	}
+	else
+	    return;
+	s.dev = I2C(chip.GetDeviceAddress(dev));
+	irqmap[n] = s;
+if db > 0 then {debug.str("i2c.Init "); debug.uint(n); debug.chr(' ');
+debug.hex32(_uint32(s.dev)); debug.chr(' ');
+debug.uint8(chip.Interrupt[dev]); debug.nl();}
+    sys.ledon(3);
+	s.dev.SetFrequency(100_000);	// standard 100kHz
+	nvic.Enable(chip.Interrupt[dev]);
+	s.dev.Enable();
+    sys.ledoff(3);
+    }
+
+    proc (s: ICS) Intr()
+    {
+if db > 4 then {debug.str("i2c.Intr ");
+debug.hex8(_uint8(_uint32(s.dev.sr))); }
+	if s.dev.sr.sts		// state of I2C device
+	is 0x08>>3,		// start
+	   0x10>>3 then		// repeated start
+	{   s.dev.dr = s.addr;			// output address
+	    s.dev.ccr = {.start=true};		// clear start
+	}
+	is 0x18>>3 then		// ack to address on write
+	{   s.dev.dr = s.buf[0];
+	}
+	is 0x28>>3 then		// ack to data on write
+	{   s.cnt += 1;
+	    if s.cnt < s.len then
+	    {   s.dev.dr = s.buf[s.cnt];
+	    }
+	    else
+	    {   s.dev.csr = {.stop=true};	// set stop
+		s.busy = false;	// FIXME
+	    }
+	}
+	is 0x40>>3 then		// ack to address on read
+	{   s.dev.csr = {.aa=true};
+	}
+	is 0x50>>3 then		// ack to data on read
+	{   if s.cnt < s.len then
+	    {	s.buf[s.cnt] = s.dev.dr;
+		s.cnt += 1;
+	    }
+	    else
+	    {	s.dev.ccr = {.aa=true};
+	    	// FIXME - put a stop here?
+	    	s.busy = false;	// FIXME
+	    }
+	}
+	is 0x00>>3,		// bus error
+	   0x20>>3,		// no ack to address on write
+	   0x48>>3,		// no ack to address on read
+	   0x30>>3,		// no ack to data on write
+	   0x58>>3,		// no ack to data on read
+	   0x38>>3 then		// arbitration lost
+	{   s.dev.csr = {.stop=true};
+	}
+	else			// slave mode states
+	{   s.dev.csr = {.stop=true};
+	}
+	s.dev.ccr = {.intf=true};	// clean interrupt flag
+if db > 4 then debug.nl();
+    }
+
+    proc Interrupt0()::global("I2C0_IRQ")
+    {
+	irqmap[0].Intr();
+    }
+
+    proc Interrupt1()::global("I2C1_IRQ")
+    {
+	irqmap[1].Intr();
+    }
+
+    proc Interrupt2()::global("I2C2_IRQ")
+    {
+	irqmap[2].Intr();
+    }
+
+}
+

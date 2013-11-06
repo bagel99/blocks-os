@@ -1,0 +1,91 @@
+/*
+ * DMA on LPC17xx
+ *
+ * 8 channels
+ *
+ * Reference: LCP17xx User Manual, UM10360, Rev 2., Chapter 31.
+ *
+ * Copyright (c) 2013, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+import chip;
+import sysctl;
+package dma
+{
+    const NChan = 8;
+    type ChanArray:   [NChan]boolean: packed, lsb;
+    type SourceArray: [16]boolean: packed, lsb;
+    type BurstSize: (B1,B4,B8,B16,B32,B64,B128,B256);	// no B2
+    type Width:     (W1,W2,W4,_,_,_,_,_);
+    type TranType:  (M2M,M2P,P2M,P2P,_,_,_,_);
+    type Periph:    0..31;	// FIXME
+
+    // Access to device registers must be 32-bits
+    type ChanCrReg:
+    {	tlen:    0..4095;	// .00-11 tranfer length
+	sbsize:  BurstSize;	// .12-14 src burst size
+	dbsize:  BurstSize;	// .15-17dst burst size
+	swidth:  Width;		// .18-20 src width
+	dwidth:  Width;		// .21-23 dst width
+	_:       0..0b11;	// .24-25
+	sincr:   boolean;	// .26
+	dincr:   boolean;	// .27
+	priv:    boolean;	// .28
+	buffer:  boolean;	// .29
+	cache:   boolean;	// .30
+	intenb:  boolean;	// .31
+    }: packed, lsb;
+    type ChanCfgReg:
+    {   enb:     boolean;	// .00
+	srcp:    Periph;	// .01-05
+	dstp:    Periph;	// .06-10
+	trant:   TranType;	// .11-13 transfer type
+	interr:  boolean;	// .14
+	inttc:   boolean;	// .15
+	lock:    boolean;	// .16 (unused)
+	active:  boolean: ro;	// .17
+	halt:    boolean;	// .18
+	_:       0..0x1FFF;	// .19-31
+    }: packed, lsb;	
+    type ChanRegs:
+    {   srcadr:  _address;
+	dstadr:  _address;
+	lli:     _address;
+	cr:	 ChanCrReg;
+	cfg:     ChanCfgReg;
+	_:       [3]_uint32;
+    };
+
+    type DMARegs:
+    {
+        intsts:  ChanArray: bits(32), ro;				// 000
+        itcsts:  ChanArray: bits(32), ro;				// 004
+        itcclr:  ChanArray: bits(32), wo;				// 008
+        ierrsts: ChanArray: bits(32), ro;				// 00C
+        ierrclr: ChanArray: bits(32), wo;				// 010
+        rtcsts:  ChanArray: bits(32), ro;				// 014
+        rerrsts: ChanArray: bits(32), ro;				// 018
+        enabled: ChanArray: bits(32), ro;				// 01C
+        swbreq:  SourceArray: bits(32);					// 020
+        swsreq:  SourceArray: bits(32);					// 024
+        swlbreq: SourceArray: bits(32);					// 028
+        swlsreq: SourceArray: bits(32);					// 02C
+        config:								// 030
+        {   enb:   boolean;	// global enable
+            endian: (LITTLE, BIG);
+        }: packed, lsb, bits(32);
+        sync:    SourceArray: bits(32);					// 034
+        _:       [50]_uint32;	// big gap				// 038
+	chan:    [NChan] ChanRegs;					// 100
+    };
+
+
+    proc Init()
+    {   var sc: sysctl.SysCtl;
+
+	sc = sysctl.SysCtlAddr;
+	sc.pconp.gpdma = on;	// Enable power.
+    }
+}
+
