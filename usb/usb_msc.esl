@@ -2,9 +2,12 @@
  * Definitions for USB Mass Storage Controller
  *
  * References:
- * 1. Universal Serial Bus, Mass Storage Class, Bulk-Only Transport
+ * 1. Universal Serial Bus, Mass Storage Class Specification Overview
+ *    rev 1.3, Sep 5, 2008
+ * 2. Universal Serial Bus, Mass Storage Class, Bulk-Only Transport
  *    rev 1.0, Sep 31, 1999
- * 2. Universal Serial Bus, Mass Storage Class
+ * 3. Universal Serial Bus, Mass Storage Class, UFI Command Specification
+ *    rev 1.0, Dec 14, 1998
  *
  * Copyright (c) 2013, Brian G. Lucas.  See LICENSE file.
  * $Id$
@@ -16,20 +19,27 @@ package usb	// extends package
 {
   package msc
   {
+    type CBWDir: (OUT, IN);
     const CBWSignature: _uint32 = 0x43425355;
     type CBW:
     {   sign:     _uint32: le;	// 00
 	tag:      _uint32: le;	// 04
 	datalen:  _uint32: le;	// 08
     	flags:			// 0C
-    	{   dir:    (OUT,IN);
+    	{   dir:    CBWDir;
     	    _:      0..0x7F;
-    	}: packed, lsb;
+    	}: packed, msb;
     	lun:      _uint8;	// 0D: only low 4-bits used
     	comdlen:  _uint8;	// 0E
-    	comdpkt:  [16]_byte;	// 0F-1E: not aligned
+	// UFI command follows	// 0F-1E: not aligned
     }: nopad;
+    type pCBW: @CBW;
     const CBWSize = 31;
+    const CMDSize = 16;
+    type CBWGeneric(CBW):
+    {   comd:     [CMDSize]_byte;
+    };
+    type pCBWGeneric: @CBWGeneric;
 
     const CSWSignature: _uint32 = 0x53425355;
     type CSWStatus: (PASSED, FAILED, PHASE, _=0xFF);
@@ -39,8 +49,12 @@ package usb	// extends package
 	residue:  _uint32: le;	// 08
 	status:   CSWStatus;	// 0C
     }: nopad;
+    type pCSW: @CSW;
     const CSWSize = 13;
 
+    /*
+     * UFI Commands
+     */
     type UFIComd:
     (   TestUnitReady=	0x00,
     	Rezero=		0x01,
@@ -94,11 +108,131 @@ package usb	// extends package
     	MediumMissing=	0x3A
     );
 
-    // The UFI data is in big-endian
+    /*
+     * Command Packet Formats
+     */
+
+    type LUN: _uint8;	// FIXME - LUN is high 3 bits
+    type MSPageCtl:
+    {   pc:     (Current, Changeable, Default, Saved);
+	code:   0..0x3F;
+    }: packed, msb;
+
+    const TestUnitSize = 6;
+    type TestUnitComd(CBW):
+    {   op:	UFIComd;			// 0
+	slun:	_uint8;				// 1
+	_:	_uint8;				// 2
+	_:	_uint8;				// 3
+	_:	_uint8;				// 4
+	cntl:	_uint8;				// 5
+	pad:	[CMDSize-TestUnitSize]_uint8;	// 6-
+    };
+    type pTestUnitComd: @TestUnitComd;
+ 
+    const InquirySize = 6;
+    type InquiryComd(CBW):
+    {   op:	UFIComd;			// 0
+	slun:	_uint8;				// 1
+	page:	_uint8;				// 2
+	_:	_uint8;				// 3
+	len:	_uint8;				// 4
+	cntl:	_uint8;				// 5
+	pad:	[CMDSize-InquirySize]_uint8;	// 6-
+    };
+    type pInquiryComd: @InquiryComd;
+
+    const RequestSenseSize = 6;
+    type RequestSenseComd(CBW):
+    {   op:	UFIComd;			// 0
+	slun:	_uint8;				// 1
+	_:	_uint8;				// 2
+	_:	_uint8;				// 3
+	len:	_uint8;				// 4
+	cntl:	_uint8;				// 5
+	pad:	[CMDSize-RequestSenseSize]_uint8; // 6-
+    };
+    type pRequestSenseComd: @RequestSenseComd;
+
+    const ModeSense6Size = 6;
+    type ModeSense6Comd(CBW):
+    {   op:	UFIComd;			// 0
+	slun:	_uint8;				// 1
+	pctl:	MSPageCtl;			// 2
+	_:	_uint8;				// 3
+	len:	_uint8;				// 4
+	cntl:	_uint8;				// 5
+	pad:	[CMDSize-ModeSense6Size]_uint8;	// 6-
+    };
+    type pModeSense6Comd: @ModeSense6Comd;
+
+    const MediumRemovalSize = 6;
+    type MediumRemovalComd(CBW):
+    {   op:	UFIComd;			// 0
+	slun:	_uint8;				// 1
+	_:	_uint8;				// 2
+	_:	_uint8;				// 3
+	prvt:	_uint8;				// 4
+	cntl:	_uint8;				// 5
+	pad:	[CMDSize-MediumRemovalSize]_uint8; // 6-
+    };
+    type pMediumRemovalComd: @MediumRemovalComd;
+
+    const ReadCapacitySize = 10;
+    type ReadCapacityComd(CBW):
+    {   op:	UFIComd;			// 0
+	slun:	_uint8;				// 1
+	lba:    _uint32: align(1), be;		// 2-5
+	_:	_uint8;				// 6
+	_:	_uint8;				// 7
+	pmi:	_uint8;				// 8
+	cntl:	_uint8;				// 9
+	pad:	[CMDSize-ReadCapacitySize]_uint8; // 10-
+    };
+    type pReadCapacityComd: @ReadCapacityComd;
+
+    const Read10Size = 10;
+    type Read10Comd(CBW):
+    {   op:	UFIComd;			// 0
+	slun:	_uint8;				// 1
+	lba:    _uint32: align(1), be;		// 2-6
+	_:	_uint8;				// 6
+	len:    _uint16: align(1), be;		// 7-8    
+	cntl:	_uint8;				// 9
+	pad:	[CMDSize-Read10Size]_uint8; 	// 10-
+    };
+    type pRead10Comd: @Read10Comd;
+
+
+    /*
+     * Response Packet Formats
+     */
+
+    const InquiryDataLen = 36;
+ 
+    type RequestSenseData:
+    {   error:
+	{   valid:  boolean;
+	    code:   0..0x7F;
+	}: packed, msb;				// 0
+	_:      _uint8;				// 1
+	sense:
+	{   _:      0..0xF;
+	    key:    0..0xF;
+	}: packed, msb;				// 2
+	info:    _uint32: align(1), be;		// 3-6
+	addlen:  _uint8;			// 7
+	_:       [4]_uint8;			// 8-11
+	addcode: _uint8;			// 12
+	addqual: _uint8;			// 13
+	_:       [4]_uint8;			// 14-17
+    };
+
     type ReadCapacityData:
     {	lastblkadr:  _uint32: be;
     	blksize:     _uint32: be;
     };
+
 
     type States: (IDLE, DATAOUT, DATAIN, INLAST, INCSW);
   }

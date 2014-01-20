@@ -1,0 +1,52 @@
+/*
+ * Definitions for USB Hub
+ *
+ * Reference: Universal Serial Bus Specification Revision 2.0
+ *
+ * Copyright (c) 2014, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+import usb;
+
+package usb	// extends package
+{
+  package hub
+  {
+    type HUBProtocol: (FULL, SingleTT, MultipleTT, RSVD=255);
+
+    type HUBRequest:    // Class specific requests
+    (   GetStatus=0, ClearFeature=1, SetFeature=3, GetDescriptor=6, SetDescriptor=7,
+	ClearTTBuffer=8, ResetTT=9, GetTTState=10, StopTT=11
+    );
+
+    type HUBFeatures: (Clocalpower, Covercurrent);
+    type PORTFeatures: (connection, enable, suspend, overcurrent, reset);
+
+    // Response to Hub GetStatus
+    type HUBStatusBits:
+    {   localpower:  boolean;		// .00
+	overcurrent: boolean;		// .01
+    }: packed, lsb, bits(16);
+    type HUBStatus:
+    {   status:   HUBStatusBits;
+	change:   HUBStatusBits;
+    };
+
+    // Response to Port GetStatus
+    type PortStatusBits:
+    {   connected:   boolean;		// .00
+	enabled:     boolean;		// .01
+	suspended:   boolean;		// .02
+	overcurrent: boolean;		// .03
+	reset:       boolean;		// .04
+	_:           0..0b111;		// .05-07
+	poweroff:    boolean;		// .08
+	lowspeed:    boolean;		// .09
+	highpeed:    boolean;		// .10
+	testmode:    boolean;		// .11
+	indicator:   boolean;		// .12
+	_:           0..0b111;		// .13-15
+    };
+  }
+}

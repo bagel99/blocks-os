@@ -26,7 +26,7 @@ package usb
 	BusPower:   boolean;
     } : packed, lsb;
 
-    type EPType: (CONTROL, ISOC, BULK, INTR);
+    type EPType: (CNTL, ISOC, BULK, INTR);
     type SyncType: (NONE, ASYNC, ADAPTIVE, SYNC);	// ISOC only
     type UsageType: (DATA, FEEDBACK, IMPLICIT, _);	// ISOC only
 
@@ -37,10 +37,12 @@ package usb
 	_:        0..0b11;
     } : packed, lsb;
 
+    type EPNum:   0..15;
+    type EPDir:   (OUT, IN);
     type EPAddress:
-    {   Num:      0..15;
+    {   Num:      EPNum;
 	_:        0..0b111;
-	Dir:      (OUT, IN);
+	Dir:      EPDir;
     } : packed, lsb;
 
     /*

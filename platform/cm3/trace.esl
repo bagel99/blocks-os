@@ -7,8 +7,11 @@
 
 package debug
 {
-    const NoWrap = true;
-    const BufSiz = 8192;
+    if !_defined(NoWrap) then
+	const NoWrap = true;
+    if !_defined(BufSiz) then
+	const BufSiz = 8192;
+
     var Trace:
     {   nxti: _uint16;
 	nxto: _uint16;

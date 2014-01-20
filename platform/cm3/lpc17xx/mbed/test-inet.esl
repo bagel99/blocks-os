@@ -24,8 +24,7 @@ import mbuf;
 import block;
 
 var MyMAC:  [6]_byte;
-const TimerID: block.BlockID = 2;
-const MemmonID:block.BlockID = 1;
+const TimerID: block.BlockID = 1;
 const EthID:   block.BlockID = 15;
 const IPv4ID:  block.BlockID = 14;
 const IPv6ID:  block.BlockID = 13;
@@ -41,7 +40,6 @@ const MyIPv4Addr: inet.IPv4Addr = { 192,156,205,18 };
 const MyIPv4Mask: inet.IPv4Addr = { 255,255,255,128 };
 import ipv6;
 import ipv4;
-import memmon;
 
 alias event.Event as Event;
 alias event.pEvent as pEvent;
@@ -85,7 +83,6 @@ debug.str("Starting test-inet...\n");
     debug.str("MyMAC="); ipv6.MACPrint(MyMAC); debug.nl();
 
     timer.NewBlock(TimerID);
-    memmon.NewBlock(MemmonID);
     eth.NewBlock(EthID);
     ipv4.NewBlock(IPv4ID);
     ipv6.NewBlock(IPv6ID);
@@ -97,9 +94,6 @@ debug.str("Starting test-inet...\n");
 	e = _new(Event);
 	e.code = START;
 	IPv6ID.Send(e);
-	e = _new(Event);
-	e.code = START;
-	MemmonID.Send(e);
     }
 
     sys.ledon(1);							// 11

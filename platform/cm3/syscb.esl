@@ -50,44 +50,44 @@ package syscb
 	    vectkey:   _uint16;
 	}: packed, lsb, in, out;
 	scr:								// 0x10
-	{   _:		0..1;		// 0
-	    sleeponexit:boolean;	// 1
-	    sleepdeep:	boolean;	// 2
-	    _:		0..1;		// 3
-	    sevoppend:	boolean;	// 4
+	{   _:		0..1;		// .00
+	    sleeponexit:boolean;	// .01
+	    sleepdeep:	boolean;	// .02
+	    _:		0..1;		// .03
+	    sevoppend:	boolean;	// .04
 	    _:      0..0x7FF_FFFF;
 	}: packed, lsb, out;
 	ccr:								// 0x14
-	{   nonbasethrdena:boolean;	// 0
-	    usersetmpend:boolean;	// 1
-	    _:		0..1;		// 2
-	    unalign:	boolean;	// 3
-	    div0:	boolean;	// 4
-	    _:		0..0b111;	// 5-7
-	    bfhfnmign:	boolean;	// 8
-	    stkalign:	boolean;	// 9
-	    _:		0..0x3F_FFFF;	// 10-31
+	{   nonbasethrdena:boolean;	// .00
+	    usersetmpend:boolean;	// .01
+	    _:		0..1;		// .02
+	    unalign:	boolean;	// .03
+	    div0:	boolean;	// .04
+	    _:		0..0b111;	// .05-07
+	    bfhfnmign:	boolean;	// .08
+	    stkalign:	boolean;	// .09
+	    _:		0..0x3F_FFFF;	// .10-31
 	}: packed, lsb, out;
 	shpr: [12] 0..0xFF;	// priorities of exceptions 4..15	// 0x18
 	shcrs:								// 0x24
-	{   mfact:	boolean;	// 0
-	    bfact:	boolean;	// 1
-	    _:		boolean;	// 2
-	    ufact:	boolean;	// 3
-	    _:		0..0b111;	// 4-6
-	    svcact:	boolean;	// 7
-	    dbmact:	boolean;	// 8
-	    _:		boolean;	// 9
-	    peindsvact:	boolean;	//10
-	    systickact:	boolean;	//11
-	    ufpend:	boolean;	//12
-	    mfpend:	boolean;	//13
-	    bfpend:	boolean;	//14
-	    svcpend:	boolean;	//15
-	    mfenb:	boolean;	//16
-	    bfenb:	boolean;	//17
-	    ufenb:	boolean;	//18
-	    _:		0..0x1FFF;	//19-31
+	{   mfact:	boolean;	// .00
+	    bfact:	boolean;	// .01
+	    _:		boolean;	// .02
+	    ufact:	boolean;	// .03
+	    _:		0..0b111;	// .04-06
+	    svcact:	boolean;	// .07
+	    dbmact:	boolean;	// .08
+	    _:		boolean;	// .09
+	    peindsvact:	boolean;	// .10
+	    systickact:	boolean;	// .11
+	    ufpend:	boolean;	// .12
+	    mfpend:	boolean;	// .13
+	    bfpend:	boolean;	// .14
+	    svcpend:	boolean;	// .15
+	    mfenb:	boolean;	// .16
+	    bfenb:	boolean;	// .17
+	    ufenb:	boolean;	// .18
+	    _:		0..0x1FFF;	// .19-31
 	}: packed, lsb, in, out;
 	mfsr:	_uint8;							// 0x28
 	bfsr:								// 0x29
@@ -101,14 +101,14 @@ package syscb
 	    adrvalid:	boolean;
 	}: packed, lsb, in;
 	ufsr:								// 0x2A
-	{   undefinst:  boolean;
-	    invstate:   boolean;
-	    invpc:      boolean;
-	    nocp:       boolean;
-	    _:          0..0b1111;
-	    unaligned:  boolean;
-	    divbyzero:  boolean;
-	    _:          0..0b111111;
+	{   undefinst:  boolean;	// .00
+	    invstate:   boolean;	// .01
+	    invpc:      boolean;	// .02
+	    nocp:       boolean;	// .03
+	    _:          0..0b1111;	// .04-07
+	    unaligned:  boolean;	// .08
+	    divbyzero:  boolean;	// .09
+	    _:          0..0b111111;	// .10-15
 	}: packed, lsb, in;
 	hfsr:								// 0x2C
 		_uint32;

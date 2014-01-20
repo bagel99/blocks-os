@@ -1,0 +1,322 @@
+/*
+ * USB Host Mass Storage Class.
+ *
+ * Copyright (c) 2014, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+import usbevent;
+import usb_msc;
+
+package usbhostmsc
+{
+    const db = 5;
+
+    alias event.Event  as Event;
+    alias event.pEvent as pEvent;
+    alias block.Block  as Block;
+    alias block.pBlock as pBlock;
+    alias mbuf.MBuf as MBuf;
+    alias mbuf.pMBuf as pMBuf;
+    alias usbhost.Pipe as Pipe;
+    type pDeviceDesc: @usb.DeviceDesc;
+    type pConfigDesc: @usb.ConfigDesc;
+    type pInterfaceDesc: @usb.InterfaceDesc;
+    type pEndpointDesc: @usb.EndpointDesc;
+
+    type HostMscBlock(Block):
+    {
+	state:   usb.msc.States;
+	init:    _uint8;
+	seqno:   _uint16;
+	pipectl: Pipe;
+	pipein:  Pipe;
+	pipeout: Pipe;
+    };
+    type pHostMscBlock: @HostMscBlock;
+    
+
+    proc (sb: pHostMscBlock) NewURB(pipe: Pipe, dir: usb.EPDir, size: _uint): pMBuf
+    {   var mb: pMBuf;
+
+	mb = mbuf.Alloc(size, 0);
+	if dir == OUT then
+	    mb.code = SEND;
+	else
+	    mb.code = RCVD;
+	mb.tag = sb.id;
+	mb.info = _uint16(pipe);
+	mb.GrowTail(size);
+	return mb;
+    }
+
+    proc (sb: pHostMscBlock) SetEPActive(pipe: Pipe, type: usb.EPType, maxpkt: _uint, interval: _uint)
+    {   var ae: usbevent.pActivateEvent;
+
+	ae = usbevent.AllocActivateEvent(0);
+	ae.pipe = pipe;
+	ae.mtu = maxpkt;
+	ae.type = type;
+	ae.inter = interval;
+	USBHOSTID.Send(ae);
+    }
+
+    proc (sb: pHostMscBlock) NewCBW(): pMBuf
+    {   var mb: pMBuf;
+	var sc: usb.msc.pCBWGeneric;
+
+	mb = sb.NewURB(sb.pipeout, OUT, usb.msc.CBWSize);
+	sc = usb.msc.pCBWGeneric(mb.Data());
+	_zero(sc);
+	sc.sign = usb.msc.CBWSignature;
+	sb.seqno += 1;  sc.tag  = sb.seqno;
+	return mb;
+    }
+
+    proc (sb: pHostMscBlock) GetCSW()
+    {   var mb: pMBuf;
+
+	mb = sb.NewURB(sb.pipein, IN, usb.msc.CSWSize);
+	USBHOSTID.Send(mb);
+    }
+
+    proc (sb: pHostMscBlock) SendCBW(mb: pMBuf, datalen: _uint, dir: usb.msc.CBWDir)
+    {   var sc: usb.msc.pCBW;
+
+	sc = usb.msc.pCBW(mb.Data());
+	sc.datalen = datalen;
+	sc.flags   = {.dir=dir};
+	if datalen != 0 then
+	{   if dir == OUT then
+		sb.state = DATAOUT;
+	    else
+		sb.state = INLAST;
+	}
+	else
+	    sb.state = INCSW;
+	USBHOSTID.Send(mb);
+    }
+
+    proc (sb: pHostMscBlock) Read(lba: _uint32, nblks: _uint)
+    {   var mb: pMBuf;
+	var sc: usb.msc.pRead10Comd;
+	var nbytes: _uint;
+
+	nbytes = nblks * 512;	// FIXME - block size
+	// send command
+	mb = sb.NewCBW();	
+	sc = usb.msc.pRead10Comd(mb.Data());
+	sc.datalen = nbytes;
+	sc.flags = {.dir=IN};
+	sc.comdlen = usb.msc.Read10Size;
+	sc.op = Read10;
+	sc.lba = lba;
+	sc.len = nblks;
+	sb.state = INLAST;
+	USBHOSTID.Send(mb);
+	// receive data
+	mb = sb.NewURB(sb.pipein, IN, nbytes);
+mb.Dump(false);
+	USBHOSTID.Send(mb);
+	// receive status
+	sb.GetCSW();
+    }
+
+    proc (sb: pHostMscBlock) ReadCapacity()
+    {   var mb: pMBuf;
+	var sc: usb.msc.pReadCapacityComd;
+
+	// send command
+	mb = sb.NewCBW();	
+	sc = usb.msc.pReadCapacityComd(mb.Data());
+	sc.datalen = usb.msc.ReadCapacityData?size;
+	sc.flags = {.dir=IN};
+	sc.comdlen = usb.msc.ReadCapacitySize;
+	sc.op = ReadCapacity;
+	// sc.lba stays as zero
+	sb.state = INLAST;
+	USBHOSTID.Send(mb);
+	// receive data
+	mb = sb.NewURB(sb.pipein, IN, usb.msc.ReadCapacityData?size);
+	USBHOSTID.Send(mb);
+	// receive status
+	sb.GetCSW();
+    }
+
+    proc (sb: pHostMscBlock) RequestSense()
+    {   var mb: pMBuf;
+	var sc: usb.msc.pRequestSenseComd;
+
+	// send command
+	mb = sb.NewCBW();	
+	sc = usb.msc.pRequestSenseComd(mb.Data());
+	sc.datalen = usb.msc.RequestSenseData?size;
+	sc.flags = {.dir=IN};	// doesn't matter?
+	sc.comdlen = usb.msc.RequestSenseSize;
+	sc.op = RequestSense;
+	sb.state = INLAST;
+	USBHOSTID.Send(mb);
+	// receive data
+	mb = sb.NewURB(sb.pipein, IN, usb.msc.RequestSenseData?size);
+	USBHOSTID.Send(mb);
+	// receive status
+	sb.GetCSW();
+    }
+
+    proc (sb: pHostMscBlock) TestUnit()
+    {   var mb: pMBuf;
+	var sc: usb.msc.pTestUnitComd;
+
+	// send command
+	mb = sb.NewCBW();	
+	sc = usb.msc.pTestUnitComd(mb.Data());
+	sc.datalen = 0;
+	sc.flags = {.dir=IN};	// doesn't matter?
+	sc.comdlen = usb.msc.TestUnitSize;
+	sc.op = TestUnitReady;
+	sb.state = INCSW;
+	USBHOSTID.Send(mb);
+	// receive status
+	sb.GetCSW();
+    }
+
+    proc (sb: pHostMscBlock) Inquiry()
+    {   var mb: pMBuf;
+	var sc: usb.msc.pInquiryComd;
+
+	// send side	
+	mb = sb.NewCBW();	
+	sc = usb.msc.pInquiryComd(mb.Data());
+	sc.datalen = usb.msc.InquiryDataLen;
+	sc.flags = {.dir=IN};
+	sc.comdlen = usb.msc.InquirySize;
+	sc.op = Inquiry;
+	sc.len = usb.msc.InquiryDataLen;
+	sb.state = INLAST;
+	USBHOSTID.Send(mb);
+	// receive data
+	mb = sb.NewURB(sb.pipein, IN, usb.msc.InquiryDataLen);
+	USBHOSTID.Send(mb);
+	// receive status
+	sb.GetCSW();
+    }
+
+
+    proc (sb: pHostMscBlock) Init(mb: pMBuf)
+    {   var nep, n: _uint;
+    	type pDesc: @usb.Descriptor;
+	var d: pDesc;
+	var id: pInterfaceDesc;
+	type pEPDescArray: @[]usb.EndpointDesc;
+	var ep: pEPDescArray;
+	var pipe: Pipe;
+	var devadr: _uint8;
+
+	sb.seqno = 0;
+	sb.state = IDLE;
+	sb.init = 0;
+	pipe = Pipe(mb.info);
+	sb.pipectl = pipe;
+	devadr = pipe.dev;
+debug.str("usbhostmsc.Init: dev=");  debug.uint8(pipe.dev);  debug.nl();
+mb.Dump(true);
+	d = pDesc(mb.Data());
+	// expecting configuration descriptor first
+	if d.Type == usb.DescConfig then
+	    mb.ShrinkHead(d.Length);
+	d = pDesc(mb.Data());
+	// expection interface descriptor
+	if d.Type == usb.DescInterface then
+	{   id = pInterfaceDesc(d);
+debug.str("id="); debug.hex32(_uint32(id)); debug.nl();
+	    nep = id.NEP;
+debug.str("nep="); debug.uint(nep); debug.nl();
+	}
+	// skip until we find endpoint descriptor
+	loop
+	{   mb.ShrinkHead(d.Length);
+	    d = pDesc(mb.Data());
+	  exit d.Type == usb.DescEndpoint;
+	}
+	ep = pEPDescArray(d);
+debug.str("ep="); debug.hex32(_uint32(ep)); debug.nl();
+	for n from 0 to nep-1 do
+	{
+debug.str("EP["); debug.uint(n); debug.str("]: num="); debug.uint8(ep[n].Address.Num);
+debug.str(" in="); debug.uint8(_uint8(ep[n].Address.Dir));
+debug.str(" type="); debug.uint8(_uint8(ep[n].Attr.Type));
+debug.str(" maxpkt="); debug.uint16(ep[n].MaxSize);
+debug.str(" itvl="); debug.uint8(ep[n].Interval);
+debug.nl();
+	    if ep[n].Attr.Type == BULK then
+	    {   pipe.dev = devadr;
+		pipe.epn = ep[n].Address.Num;
+		sb.SetEPActive(pipe, ep[n].Attr.Type, ep[n].MaxSize, ep[n].Interval);
+		if ep[n].Address.Dir == OUT then
+		    sb.pipeout = pipe;
+		else
+		    sb.pipein = pipe;
+	    }
+	}
+	sb.Inquiry();		// start things off
+    }
+
+    proc Run(b: pBlock, e: pEvent)
+    {   var sb: pHostMscBlock;
+	var mb: pMBuf;
+
+if db > 1 then { debug.str("usbh.Run ");  debug.uint8(_uint8(e.code));
+debug.chr(','); debug.uint8(e.tag); debug.nl(); }
+	sb = pHostMscBlock(b);
+	if e.code
+	is RCVD then
+	{   mb = pMBuf(e);
+debug.str("MSC RCVD ");  debug.uint8(_uint8(sb.state));  debug.nl();
+mb.Dump(true);
+	    if sb.state
+	    is INLAST then
+	        sb.state = INCSW;
+	    is INCSW then
+	        sb.state = IDLE;
+	    mbuf.Free(mb);	// FIXME
+	    if sb.state == IDLE then
+	    {   if sb.init
+		is 0 then
+		    sb.TestUnit();
+		is 1 then
+		    sb.RequestSense();
+		is 2 then
+		    sb.ReadCapacity();
+		is 3 then
+		    sb.Read(0, 1);
+		sb.init += 1;
+	    }
+	}
+	is SEND then
+	{   mb = pMBuf(e);
+debug.str("MSC SEND ");  debug.uint8(_uint8(sb.state));  debug.nl();
+mb.Dump(true);
+//	    if sb.init == 4 then button = true;
+	    mbuf.Free(mb);
+	}
+	is UP then
+	{   mb = pMBuf(e);
+	    sb.Init(mb);
+	    mbuf.Free(mb);
+	}
+    }
+
+    proc NewBlock(id: block.BlockID): pBlock
+    {   var sb: pHostMscBlock;
+
+	sb = _new(HostMscBlock);
+	_zero(sb);
+if db > 0 then { debug.str("usbhostmsc: NewBlock ");
+debug.uint8(id); debug.chr(' ');
+debug.hex(_uint(sb)); debug.nl(); }
+	sb.BlockInit(id, Run);
+
+	return sb;
+    }
+}
+

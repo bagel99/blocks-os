@@ -17,7 +17,7 @@ package fault
     proc Init()
     {
 	scb.shcrs = { .ufenb=true, .bfenb=true, .mfenb=true };
-	scb.ccr = { .div0=true, .unalign=true };
+//	scb.ccr = { .div0=true, .unalign=true };
     }
 
     const RegName: [8]@[]_byte =
@@ -27,7 +27,7 @@ package fault
     	global("ExceptionHandler")
     {	var i: _uint;
 
-	debug.str("!!!!");	// something to search for
+	debug.str("\n!!!!");	// something to search for
 	if exno
 	is 2 then	// NMI
 	{   debug.str("NMI");
@@ -48,7 +48,6 @@ package fault
 	{   var ufsr: ?scb.ufsr;
 	    ufsr = scb.ufsr;
 	    debug.str("Usage Fault, UFSR="); debug.hex16(_uint16(ufsr));
-	    if db > 0 then
 	    {	if ufsr.undefinst then debug.str(" UNDEFINST");
 	    	if ufsr.invstate  then debug.str(" INVSTATE");
 	    	if ufsr.invpc     then debug.str(" INVPC");
@@ -70,6 +69,9 @@ package fault
 	(_uint(sys.TopOfStack)-
 	_uint(sp))/
 	_uint?size - 8);
+	nvic.DisableAll();
+	if _defined(Fatal) then
+	    call Fatal();
 	loop {}
     }
 }

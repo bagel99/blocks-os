@@ -35,4 +35,5 @@ SECTIONS
 	. = ALIGN (8);
 	_end = .;
     } >ram
+}
 

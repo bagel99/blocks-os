@@ -1,0 +1,73 @@
+/*
+ * USB events, both device and host side.
+ *
+ * Copyright (c) 2014, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+package usbevent
+{
+    alias event.Event as Event;
+
+    type Pipe:
+    {	dev:   _uint8;			// .00-07
+	epn:   usb.EPNum;		// .08-11
+	bus:   0..15;			// .12-15
+    }: packed, lsb, bits(16);
+
+    type InformEvent(Event):
+    {	pipe:   Pipe;
+	mtu:   _uint16;
+    };
+    type pInformEvent: @InformEvent;
+
+    type ActivateEvent(Event):
+    {	pipe:   Pipe;
+	mtu:   _uint16;
+	type:  usb.EPType;
+	inter: _uint8;
+    };
+    type pActivateEvent: @ActivateEvent;
+
+    type RegisterData:
+    {	mask:
+	{   class:  boolean;
+	    subcls: boolean;
+	    proto:  boolean;
+	    vid:    boolean;
+	    pid:    boolean;
+	}: packed, lsb, bits(8);
+	class:  _uint8;
+	subcls: _uint8;
+	proto:  _uint8;
+	vid:    _uint16;
+	pid:    _uint16;
+    };
+
+    type RegisterEvent(Event):
+    {	data:   RegisterData;
+    };
+
+
+    proc AllocActivateEvent(size: _uint): pActivateEvent
+    {   var ae: pActivateEvent;
+
+	ae = _new(usbevent.ActivateEvent);
+	ae.code = ACTIVATE;
+	ae.xsize = ActivateEvent?size - Event?size;
+	ae.tag = 0;
+	return ae;
+    }
+
+
+    proc (ae: pActivateEvent) Dump()
+    {
+    	debug.str("Activate dev="); debug.uint8(ae.pipe.dev);
+    	debug.str(" epn="); debug.uint8(ae.pipe.epn);
+    	debug.str(" mtu="); debug.uint16(ae.mtu);
+    	debug.str(" type="); debug.uint8(_uint8(ae.type));
+    	debug.str(" inter="); debug.uint8(ae.inter);
+    	debug.nl();
+    }
+}
+

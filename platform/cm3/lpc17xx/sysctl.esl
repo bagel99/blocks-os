@@ -182,7 +182,10 @@ package sysctl
 	syscon:	PCLKDIV_T;
 	mc:	PCLKDIV_T;
     }: packed, lsb;
-    
+
+    // The DMA Request Select register is documented in the GPDMA section    
+    type DMASEL_T: [8] boolean: packed, lsb, bits(32);
+
 	
     type SYSCTL_T:
     {
@@ -209,7 +212,9 @@ package sysctl
         _:      _uint32;					// 1A4
 	pclk0:	PCLKSEL0_T;					// 1A8
 	pclk1:	PCLKSEL1_T;					// 1AC
-        _:      [6]_uint32;					// 1B0-1C4
+        _:      [4]_uint32;					// 1B0-1BC
+        usbint: _uint32;					// 1C0
+        dmasel: DMASEL_T: out;					// 1C4
         clkout: CLKOUT_T;					// 1C8
         _:      _uint32;					// 1CC
         _:      [12]_uint32;					// 1D0-1FC

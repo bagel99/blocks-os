@@ -13,12 +13,13 @@ package mbuf
 
     type MBuf(Event):		// Built on Event
     {	info:   _uint16;	// additional info, e.g. protocol number
-	tlen:   _uint16;	// total length of buf
+	stat:   _uint16;	// status/error indications
 	head:	_uint16;	// offset to the current head of buffer
 	tail:	_uint16;	// offset to the current tail of buffer
 	buf:	[]_byte;	// data
     };
     type pMBuf: @MBuf;
+    const HdrSize = MBuf?size - Event?size;
 
     // Methods - FIXME - move to event
     proc (mb: pMBuf) GetNext(): pMBuf : inline
@@ -49,7 +50,7 @@ package mbuf
 
     proc (mb: pMBuf) GetTailMax(): _uint: inline
     {
-	return mb.tlen - mb.tail;
+	return mb.xsize - HdrSize - mb.tail;
     }
 
     proc (mb: pMBuf) GrowHead(n: _uint): @_memory : inline
@@ -74,7 +75,7 @@ package mbuf
     proc (mb: pMBuf) GrowTail(n: _uint): @_memory: inline
     {   var pm: @_memory;
 
-	if n > mb.tlen - mb.tail then
+	if n > mb.xsize - HdrSize - mb.tail then
 	   return 0;
 	pm = mb.buf[mb.tail:];
 	mb.tail += n;
@@ -85,6 +86,13 @@ package mbuf
     {
 	mb.tail -= n;
 	return mb.buf[mb.tail:];
+    }
+
+    proc (mb: pMBuf) Reset(n: _uint): @_memory: inline
+    {
+	mb.head = n;
+	mb.tail = n;
+	return mb.buf[mb.head:];
     }
 
     proc (mb: pMBuf) CopyInHead(fmmb: pMBuf)
@@ -101,7 +109,7 @@ package mbuf
     {   var n: _uint16;
 
 	n = fmmb.Size();
-	if n <= mb.tlen - mb.tail then
+	if n <= mb.xsize - HdrSize - mb.tail then
 	{
 	    mb.buf[mb.tail:n] = fmmb.buf[fmmb.head:n];
 	    mb.tail += n;
@@ -110,7 +118,7 @@ package mbuf
 
     proc (mb: pMBuf) CopyIn(buf: _address, len: _uint)
     {
-	if len <= mb.tlen - mb.tail then
+	if len <= mb.xsize - HdrSize - mb.tail then
 	{
 	    mb.buf[mb.tail:len] = buf[0:len];
 	    mb.tail += len;
@@ -121,12 +129,17 @@ if _defined(debug) then {
     proc (mb: pMBuf) Dump(all: boolean)
     {
 	debug.str("DumpMB: adr=");  debug.hex(_uint(mb));
-	debug.str(" tlen=");  debug.uint16(mb.tlen);
+	debug.str(" code=");  debug.uint8(_uint8(mb.code));
+	debug.str(" tag=");   debug.uint8(mb.tag);
+	debug.str(" xsize="); debug.uint16(mb.xsize);
+	debug.str(" info=0x");  debug.hex16(mb.info);
+	debug.str(" stat=0x");  debug.hex16(mb.stat);
 	debug.str(" head="); debug.uint16(mb.head);
 	debug.str(" tail="); debug.uint16(mb.tail);
-	debug.str(" data="); debug.hex(_uint(mb.Data()));
-	debug.chr('\n');
-	if all then debug.dumpb("", mb.Data(), mb.Size());
+	if all then
+	    debug.dumpb(" data=", mb.Data(), mb.Size());
+	else
+	    debug.nl();
     }
 }
 
@@ -140,7 +153,9 @@ if _defined(debug) then {
  	if mb != 0 then
 	{   mb.code = 0;
 	    mb.next = 0;
-	    mb.tlen = tsize;
+	    mb.xsize = tsize + HdrSize;
+	    mb.info = 0;
+	    mb.stat = 0;
 	    mb.head = offs;
 	    mb.tail = offs;
 	}
@@ -149,7 +164,7 @@ if _defined(debug) then {
 
     proc Free(mb: pMBuf)
     {
-	_delete(mb(mb.tlen));
+	_delete(mb(mb.xsize - HdrSize));
     }	
 
     proc Combine(mb1: pMBuf, mb2: pMBuf): pMBuf

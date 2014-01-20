@@ -6,6 +6,7 @@ INC=	-I.. -I../.. -I../../.. -I../../.. -I../../../.. \
 	-I../../../../display -I../../../../display/fonts \
 	-I../../../../usb \
 	-I../../../../usb/device/hid \
+	-I../../../../usb/host \
 	-I../../../../fs -I../../../../crc
 DBG=
 OPT=	-i	# disable inlining
@@ -43,7 +44,7 @@ LIBOBJ= memset.o memcpy.o memcmp.o mem.o
 all:	test-timer.bin test-inet.bin \
 	test-udp.bin test-tcp.bin \
 	test-lcd.bin test-colorled.bin test-adc.bin test-speaker.bin \
-	test-accel.bin
+	test-accel.bin test-usbhost.bin
 #	test-hid.elf test-sdcard.elf test-msc.elf
 
 startup.o: ../startup.S

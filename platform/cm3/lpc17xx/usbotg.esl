@@ -1,0 +1,108 @@
+/*
+ * LPC17xx USB OTG Control
+ *
+ * Copyright (c) 2013, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+package usbotg
+{
+    /*
+     * The following register is shared between host side and device side
+     * and is actually in the system control block.
+     */
+    type USBIntrReg:
+    {   lp:     boolean: ro;		// .00
+	hp:     boolean: ro;		// .01
+	dma:    boolean: ro;		// .02
+	host:	boolean: ro;		// .03
+	atx:	boolean: ro;		// .04
+	otg:	boolean: ro;		// .05
+	i2c:	boolean: ro;		// .06
+	_:      0..1;			// .07
+	needclk:boolean: ro;		// .08
+	_:      0..0x3F_FFFF;		// .09-30
+	enable: boolean;		// .31
+    }: packed, lsb, in, out;
+    type USBIntr: @USBIntrReg;
+    const usbint: USBIntr = 0x400F_C1C0;	// In the system control block
+
+    /*
+     * The following register is shared between host side and device side.
+     */
+    type USBClocks:
+    {   hostclk: boolean;		// .00 host-mode clocks
+	devclk:  boolean;		// .01 device-mode clocks
+	i2cclk:  boolean;		// .02 i2c clocks for OTG externals
+	otgclk:  boolean;		// .03 clocks for OTG registers
+	ahbclk: boolean;		// .04 AHB clock
+    }: packed, lsb, bits(32);
+    type USBClockRegs:
+    {   ctl:    USBClocks: out;						// FF4
+	sts:    USBClocks: ro, in;					// FF8
+    };
+    type USBClkCtl: @USBClockRegs;
+    const usbccr: USBClkCtl = 0x5000_CFF4;
+
+    /*
+     * The following registers are OTG specific
+     */
+    type OTGInt:
+    {   tmr:	boolean;
+    	rm_pu:	boolean;
+    	hnpfail:boolean;
+    	hnpsucc:boolean;
+    }: packed, lsb, bits(32);
+    if _defined(USB_TWO_PORTS) then
+	type PortFunc: (DEV_HOST, HOST_HOST, _, HOST_DEV);// For LPC177x,8x
+    else
+	type PortFunc: (DEV, HOST, _, _);		// For LPC176x
+    type OTGRegs:
+    {	intsts: OTGInt: in, ro;						// 100
+	intenb: OTGInt: out;						// 104
+	intset: OTGInt: out;						// 108
+	intclr: OTGInt: out;						// 10C
+	scr:								// 110
+	{   pfunc:    PortFunc;				// .00-01
+	    tmrscale: (T10us, T100us, T1000us, _);	// .02-03
+	    tmrmode:  (MONO, FREE);			// .04
+	    tmrenb:   boolean;				// .05
+	    tmrrst:   boolean;				// .06
+	    _:        0..1;				// .07
+	    btrkenb:  boolean;				// .08
+	    atrkenb:  boolean;				// .09
+	    purm:     boolean;				// .10
+	    _:        0..0b11111;			// .11-15
+	    tmrcnt:   0..0xFFFF;			// .16-31
+	}: packed, lsb, in, out;
+	tmr:	_uint16: bits(32), in;					// 114
+    };
+    type OTG: @OTGRegs;
+    const otg: OTG = 0x5000_C100;
+
+    /*
+     * The following registers are the I2C interface to external OTG electronics
+     */
+    type I2CRegs:
+    {	rxtx:	// rx and tx fifo					// 300
+    	{   data:   _uint8;
+	    start:  boolean;
+	    stop:   boolean;
+	}: packed, lsb, bits(32), in, out;
+	sts:								// 304
+	{   tdi:    boolean;
+	    afi:    boolean;
+	    // FIXME - more
+	}: packed, lsb, bits(32), in;
+	cr:								// 308
+	{   tdie:   boolean;
+	    afie:   boolean;
+	    // FIXME - more
+	}: packed, lsb, bits(32), out;
+	clkhi:  _uint8: bits(32), out;					// 30C
+	clklo:  _uint8: bits(32), out;					// 310
+    };
+    type I2C: @I2CRegs;
+    const i2c: I2C = 0x5000_C300;
+}
+

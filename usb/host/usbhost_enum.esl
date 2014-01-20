@@ -1,0 +1,337 @@
+/*
+ * USB Host Bus Enumeration.
+ *
+ * Copyright (c) 2014, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+import usbevent;
+import usb_hub;
+
+package usbenum
+{
+    const db = 5;
+
+    alias event.Event  as Event;
+    alias event.pEvent as pEvent;
+    alias block.Block  as Block;
+    alias block.pBlock as pBlock;
+    alias mbuf.MBuf as MBuf;
+    alias mbuf.pMBuf as pMBuf;
+    alias usbhost.Pipe as Pipe;
+    alias usbevent.RegisterData as RegisterData;
+    type pDeviceDesc: @usb.DeviceDesc;
+    type pConfigDesc: @usb.ConfigDesc;
+    type pInterfaceDesc: @usb.InterfaceDesc;
+    type pEndpointDesc: @usb.EndpointDesc;
+
+    const NumRegistered = 4;
+
+    type State: (DOWN, DISC, CONF0, CONF1, CONF2, CONF3, CONF4, CONF5, READY);
+    type USBEnumBlock(Block):
+    {	state:  State;
+	devadr: _uint8;
+	class:  _uint8;
+	subcls: _uint8;
+	proto:  _uint8;
+	vid:    _uint16;
+	pid:    _uint16;
+	mps0:	_uint16;
+	superdesc: pMBuf;	// MBuf containing super descriptor
+	numreg: _uint;
+	bid:      [NumRegistered]block.BlockID;
+	registry: [NumRegistered]RegisterData;
+    };
+    type pUSBEnumBlock: @USBEnumBlock;
+
+    proc (ab: pUSBEnumBlock) NewURB(pipe: Pipe, size: _uint): pMBuf
+    {   var mb: pMBuf;
+
+	mb = mbuf.Alloc(size, 0);
+	mb.code = SEND;
+	mb.tag = ab.id;
+	mb.info = _uint16(pipe);
+	return mb;
+    }
+
+    proc (ab: pUSBEnumBlock) SetEPActive(pipe: Pipe, type: usb.EPType, maxpkt: _uint, interval: _uint)
+    {   var ae: usbevent.pActivateEvent;
+
+	ae = usbevent.AllocActivateEvent(0);
+	ae.tag = ab.id;
+	ae.pipe = pipe;
+	ae.mtu = maxpkt;
+	ae.type = type;
+	ae.inter = interval;
+	USBHOSTID.Send(ae);
+    }
+
+    proc (ab: pUSBEnumBlock) GetDeviceDescriptor(mb: pMBuf, len: _uint)
+    {   var cmd: usb.pSetupPkt;
+
+	mb.Reset(0);	// in case mb was used before
+	cmd = usb.pSetupPkt(mb.GrowTail(usb.SetupPkt?size));
+	cmd.type = { .recip=Device, .stype=Standard, .dir=IN };
+	cmd.request = _uint8(usb.StandardRequests.GetDescriptor);
+	cmd.value = _uint8(usb.DescDevice) << 8;
+	cmd.index = 0;
+	cmd.length = len;
+	mb.GrowTail(len);
+	USBHOSTID.Send(mb);
+    }
+
+    proc (ab: pUSBEnumBlock) GetConfigDescriptor(mb: pMBuf, cnf: _uint8, len: _uint)
+    {   var cmd: usb.pSetupPkt;
+
+	mb.Reset(0);	// in case mb was used before
+	cmd = usb.pSetupPkt(mb.GrowTail(usb.SetupPkt?size));
+	cmd.type = { .recip=Device, .stype=Standard, .dir=IN };
+	cmd.request = _uint8(usb.StandardRequests.GetDescriptor);
+	cmd.value = _uint8(usb.DescConfig) << 8;
+	cmd.index = 0;
+	cmd.length = len;
+	mb.GrowTail(len);
+	USBHOSTID.Send(mb);
+    }
+
+    proc (ab: pUSBEnumBlock) SetConfiguration(mb: pMBuf, cnf: _uint8)
+    {   var cmd: usb.pSetupPkt;
+
+	mb.Reset(0);	// in case mb was used before
+	cmd = usb.pSetupPkt(mb.GrowTail(usb.SetupPkt?size));
+	cmd.type = { .recip=Device, .stype=Standard, .dir=OUT };
+	cmd.request = _uint8(usb.StandardRequests.SetConfiguration);
+	cmd.value = cnf;
+	cmd.index = 0;
+	cmd.length = 0;
+	USBHOSTID.Send(mb);
+    }
+
+    proc (ab: pUSBEnumBlock) SetAddress(mb: pMBuf, adr: _uint8)
+    {   var cmd: usb.pSetupPkt;
+
+	mb.Reset(0);	// in case mb was used before
+	cmd = usb.pSetupPkt(mb.GrowTail(usb.SetupPkt?size));
+	cmd.type = { .recip=Device, .stype=Standard, .dir=OUT };
+	cmd.request = _uint8(usb.StandardRequests.SetAddress);
+	cmd.value = adr;
+	cmd.index = 0;
+	cmd.length = 0;
+	USBHOSTID.Send(mb);
+    }
+/*
+    proc (ab: pUSBEnumBlock) SetupEndPoints()
+    {   var nep, n: _uint;
+    	type pDesc: @usb.Descriptor;
+	var d: pDesc;
+	var id: pInterfaceDesc;
+	type pEPDescArray: @[]usb.EndpointDesc;
+	var ep: pEPDescArray;
+	var mb: pMBuf;
+	var pipe: Pipe;
+
+	mb = ab.superdesc;
+debug.str("SetupEndPoints: ");
+mb.Dump(true);
+	d = pDesc(mb.Data());
+	// expecting configuration descriptor first
+	if d.Type == usb.DescConfig then
+	    mb.ShrinkHead(d.Length);
+	d = pDesc(mb.Data());
+	// expection interface descriptor
+	if d.Type == usb.DescInterface then
+	{   id = pInterfaceDesc(d);
+debug.str("id="); debug.hex32(_uint32(id)); debug.nl();
+	    nep = id.NEP;
+debug.str("nep="); debug.uint(nep); debug.nl();
+	}
+	// skip until we find endpoint descriptor
+	loop
+	{   mb.ShrinkHead(d.Length);
+	    d = pDesc(mb.Data());
+	  exit d.Type == usb.DescEndpoint;
+	}
+	ep = pEPDescArray(d);
+debug.str("ep="); debug.hex32(_uint32(ep)); debug.nl();
+	for n from 0 to nep-1 do
+	{
+debug.str("EP["); debug.uint(n); debug.str("]: num="); debug.uint8(ep[n].Address.Num);
+debug.str(" in="); debug.uint8(_uint8(ep[n].Address.Dir));
+debug.str(" type="); debug.uint8(_uint8(ep[n].Attr.Type));
+debug.str(" maxpkt="); debug.uint16(ep[n].MaxSize);
+debug.str(" itvl="); debug.uint8(ep[n].Interval);
+debug.nl();
+	    pipe.dev = ab.devadr;	// FIXME
+	    pipe.epn = ep[n].Address.Num;
+	    ab.SetEPActive(pipe, ep[n].Attr.Type, ep[n].MaxSize, ep[n].Interval);
+	}
+    }
+*/
+
+    proc (ab: pUSBEnumBlock) InitHub()
+    {
+debug.str("InitHub ");  debug.uint8(ab.devadr);  debug.nl();
+    }
+
+    proc (ab: pUSBEnumBlock) NotifyDriver()
+    {   var i: _uint;
+	var match: boolean;
+
+	for i from 0 to ab.numreg-1 do
+	{   match = true;
+	    if ab.registry[i].mask.class  && ab.registry[i].class  != ab.class  then match = false; 
+	    if ab.registry[i].mask.subcls && ab.registry[i].subcls != ab.subcls then match = false; 
+	    if ab.registry[i].mask.proto  && ab.registry[i].proto  != ab.proto  then match = false; 
+	    if ab.registry[i].mask.vid    && ab.registry[i].vid    != ab.vid    then match = false; 
+	    if ab.registry[i].mask.pid    && ab.registry[i].pid    != ab.pid    then match = false; 
+	    if match then
+	    {   if ab.bid[i] == 0 then	// its for us, must be a hub
+	    	    ab.InitHub();
+	    	else
+	    	{   ab.superdesc.code = UP;
+	    	    ab.bid[i].Send(ab.superdesc);
+	    	}
+		return;
+	    }
+	}
+    }
+
+    proc Run(b: pBlock, e: pEvent)
+    {   var ab: pUSBEnumBlock;
+	var mb: pMBuf;
+	var len: _uint;
+	var cmd: usb.pSetupPkt;
+	var dd: pDeviceDesc;
+	var cd: pConfigDesc;
+	var id: pInterfaceDesc;
+
+	ab =  pUSBEnumBlock(b);
+if db > 1 then { debug.str("usbenum.Run ");  debug.uint8(_uint8(e.code));
+debug.chr(','); debug.uint8(e.tag); debug.nl(); }
+	if e.code
+	is RCVD then
+	{
+	}
+	is SEND then
+	{   mb = pMBuf(e);
+if db > 2 then { debug.str("SEND state=");  debug.uint8(_uint8(ab.state));  debug.nl();
+mb.Dump(true); }
+	    if ab.state
+	    is CONF0 then
+	    {   // FIXME - check valid device descriptor
+		dd = pDeviceDesc(mb.Offset(usb.SetupPkt?size));
+	    	ab.mps0 = dd.MaxSize0;
+	    	ab.devadr += 1;
+	    	ab.SetAddress(mb, ab.devadr);
+		ab.state = CONF1;
+			   	
+	    }
+	    is CONF1 then
+	    {   mb.info = _uint16(Pipe{.dev=ab.devadr, .epn=0});	// update device address
+		ab.SetEPActive({.dev=ab.devadr, .epn=0}, CNTL, ab.mps0, 0);
+		ab.GetDeviceDescriptor(mb, usb.DeviceDesc?size);
+		ab.state = CONF2;
+	    }
+	    is CONF2 then
+	    {   // FIXME - check valid device descriptor
+		dd = pDeviceDesc(mb.Offset(usb.SetupPkt?size));
+if db > 1 then {
+debug.str("vendor=0x"); debug.hex16(dd.Vendor);
+debug.str(" product=0x"); debug.hex16(dd.Product); debug.nl();
+}
+		ab.vid = dd.Vendor;
+		ab.pid = dd.Product;
+		ab.GetConfigDescriptor(mb, 0, usb.ConfigDesc?size);
+		ab.state = CONF3;
+	    }
+	    is CONF3 then
+	    {   // FIXME - check valid configuration descriptor
+		cd = pConfigDesc(mb.Offset(usb.SetupPkt?size));
+		ab.GetConfigDescriptor(mb, 0, cd.TotLen);
+		ab.state = CONF4;
+	    }
+	    is CONF4 then
+	    {   // FIXME - check valid configuration descriptor
+	    	mb.ShrinkHead(usb.SetupPkt?size);
+		cd = pConfigDesc(mb.Data());
+		ab.superdesc = mb;
+		id = pInterfaceDesc(mb.Offset(cd.Length));
+if db > 1 then {
+debug.str("ConfigNum="); debug.uint8(cd.ConfigN);
+debug.str(" NumIntf="); debug.uint8(cd.NIntf); debug.nl();
+debug.str("IntfNum="); debug.uint8(id.IntfN);
+debug.str(" Class=0x"); debug.hex8(id.Class);
+debug.str(" SubClass=0x"); debug.hex8(id.SubClass);
+debug.str(" Protocol=0x"); debug.hex8(id.Protocol);
+debug.str(" NumEP="); debug.uint8(id.NEP);
+debug.nl();
+}
+		ab.class = id.Class;
+		ab.subcls = id.SubClass;
+		ab.proto = id.Protocol;
+		mb = ab.NewURB({.dev=ab.devadr, .epn=0}, usb.SetupPkt?size+64);
+		ab.SetConfiguration(mb, cd.ConfigN);
+		ab.state = CONF5;
+	    }
+	    is CONF5 then
+	    {
+		mbuf.Free(mb);
+		ab.state = READY;
+		ab.NotifyDriver();
+	    }
+	    is READY then
+	    {
+	    }
+
+	}
+	is INFORM then
+	{
+	    var ie: usbevent.pInformEvent;
+	    ie = usbevent.pInformEvent(e);
+	    len = ie.mtu;
+	    // Allocate an MBuf large enough for subsequent stuff and start initialization
+	    mb = ab.NewURB({.dev=0, .epn=0}, usb.SetupPkt?size+64);
+	    ab.GetDeviceDescriptor(mb, len);
+	    ab.state = CONF0;
+	}
+	is START then
+	{   e.tag = ab.id;
+	    USBHOSTID.Send(e);	// forward START to driver
+	    ab.state = DISC;
+	    ab.devadr = 0;
+	}
+	else
+	{
+// debug.str("unknown event");
+	    event.Free(e);
+	}	
+    }
+
+    proc (ab: pUSBEnumBlock) Init()
+    {
+	ab.state = DISC;
+	ab.devadr = 1;
+	// register hubs to us
+	ab.registry[0] = { {.class=true, .subcls=true}, .class=0x09, .subcls=0 };
+	ab.bid[0] = 0;	// means us
+	ab.numreg = 1;
+	// FIXME - TEMP register MSC, remove when registering works
+	ab.registry[1] = { {.class=true, .subcls=true, .proto=true}, .class=0x08, .subcls=0x06, .proto=0x50};
+	ab.bid[1] = USBHOSTMSC;
+	ab.numreg = 2;
+    }
+
+    proc NewBlock(id: block.BlockID): pBlock
+    {   var ab: pUSBEnumBlock;
+
+	ab = _new(USBEnumBlock);
+	_zero(ab);
+if db > 0 then { debug.str("usbenum: NewBlock ");
+debug.uint8(id); debug.chr(' ');
+debug.hex(_uint(ab)); debug.nl(); }
+	ab.BlockInit(id, Run);
+
+	return ab;
+    }
+}
+

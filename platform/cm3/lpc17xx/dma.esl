@@ -81,6 +81,48 @@ package dma
     };
 
 
+    type ChanMapEntry:
+    {   dev:    chip.Devices;
+        sub:    0..1;		// e.g. 0 for Tx, 1 for Rx
+    }: packed, bits(8);
+    const ChanMap: []ChanMapEntry =
+    {	// channels 0-7 have only one source
+	{SSP0, 0}, {SSP0, 1}, {SSP1, 0}, {SSP1, 1},
+	{ADC0, 0}, {I2S,  0}, {I2S,  1}, {DAC,  0},
+	// channels 8-15 have two sources, the default sources are:
+	{UART0,0}, {UART0,1}, {UART1,0}, {UART1,1},
+	{UART2,0}, {UART2,1}, {UART3,0}, {UART3,1},
+	// the alternate sources are:
+	{TIMER0,0},  {TIMER0,1},  {TIMER1,0},  {TIMER1,1},
+	{TIMER2,0},  {TIMER2,1},  {TIMER3,0},  {TIMER3,1}
+    };
+
+    proc FindChannel(dev: chip.Devices, sub: 0..1): _uint, boolean
+    {   var i: _uint;
+	var sc: sysctl.SysCtl = sysctl.SysCtlAddr;
+	var cm: ChanMapEntry;
+
+	cm.dev = dev;
+	cm.sub = sub;
+    	i = 0;
+    	while i < ChanMap?len do
+    	{   if ChanMap[i] == cm then
+	    {	if i < 8 then
+	    	    return i, true;
+	    	else if i < 16 then	// dual role, default source
+	    	{   sc.dmasel[i-8] = false;
+	    	    return i, true;
+	    	}
+	    	else			// dual role, alternate source
+	    	{   sc.dmasel[i-16] = true;
+	    	    return i-16, true;
+	    	}
+	    }
+	    i += 1;
+	}
+	return 0, false;
+    }
+
     proc Init()
     {   var sc: sysctl.SysCtl;
 

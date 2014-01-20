@@ -54,6 +54,11 @@ package chip
 	    return _address(0x5000_0000 + ((_uint8(dev)-32) << 14));
     }
 
+    proc GetDeviceVector(dev: Devices): _uint8
+    {
+	return Interrupt[dev];
+    }
+
     proc IAP(command: @[]_uint32, result: @[]_uint32):: external(0x1FFF1FF1);
 
     proc GetSerialNumber(): _uint32

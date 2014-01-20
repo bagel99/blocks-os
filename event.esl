@@ -9,7 +9,7 @@ package event
 {
     type Code:
     (	_,
-	CONNECT,
+	CONNECT,	// reserved for block connection protocol
 	START,
     	STOP,
     	TSTART,		// start timer in ticks
@@ -21,7 +21,9 @@ package event
 	UP,		// from bottom to top indicating e.g., link is up
 	DOWN,		// from bottom to top indicating e.g., link is down
 	SEND,		// from top to bottom requesting transmission of data
-	RCVD		// from bottom to top indicating data received
+	RCVD,		// from bottom to top indicating data received
+	INFORM,		// from bottom to top indicating some event
+	ACTIVATE,	// from top to bottom requesting some activation
     );
 
     if _uint?size == 8 then
@@ -63,6 +65,7 @@ package event
 
 	e = _new(Event);
 	e.code = code;
+	e.xsize = 0;
 	return e;
     }
 
