@@ -89,7 +89,8 @@ debug.str(" ifn="); debug.uint8(intf.ifn); debug.nl();}
 		pp.hwadrl == net.MACLen  && pp.pradrl == IPv4AddrLen then
 	    {
 if db > 2 then {debug.str("\ttgt="); ipv4.PrintAddr(pp.tpradr);
-debug.str(" src="); ipv4.PrintAddr(pp.spradr); debug.nl();}
+debug.str(" src="); ipv4.PrintAddr(pp.spradr);
+debug.str(" us=");  ipv4.PrintAddr(intf.addr); debug.nl();}
 		if pp.tpradr == intf.addr then	// we are the target
 		{
 		    // Capture requester's address for our cache

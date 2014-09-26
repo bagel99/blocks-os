@@ -1,3 +1,15 @@
+/*
+ * Name:
+ * Parameters:
+ * width=16
+ * poly=0x1021
+ * init=0xffff
+ * refin=?
+ * refout=?
+ * xorout=0x0000
+ * check=0xfc7a
+ */
+
 package crc_ccitt
 {
     const table: [256]_uint16 =
@@ -43,10 +55,10 @@ package crc_ccitt
 	i = 0;
 	while i < n do
 	{
-debug.hex16(crc); debug.chr(' ');
-debug.hex8(b[i]); debug.chr(' ');
+//debug.hex16(crc); debug.chr(' ');
+//debug.hex8(b[i]); debug.chr(' ');
 	    crc = (crc<<8) ^ table[b[i]];
-debug.hex16(crc); debug.nl();
+//debug.hex16(crc); debug.nl();
 	    i += 1;
 	}
 	return crc;

@@ -29,8 +29,9 @@ const TimerID: block.BlockID = 1;
 import timer;
 
 import lcd;
-// import font_mono5x8;  alias font_mono5x8 as myfont;
-import font_sans20x27b;  alias font_sans20x27b as myfont;
+//import font_mono5x8;    alias font_mono5x8 as myfont;
+//import font_sans20x27b; alias font_sans20x27b as myfont;
+import font_helv12;     alias font_helv12 as myfont;
 
 var ds: lcd.State;	// FIXME - dynamic allocation
 
@@ -53,15 +54,15 @@ sys.ledon(0);
 sys.ledoff(0);
     u = uart.Init(sys.DebugPort);		// for debug print
 var i, j: _uint;
-for i from 0 to 127 do ds.PutPixel(i, 0, 1);
-for j from 0 to 31  do ds.PutPixel(0, j, 1);
-for i from 0 to 127 do ds.PutPixel(i, 31, 1);
-for j from 0 to 32  do ds.PutPixel(127, j, 1);
+for i from 0 to 127 do ds.ShowPixel(i, 0, 1);
+for j from 0 to 31  do ds.ShowPixel(0, j, 1);
+for i from 0 to 127 do ds.ShowPixel(i, 31, 1);
+for j from 0 to 32  do ds.ShowPixel(127, j, 1);
     ds.Refresh();
 sys.ledon(3);
     ds.SetFont(myfont.fonttab);
-    ds.SetXY(4, 4);
-    ds.PutString("Hello world!");
+    ds.SetXY(1, 1);
+    ds.ShowString("Hello world!");
     ds.Refresh();
 sys.ledoff(3);
 

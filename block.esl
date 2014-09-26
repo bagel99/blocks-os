@@ -87,21 +87,18 @@ package block
         var n: IntrNum;
         var bid: BlockID;
 
-if db > 2 && Ready != 0 then {
-debug.str("Sched r="); debug.hex32(Ready); }
 	bid = NextToRun();
 	if bid != 0 then
 	{   b = Table[bid-1];
-if db > 2 then {debug.str(" bid="); debug.uint8(bid);}
 	    if b != 0 then      // FIXME - impossible?
 	    {
 		if b.pintr != 0 then    // interrupt(s) pending
 		{   n = _ctz(b.pintr);
 		    b.nintr = n;
 		    b.IntrClr(n);
-		    if b.pintr == 0 then
+		    if b.pintr == 0 && b.head == 0 then
 			bid.MakeIdle();
-if db > 2 then {debug.nl();}
+if db > 3 then {debug.str("RunI "); debug.uint8(bid); debug.nl();}
 		    b.run@(b, 0);
 		}
 		else			// normal event
@@ -110,7 +107,10 @@ if db > 2 then {debug.nl();}
 		    b.head = e.next;
 		    if b.head == 0 then
 			bid.MakeIdle();
-if db > 2 then {debug.str(" e="); debug.hex(_uint(e)); debug.nl();}
+if db > 1 then {debug.str("Run "); debug.uint8(bid); 
+debug.chr(':'); debug.uint8(e.tag);
+debug.chr(' '); debug.uint8(e.code);
+debug.chr('('); debug.uint16(e.xsize); debug.str(")\n");}
 		    b.run@(b, e);
 		}
 		return true;
@@ -147,14 +147,13 @@ if db > 2 then {debug.str(" e="); debug.hex(_uint(e)); debug.nl();}
 	{   b = Table[bid-1];
 	    // FIXME - unlock
 if db > 1 then {debug.str("Send "); debug.uint8(bid);
-debug.chr(':'); debug.uint8(_uint8(e.code));
-debug.chr('('); debug.uint16(e.xsize);
-debug.str(") b="); debug.hex(_uint(b));
-debug.str(" e="); debug.hex(_uint(e));}
+debug.chr(':'); debug.uint8(e.tag);
+debug.chr(' '); debug.uint8(_uint8(e.code));
+debug.chr('('); debug.uint16(e.xsize); debug.str(")\n"); }
 	    // FIXME - lock
 	    b.Enqueue(e);
 	    bid.MakeRunnable();
-if db > 1 then {debug.str(" r="); debug.hex32(Ready); debug.nl();}
+if db > 2 then {debug.str("\tr="); debug.hex32(Ready); debug.nl();}
         }
         else {} // system configuration error
     }

@@ -1,16 +1,18 @@
 /*
  * USB Open Host Controller Interface (OHCI)
  *
- * Copyright (c) 2013, Brian G. Lucas.  See LICENSE file.
+ * Copyright (c) 2013,2014, Brian G. Lucas.  See LICENSE file.
  * $Id$
  */
+
+import usb_hub;
 
 package usb_ohci
 {
     type ErrorCode:
-    (   NoError,       CRC,                 BitStuffing,     DataToggleMismatch,
+    (	NoError,       CRC,                 BitStuffing,     DataToggleMismatch,
 	Stall,         DeviceNotResponding, PIDCheckFailure, UnexpectedPID,
-	DataOverrun,   DataUnderrun,        _,               _,
+	DataOverrun,   DataUnderrun,        Bad10,           Bad11,
 	BufferOverrun, BufferUnderrun,      NotAccessed0,    NotAccessed1
     );
 
@@ -93,40 +95,29 @@ package usb_ohci
     }: packed, lsb;
 
     /*
-     * Bits in the port status registers.
-     * Some of these bits are quirky.
-     * Writing a 0 to any of these bits is ignored.
-     * Writing a 1 to a bit has semantics that might be unexpected.
+     * The bits in the root hub status register are a superset of those
+     * returned by the GetHubStatus command for reading.
+     * We defined a new type to include the additional bits.
      */
-    type PortStatusT:
-    {	ccs:	boolean;	// .00 - r: current connect status
-				//	 w1: clear port enable bit
-	pes:	boolean;	// .01 - r: port enable status
-				//	 w1: set port enable bit
-	pss:	boolean;	// .02 - r: port suspend status
-				//	 w1: set port suspend bit	    
-	poci:	boolean;	// .03 - r: port overcurrent indicator
-				//	 w1: clear port suspend bit
-	prs:	boolean;	// .04 - r: port reset status
-				//	 w1: set port reset, self clearing
-	_:	0..0b111;	// .05-07
-	pps:	boolean;	// .08 - r: port power status
-				//	 w1: set port power status
-	lsda:	boolean;	// .09 - r: low speed device attached
-				//	 w1: clear port power status
-	_:	0..0b11_1111;	// .10-15
-	csc:	boolean;	// .16 - r: connect status change
-				//	 w1: clear this bit
-	pesc:	boolean;	// .17 - port enable status change
-				//	 w1: clear this bit
-	pssc:	boolean;	// .18 - port enable suspend status change
-				//	 w1: clear this bit
-	ocic:	boolean;	// .19 - port overcurrent status change
-				//	 w1: clear this bit
-	prsc:	boolean;	// .20 - port reset status change
-				//	 w1: clear this bit
-	_:	0..0x7FF;	// .21-31
+    type RHStatusT:
+    {   localpower:  boolean;	// .00
+	overcurrent: boolean;	// .01
+	_:           0..0x1FFF;	// .02-14
+	drwe:        boolean;	// .15 - device remote wakeup enable
+	Clocalpower: boolean;	// .16 - change in localpower status
+	Covercurrent:boolean;	// .17 - change in overcurrent status
+	_:           0..0x1FFF;	// .18-30
+	crwe:        boolean;	// .31 - clear remote wakeup enable
     }: packed, lsb, in, out;
+
+    /*
+     * The bits in the port status registers are the same as those returned
+     * by the GetPortStatus command for reading.
+     * Writing a 0 to any of these bits is ignored.
+     * Writing a 1 to some bits clears that bit, but for some bits it clears
+     * a different bit.  See the helper methods below.
+     */
+    type PortStatusT: usb.hub.PortStatus: in, out;
 
     // The Host Controller Registers
     type HC:
@@ -176,66 +167,183 @@ package usb_ohci
 	LSThreshold:	    0..0xFFFF_FFFF;		// low 11 bits	// 0x44
 	RhDescriptorA:							// 0x48
 	{   ndp:    0..0xFF;		// .00-07 number data ports
-	    psm:    (all, each);	// .08
-	    nps:    (switched, always);	// .09
-	    dt:     boolean;		// .10
-	    ocpm:   (all, each);	// .11
-	    nocp:   (all, none);	// .12
-	    _:      0..0x7FF;		// .13-23
-	    potpgt: 0..0xFF;		// .24-31
-	}: packed, lsb;
+	    char:   usb.hub.HubCharacter; // .08-15 hub characteristics
+	    rsvd:   0..0xFF;		// .16-23
+	    potpgt: 0..0xFF;		// .24-31 power on delay
+	}: packed, lsb, ro;
 	RhDescriptorB:							// 0x4C
 	{   dr:     [16] boolean: packed, lsb;
 	    ppcm:   [16] boolean: packed, lsb;
-	}: packed, lsb;
-	RhStatus:							// 0x50
-	{   lps:    (on, off);	// .00 local power status
-	    oci:    boolean;	// .01 over current indicator
-	    _:      0..0x1FFF;	// .02-14
-	    drwe:   boolean;	// .15 device remote wakeup enable
-	    lpsc:   boolean;	// .16 local power 
-	    ccic:   boolean;	// .17 over current indicator change
-	    _:      0..0x1FFF;	// .18-30
-	    crwe:   boolean;	// .31 clear remote wakeup enable
-	}: packed, lsb, in, out;
-	RhPortStatus:	    [NDP] PortStatusT: in, out;			// 0x54
+	}: packed, lsb, ro;
+	RhStatus:	RHStatusT: in, out;				// 0x50
+	RhPortStatus:	[NDP] PortStatusT: in, out;			// 0x54
     };
+
+
+    /*
+     * Methods on the root hub status register
+     * Handy because some bits have quirky meanings.
+     */
+    proc (rhs: @RHStatusT) SetGlobalPower(): : inline
+    {
+	rhs@ = {.Clocalpower=true};	// quirky
+    }
+    proc (rhs: @RHStatusT) ClearGlobalPower(): : inline
+    {
+	rhs@ = {.localpower=true};	// quirky
+    }
+    proc (rhs: @RHStatusT) ClearOvercurrentChange(): : inline
+    {
+	rhs@ = {.Covercurrent=true};
+    }
 
     /*
      * Methods on the port status register
      * Handy because some bits have quirky meanings.
+     * Also, writing a 0-bit has no effect, so it is not necessary
+     * to do a read-modify-write.
      */
     proc (ps: @PortStatusT) SetPortEnable(): : inline
     {
-    	ps.pes = true;
+    	ps@ = {.enable=true};
     }
     proc (ps: @PortStatusT) ClearPortEnable(): : inline
     {
-    	ps.ccs = true;
+    	ps@ = {.connect=true};	// quirky
     }
     proc (ps: @PortStatusT) SetPortSuspend(): : inline
     {
-    	ps.pss = true;
+    	ps@ = {.suspend=true};
     }
     proc (ps: @PortStatusT) ClearPortSuspend(): : inline
     {
-    	ps.poci = true;
+    	ps@ = {.overcurrent=true};	// quirky
     }
     proc (ps: @PortStatusT) SetPortReset(): : inline
     {
-    	ps.prs = true;
+    	ps@ = {.reset=true};
     }
     proc (ps: @PortStatusT) SetPortPower(): : inline
     {
-    	ps.pps = true;
+    	ps@ = {.power=true};
     }
     proc (ps: @PortStatusT) ClearPortPower(): : inline
     {
-    	ps.lsda = true;
+    	ps@ = {.lospeed=true};	// quirky
+    }
+    proc (ps: @PortStatusT) ClearConnectChange(): : inline
+    {
+    	ps@ = {.Cconnect=true};
+    }
+    proc (ps: @PortStatusT) ClearEnableChange(): : inline
+    {
+    	ps@ = {.Cenable=true};
+    }
+    proc (ps: @PortStatusT) ClearSuspendChange(): : inline
+    {
+    	ps@ = {.Csuspend=true};
+    }
+    proc (ps: @PortStatusT) ClearOvercurrentChange(): : inline
+    {
+    	ps@ = {.Covercurrent=true};
+    }
+    proc (ps: @PortStatusT) ClearResetChange(): : inline
+    {
+    	ps@ = {.Creset=true};
     }
     proc (ps: @PortStatusT) ClearStatusChange(): : inline
     {
-    	ps@ = {.csc=true, .pesc=true, .pssc=true, .ocic=true, .prsc=true};
+	ps@ = {.Cconnect=true, .Cenable=true, .Csuspend=true,
+		.Covercurrent=true, .Creset=true};
     }
+
+if _defined(debug) then {
+
+    proc (td: @TD) TDError()
+    {
+	const ErrorString: [ErrorCode]@[]_byte =
+	{   [NoError] =		"None",
+	    [CRC] =			"CRC",
+	    [BitStuffing] =		"BitStuffing",
+	    [DataToggleMismatch] =	"DataToggleMismatch",
+	    [Stall] =			"Stall",
+	    [DeviceNotResponding] =	"DeviceNotResponding",
+	    [PIDCheckFailure] =		"PIDCheckFailure",
+	    [UnexpectedPID] =		"UnexpectedPID",
+	    [DataOverrun] =		"DataOverrun",
+	    [DataUnderrun] =		"DataUnderrun",
+	    [Bad10] =			"Bad10",
+	    [Bad11] =			"Bad11",
+	    [BufferOverrun] =		"BufferOverrun",
+	    [BufferUnderrun] =		"BufferUnderrun",
+	    [NotAccessed0] =		"NotAccessed0",
+	    [NotAccessed1] =		"NotAccessed1"
+	};
+
+	debug.str("TD Error: ");
+	debug.str(ErrorString[td.info.cc]);
+	debug.nl();
+    }
+
+    proc (td: @TD) Dump()
+    {
+	debug.str("TD @"); debug.hex32(_uint32(td)); debug.str(": ");
+	debug.hex32(_uint32(td.info));  //debug.chr(' ');
+	    debug.str(" CC="); debug.uint8(_uint8(td.info.cc));
+	    debug.str(" EC="); debug.uint8(td.info.ec);
+	    debug.str(" DI="); debug.uint8(td.info.di);
+	    debug.str(" R="); debug.uint8(_uint8(td.info.r));
+	    debug.str(" T="); debug.uint8(_uint8(td.info.t));
+	    debug.str(" DP="); debug.uint8(_uint8(td.info.dp));
+	    debug.str("\n\t");
+	debug.hex32(_uint32(td.cbp));  debug.chr(' ');
+	debug.hex32(_uint32(td.nextTD));  debug.chr(' ');
+	debug.hex32(_uint32(td.be));  debug.nl();
+    }
+		
+    proc (ed: @ED) Dump(tds: boolean)
+    {   var tdh, tdt: @TD;
+ 
+	tdh = ed.headp;
+	tdt = ed.tailp;
+	debug.str("ED @"); debug.hex32(_uint32(ed)); debug.str(": ");
+	debug.hex32(_uint32(ed.info));  //debug.chr(' ');
+	    debug.str(" FA="); debug.uint8(ed.info.fa);
+	    debug.str(" EN="); debug.uint8(ed.info.en);
+	    debug.str(" D="); debug.uint8(_uint8(ed.info.d));
+	    debug.str(" S="); debug.uint8(_uint8(ed.info.s));
+	    debug.str(" K="); debug.uint8(_uint8(ed.info.k));
+	    debug.str(" F="); debug.uint8(_uint8(ed.info.f));
+	    debug.str(" MPS="); debug.uint16(ed.info.mps);
+	    debug.str("\n\t");
+	debug.hex32(_uint32(tdt));  debug.chr(' ');
+	debug.hex32(_uint32(tdh));  debug.chr(' ');
+	debug.hex32(_uint32(ed.nextED));
+	if _uint32(tdh) & 1 != 0 then
+	    debug.str(" HALTED");
+	debug.nl();
+	if tds then
+	{   type pTD: @TD;
+	    tdh = pTD(_uintptr(tdh) & 0xFFFF_FFF0);	// clear lower bits
+	    while tdh != 0 && tdh != tdt do
+	    {   tdh.Dump();
+		tdh = tdh.nextTD;
+	    }
+	}
+    }
+
+    proc (hcca:@HCCA) DumpIntrList(tds: boolean)
+    {	var i: _uint;
+
+	debug.str("IntrList\n");
+	for i from 0 to NIntr-1 do
+	{   if hcca.IntrList[i] != 0 then
+	    {	debug.uint(i); debug.chr(':');
+		hcca.IntrList[i].Dump(tds);
+	    }
+	}
+    }
+}
+
 }
 

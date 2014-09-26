@@ -2,7 +2,7 @@
  * STM32F10x Extended Interrupts
  *
  * Copyright (c) 2011, Brian G. Lucas.  See LICENSE file.
- * $Id: exti.esl 283 2012-02-02 22:32:42Z bgl $
+ * $Id$
  */
 
 import gpio;
@@ -20,7 +20,7 @@ package exti
         pr:    ExtiBits: in;
     };
     type Exti: @ExtiRegs;
-    const exti: Exti = 0x4001_0400;
+    const exti: Exti = chip.extiaddr;
 
     const vector: []_uint8 =
     {  6,  7,  8,  9, 10,	// 0..4

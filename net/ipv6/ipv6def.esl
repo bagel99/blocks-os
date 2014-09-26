@@ -1,7 +1,7 @@
 /*
  * IPv6 definitions
  *
- * Copyright (c) 2009-2011, Brian G. Lucas.  See LICENSE file.
+ * Copyright (c) 2009-2014, Brian G. Lucas.  See LICENSE file.
  * $Id$
  */
 
@@ -19,17 +19,6 @@ package ipv6
     alias inet.Proto as Proto;
     alias inet.ULHeader6 as ULHeader;
     alias inet.pULHeader6 as pULHeader;
-    alias event.Event as Event;
-    alias event.pEvent as pEvent;
-    alias mbuf.pMBuf as pMBuf;
-    alias block.Block as Block;
-    alias block.pBlock as pBlock;
-    alias block.BlockID as BlockID;
-
-    if _defined(sys.NIPv6Lower) then
-	alias sys.NIPv6Lower as NIPv6Lower;
-    else
-	const NIPv6Lower = 2;
 
     const IPv6Type = 0x86DD;
 
@@ -87,60 +76,157 @@ package ipv6
 	OrganizationLocal=8, Global=14
     );
 
-    type Upper:
-    {   next:    @Upper;
-	bid:     BlockID;
-	tag:     _uint8;
-	proto:   Proto;
-    };
-    type pUpper: @Upper;
-    
+    const Hex: [16]_byte =
+	{'0','1','2','3','4','5','6','7','8','9','a','b','c','d','e','f'};
 
-    // INTERFACE STATE
-    // For the interfaces we are interested in, namely ethernet and PPP,
-    // interface ids are 8 bytes long.
-    const iidlen = 8;
-    type AddrState: (DOWN, TENTATIVE, WAITDAD, DEPRECATED, PREFERRED);
-    type Lower:
-    {   iid:       [iidlen]_byte;       // interface ID, may be smaller
-	ifn:       _uint8;
-	bid:       BlockID;
-	type:      comm.LinkType;
-        state:     AddrState;		// FIXME
-	rsage:     _uint16;		// router solicitation aging
-	hdr:       _uint8;		// space for link level header(s)
-	trl:       _uint8;
-	mtu:       _uint16;		// e.g, 1500 for ethernet
-	prefixes:  @IntfAddrEntry;      // forward
-	multicast: @IntfAddrEntry;      // forward
-	neighbors: @NCacheEntry;	// forward
-    }: align(8);
-    type pLower: @Lower;
+    proc ToHex(b: _byte, t: @[2]_byte, n: _uint): _uint
+    {   var v: _uint;
 
-    type IPv6Block(Block):
-    {   upper:     pUpper;			// upper level protocols
-	lower:     [NIPv6Lower]pLower;		// interfaces
-	fraghead:  @FragEntry;			// forward
-	hdr:       _uint8;			// max over all interfaces
-	trl:       _uint8;			// max over all interfaces
-	ifcount:   _uint8;			// number of ready interfaces
-	IsRouter:  boolean;
-	iftimer:   (NONE, RUN);			// interface timer state
-    };
-    type pIPv6Block: @IPv6Block;
+	v = b >> 4;
+	if n != 0 || v != 0 then
+	{   t[n] = Hex[v];
+	    n += 1;
+	}
+	v = b & 0xF;
+	if n != 0 || v != 0 then
+	{   t[n] = Hex[v];
+	    n += 1;
+	}
+	return n;
+    }
+
+    /*
+     * Rules for short IPv6 addresses:
+     * 1. Units of 16-bits separated by a colon.
+     * 2. Use hexadecimal digits expressed as lower-case letters.
+     * 2. Leading zeros in each 16-bit field are supressed.
+     * 3. The longest sequence of consecutive zero fields is replaced by "::".
+     *    A run must be greater than 1 to be compressed.
+     *    If there are multiple longest runs of all-zero fields,
+     *    the leftmost is compressed.
+     * References: RFC 5952, RFC 4291.
+     */
+    proc AddrToText(a: @IPv6Addr, t: @[39]_byte): _uint
+    {   var i, j, li, lj: _uint;
+	var k: _uint;
+	var b: _boolean;
+
+	li = 0;
+	lj = 0;
+	for i from 0 to IPv6AddrLen-2 by 2 do	// Find longest run of zero fields
+	{   j = i;
+	    while j < IPv6AddrLen-1 && a[j] == 0 && a[j+1] == 0 do
+		j += 2;
+	    if j > i && j-i > lj-li then
+	    {   li = i;
+		lj = j;
+	    }
+	}
+	if lj-li <= 2 then			// don't shorten a single field
+	    li = IPv6AddrLen;
+	k = 0;
+	i = 0;
+	while i < IPv6AddrLen do
+	{   if i == li then			// reached the run
+	    {   t[k:2] = "::";
+		k += 2;
+		i = lj;
+	    }
+	    elif i > 0 then			// normal separator
+	    {   t[k] = ':';
+		k += 1;
+	    }
+	    if i < IPv6AddrLen then		// normal field
+	    {   j = ToHex(a[i], t[k:], 0);
+	 	j = ToHex(a[i+1], t[k:], j);
+		k += j;
+		if j == 0 then			// zero field
+		{   t[k] = '0';
+		    k += 1;
+       		}
+	    }
+	    i += 2;
+	}
+	return k;
+    }    	   
+
+    proc FmHex(s: @[]_byte): _uint, _uint
+    {   var i: _uint;
+	var v: _uint;
+
+	v = 0;
+	i = 0;
+	loop
+	{   if s[i]
+	    is '0'..'9' then v = (v << 4) | (s[i] - '0');
+	    is 'a'..'f' then v = (v << 4) | (s[i] - 'a' + 10);
+	    is 'A'..'F' then v = (v << 4) | (s[i] - 'A' + 10);
+	    else
+		return v, i;
+	    i += 1;
+	}
+    }
+
+    proc TextToAddr(t: @[]_byte, n: _uint, a: @IPv6Addr): _boolean
+    {   var i, j, k, m, lj: _uint;
+	var v: _uint;
+	var b: [IPv6AddrLen]_byte;
+
+	// initialize address to all zeros
+	a[0:16] = UnspecAddr;
+	i = 0;
+	lj = IPv6AddrLen;	// no run found
+	if n > 2 && t[0] == ':' && t[1] == ':' then	// leading run found
+	{   lj = 0;
+	    i = 2;
+	    if n == 2 then				// just "::"
+		return true;
+	}
+	j = 0;
+	while j < IPv6AddrLen do
+	{   v, k = FmHex(t[i:]);
+	  exit k == 0;
+	    // FIXME - check for trailing IPv4 dotted address
+	    b[j] = _uint8(v >> 8);
+	    b[j+1] = _uint8(v&0xFF);
+	    j += 2;
+	    i += k;
+	  exit i >= n;			// end of text
+	    if t[i] != ':' || i == n-1 then
+	        return false;		// ill formed
+	    i += 1;
+	    if t[i] == ':' then		// run found
+	    {   if lj < IPv6AddrLen then// already have one
+	    	    return false;	// ill formed, two runs
+	        lj = j;
+	        i += 1;
+	        if i == n then		// end of text
+		    j = IPv6AddrLen;	// done parsing, cause loop to end
+	    }
+	}
+	if i != n then			// some text left
+	    return false;		// ill formed
+	a[0:lj] = b[0:lj];		// copy stuff before the run
+	if j < IPv6AddrLen then		// must of had a run
+	{   if lj == IPv6AddrLen then	// but we didn't
+		return false;		// ill formed
+	    k = IPv6AddrLen - j;	// length of the run
+	    a[lj:k] = UnspecAddr[0:k];	// now fill in run of zeros
+	    m = j - lj;			// length of good data after the run
+	    if m > 0 then
+		a[IPv6AddrLen-m:m] = b[lj:m];// now the stuff after the run, if any		
+	}
+	return true;
+    }
 
 if _defined(debug) then {
     //BEGIN DEBUG
     proc AddrPrint(a: @IPv6Addr)
-    {   var i: _uint;
+    {   var n: _uint;
+	var buf: [39]_byte;
 
-	i = 0;
-	loop
-	{   debug.hex8(a[i]); debug.hex8(a[i+1]);
-	    i += 2;
-	  exit i == 16;
-	    debug.chr(':'); 
-	}
+	n = AddrToText(a, buf);
+	debug.strn(buf, n);
     }
 
     proc MACPrint(a: @net.MAC)

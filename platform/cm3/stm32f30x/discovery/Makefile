@@ -14,7 +14,7 @@ LD=	arm-ld
 OBJCOPY=arm-objcopy
 OBJDUMP=arm-objdump -Mforce-thumb
 NM=	arm-nm
-LIBDIR= ../../../../../esl-code/lib/arch/cm3
+LIBDIR= ../../lib
 LIBOBJ= memset.o memcpy.o memcmp.o mem.o
 
 # keep intermediate files, for now

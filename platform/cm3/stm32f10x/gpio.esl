@@ -2,10 +2,11 @@
  * STM32F10x GPIO and pin remapping.
  *
  * Copyright (c) 2011, Brian G. Lucas.  See LICENSE file.
- * $Id: gpio.esl 283 2012-02-02 22:32:42Z bgl $
+ * $Id$
  */
 
-import sysctl;
+import chip;
+import rcc;
 
 package gpio
 {
@@ -79,24 +80,27 @@ package gpio
 	}: packed, lsb, in, out;
     };
     type GPIO: @GPIORegs;
-    const gpio: [NumGPIO]GPIO =
-    { 0x4001_0800, 0x4001_0C00, 0x4001_1000, 0x4001_1400,
-      0x4001_1800, 0x4001_1C00, 0x4001_2000
-    };
+
 
     proc Clr(which: PortDesc)
-    {
-	gpio[which.port].brr  = 1 << which.bit;
+    {   var g: GPIO;
+
+	g = GPIO(chip.gpioaddr[which.port]);
+	g.brr  = 1 << which.bit;
     }
 
     proc Set(which: PortDesc)
-    {
-	gpio[which.port].bsrr = 1 << which.bit;
+    {   var g: GPIO;
+
+	g = GPIO(chip.gpioaddr[which.port]);
+	g.bsrr = 1 << which.bit;
     }
 
     proc Tst(which: PortDesc): boolean
-    {
-	return gpio[which.port].idr.data & (1 << which.bit) != 0;
+    {   var g: GPIO;
+
+	g = GPIO(chip.gpioaddr[which.port]);
+	return g.idr.data & (1 << which.bit) != 0;
     }
 
     proc Init(which: PortInit)
@@ -105,9 +109,9 @@ package gpio
 	var b: _uint;
 
 	// First, make sure the clock is enabled to the GPIO port
-	sysctl.ClockEnable(IOPA + _uint(which.port.port));
+	rcc.ClockEnable(chip.gpios[_uint8(which.port.port)]);
 	// Then configure the pin
-	g = gpio[which.port.port];
+	g = GPIO(chip.gpioaddr[which.port.port]);
 	c = ConfigBits(which.conf);
 	if which.conf == IN_PULLUP then c = 0b1000;
 	b = which.port.bit;
@@ -176,7 +180,7 @@ package gpio
 	}: packed, lsb, out;
     };
     type AFIO: @AFIORegs;
-    const afio: AFIO = 0x4001_0000;
+    const afio: AFIO = chip.afioaddr;
 
     proc ExtIntr(which: PortDesc)
     {   var af: AFIO;

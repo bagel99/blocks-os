@@ -114,7 +114,7 @@ proc main(): _int
     var ab: app.pAppBlock;
 
     sys.Init();
-    sysctl.Init();
+    rcc.Init();
     meminit(HeapStart, 0x8000, 0);
     timer.NewBlock(TimerID);
     ab = app.pAppBlock(app.NewBlock(AppID));

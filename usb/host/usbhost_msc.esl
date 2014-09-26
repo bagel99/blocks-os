@@ -63,11 +63,11 @@ package usbhostmsc
 
     proc (sb: pHostMscBlock) NewCBW(): pMBuf
     {   var mb: pMBuf;
-	var sc: usb.msc.pCBWGeneric;
+	var sc: usb.msc.pCBW;
 
 	mb = sb.NewURB(sb.pipeout, OUT, usb.msc.CBWSize);
-	sc = usb.msc.pCBWGeneric(mb.Data());
-	_zero(sc);
+	sc = usb.msc.pCBW(mb.Data());
+	_zero(sc(usb.msc.CMDSize));
 	sc.sign = usb.msc.CBWSignature;
 	sb.seqno += 1;  sc.tag  = sb.seqno;
 	return mb;
@@ -303,6 +303,15 @@ mb.Dump(true);
 	{   mb = pMBuf(e);
 	    sb.Init(mb);
 	    mbuf.Free(mb);
+	}
+	is START then
+	{   var re: usbevent.pRegisterEvent;
+	    event.Free(e);
+	    re = usbevent.AllocRegisterEvent();
+	    re.data = { {.class=true, .subcls=true, .proto=true},
+	                .class=0x08, .subcls=0x06, .proto=0x50};
+	    re.tag = sb.id;
+	    USBENUMID.Send(re);
 	}
     }
 

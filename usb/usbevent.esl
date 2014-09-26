@@ -5,6 +5,8 @@
  * $Id$
  */
 
+import event;
+
 package usbevent
 {
     alias event.Event as Event;
@@ -18,6 +20,7 @@ package usbevent
     type InformEvent(Event):
     {	pipe:   Pipe;
 	mtu:   _uint16;
+	speed: usb.Speeds;
     };
     type pInformEvent: @InformEvent;
 
@@ -25,6 +28,7 @@ package usbevent
     {	pipe:   Pipe;
 	mtu:   _uint16;
 	type:  usb.EPType;
+	speed: usb.Speeds;
 	inter: _uint8;
     };
     type pActivateEvent: @ActivateEvent;
@@ -47,7 +51,17 @@ package usbevent
     type RegisterEvent(Event):
     {	data:   RegisterData;
     };
+    type pRegisterEvent: @RegisterEvent;
 
+    proc AllocInformEvent(): pInformEvent
+    {   var ie: pInformEvent;
+
+	ie = _new(usbevent.InformEvent);
+	ie.code = INFORM;
+	ie.xsize = InformEvent?size - Event?size;
+	ie.tag = 0;
+	return ie;
+    }
 
     proc AllocActivateEvent(size: _uint): pActivateEvent
     {   var ae: pActivateEvent;
@@ -59,7 +73,17 @@ package usbevent
 	return ae;
     }
 
+    proc AllocRegisterEvent(): pRegisterEvent
+    {   var re: pRegisterEvent;
 
+	re = _new(RegisterEvent);
+	re.code = OPEN;
+	re.xsize = RegisterEvent?size - Event?size;
+	re.tag = 0;
+	return re;
+    }
+
+if _defined(debug) then {
     proc (ae: pActivateEvent) Dump()
     {
     	debug.str("Activate dev="); debug.uint8(ae.pipe.dev);
@@ -69,5 +93,6 @@ package usbevent
     	debug.str(" inter="); debug.uint8(ae.inter);
     	debug.nl();
     }
+}
 }
 

@@ -1,0 +1,341 @@
+/*
+ * USB OTG Driver for OTG_FS on STM32F4xx
+ *
+ * Reference: ST RM0090, doc id 18909 rev 5, chap 34
+ *
+ * Copyright (c) 2014, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+import usb;
+
+package otgfs
+{
+    const NDEP = 3;	// number of device endpoints both in and out (plus EP0)
+    const NHEP = 8;	// number of host end points (including EP0)
+    const NumTxFIFO = 4;
+
+    type TxFIFODesc:
+    {   start:   _uint16;		// .00-15
+	depth:   _uint16;		// .16-31
+    }: packed, lsb;
+    type RxFIFODesc:
+    {   depth:   _uint16;		// .00-15
+	_:       _uint16;		// .16-31
+    }: packed, lsb;
+
+    // Device mode Receive Packet status
+    type RecvDPktSts:
+    (   GOUT_NAK=1, OUT=2, OUT_FIN=3, SETUP_FIN=4, SETUP=6 );
+    type RecvDStatus:
+    {   epnum:     0..15;		// .00-03 EP number
+	bcnt:    0..0x7FF;		// .04-14 byte count
+	dpid:    (DATA0,DATA1,DATA2,MDATA); // .15-16 Data PID
+	pktsts:  RecvDPktSts: bits(4);	// .17-20
+	frmnum:  0..15;			// .21-24 D: frame number mod 16
+    }: packed, lsb, bits(32);
+
+    // Host mode Receive Packet status
+    type RecvHPktSts: ( IN=2, IN_FIN=3, DT_ERR=5, CH_HALT=7 );
+    type RecvHStatus:
+    {   chnum:     0..15;		// .00-03 channel number
+	bcnt:    0..0x7FF;		// .04-14 byte count
+	dpid:    (DATA0,DATA1,DATA2,MDATA); // .15-16 Data PID
+	pktsts:  RecvHPktSts: bits(4);	// .17-20
+    }: packed, lsb, bits(32);
+
+    // Interrupt status, shared by device mode and host mode
+    type IntSts:
+    {   cmod:    (DEVICE, HOST): ro;// .00 current mode
+	mmis:    boolean;	// .01 mode mismatch
+	otgint:  boolean: ro;	// .02 OTG protocol event
+	sof:     boolean;	// .03 start of frame
+	rxflvl:  boolean: ro;	// .04 RxFIFO not empty
+	nptxfe:  boolean: ro;	// .05 non-periodic TxFIFO empty
+	ginakeff:boolean: ro;	// .06 IN non-periodic NAK effective
+	gonakeff:boolean: ro;	// .07 OUT non-periodic NAK effective
+	_:       0..0b11;	// .08-09
+	esusp:   boolean;	// .10 D: early suspend
+	usbsusp: boolean;	// .11 D: suspend detected
+	usbrst:  boolean;	// .12 D: reset detected
+	enumdne: boolean;	// .13 D: enumeration done
+	isoodrp: boolean;	// .14 D: isoc OUT dropped
+	eopf:    boolean;	// .15 D: end of periodic frame
+	_:       0..0b11;	// .16-17
+	iepint:  boolean: ro;	// .18 D: in endpoint interrupt
+	oepint:  boolean: ro;	// .19 D: out endpoint interrupt
+	iisoixf: boolean;	// .20 D: incomplete isoc IN
+	iisooxf: boolean;	// .21 HD
+	_:       0..0b11;	// .22-23
+	hport:   boolean: ro;	// .24 H: port interrupt
+	hchan:   boolean;	// .25 H: channel interrupt
+	ptxfe:   boolean;	// .26 H: periodic TxFIFO empty
+	_:       0..1;		// .27
+	cidschg: boolean;	// .28 connector ID status change
+	discint: boolean;	// .29 H: disconnect detected
+	srqint:  boolean;	// .30 session request
+	wkupint: boolean;	// .31 wakeup detected
+    }: packed, lsb;
+    
+    type OTGRegs:	// GLOBAL - used in both device and host mode
+    {
+	csr:								// 000
+	{   srqscs:  boolean;		// .00 session request success
+	    srq:     boolean;		// .01 session request
+	    _:       0..0b111111;       // .02-07
+	    hngscs:  boolean;		// .08
+	    hnprq:   boolean;		// .09 HNP request
+	    hshnpen: boolean;		// .10 host enable HNP
+	    dhnpen:  boolean;		// .11 device HNP valid
+	    _:       0..0b1111;		// .12-15
+	    cidsts:  (A,B);		// .16 connector ID status
+	    dbct:    boolean;		// .17 debounce time
+	    asvld:   boolean;		// .18 A session valid
+	    bsvld:   boolean;		// .19 B session valid
+	    _:       0..0xFFF;		// .20-31
+	}: packed, lsb, in, out;
+	int:								// 004
+	{   _:       0..0b11;		// .00-01
+	    sedet:   boolean;		// .02 session end detected
+	    _:       0..0b11111;	// .03-07
+	    srsschg: boolean;		// .08 session req. status change
+	    hnsschg: boolean;		// .09 host neg. status change
+	    _:       0..0x7F;		// .10-16
+	    hngdet:  boolean;		// .17 host negotiation detected
+	    adtochg: boolean;		// .18 A device timeout change
+	    dbcdne:  boolean;		// .19 debounce done
+	    _:       0..0xFFF;		// .20-31    
+	}: packed, lsb, in, out;
+	ahbcfg:								// 008
+	{   gintmsk: boolean;		// .00 global interrupt mask
+	    _:       0..0b111111;       // .01-06
+	    txfelvl: boolean;		// .07 Tx FIFO empty
+	    ptxfelvl:boolean;		// .08 Periodic Tx FIFO empty
+	    _:       0..0x7F_FFFF;      // .09-31
+	}: packed, lsb, out;
+	usbcfg:								// 00C
+	{   tocal:   0..7;		// .00-02 FS timeout calibration
+	    _:       0..0b111;		// .03-05
+	    physel:  (LOW,FULL): wo;	// .06
+	    _:       0..1;		// .07
+	    srpcab:  boolean;		// .08 SRP capable
+	    hnpcap:  boolean;		// .09 HNP capable
+	    trdt:    0..15;		// .10-13 turnaround time
+	    _:       0..0x7FFF;		// .14-28
+	    fhmod:   boolean;		// .29 force host mode
+	    fdmod:   boolean;		// .30 force device mode
+	    ctxpkt:  boolean;		// .31  do not set!    
+	}: packed, lsb, out;
+	rstctl:								// 010
+	{   csrst:   boolean;		// .00 core soft reset
+	    hsrst:   boolean;		// .01 HCLK soft reset
+	    fcrst:   boolean;		// .02 frame counter reset
+	    _:       0..1;		// .03
+	    rxfflsh: boolean;		// .04 RxFIFO flush
+	    txfflsh: boolean;		// .05 TxFIFO flush
+	    txfnum:  0..0b11111;	// .06-10 TxFIFO number
+	    _:       0..0xFFFFF;	// .11-30
+	    ahbidle: boolean: ro;	// .31 AHB master idle
+	}: packed, lsb, in, out;
+	intsts: IntSts: in, out;					// 014
+	intmsk:								// 018
+	{   _:       0..1;
+	    mmis:    boolean;		// .01 mode mismatch
+	    otgint:  boolean;		// .02 OTG protocol event
+	    sof:     boolean;		// .03 start of frame
+	    rxflvl:  boolean;		// .04 RxFIFO not empty
+	    nptxfe:  boolean;		// .05 non-periodic TxFIFO empty
+	    ginakeff:boolean;		// .06 IN non-periodic NAK effective
+	    gonakeff:boolean;		// .07 OUT non-periodic NAK effective
+	    _:       0..0b11;		// .08-09
+	    esusp:   boolean;		// .10 D: early suspend
+	    usbsusp: boolean;		// .11 D: suspend detected
+	    usbrst:  boolean;		// .12 D: reset detected
+	    enumdne: boolean;		// .13 D: enumeration done
+	    isoodrp: boolean;		// .14 D: isoc out dropped
+	    eopf:    boolean;		// .15 D: end of periodic frame
+	    _:       0..1;		// .16
+	    epmis:   boolean;		// .17 endpoint mismatch
+	    iepint:  boolean;		// .18 D: in endpoint interrupt
+	    oepint:  boolean;		// .19 D: out endpoint interrupt
+	    iisoixf: boolean;		// .20 D: incomplete isoc IN
+	    iisooxf: boolean;		// .21 HD
+	    _:       0..0b11;		// .22-23
+	    hport:   boolean;		// .24 H: port interrupt
+	    hchan:   boolean;		// .25 H: channel interrupt
+	    ptxfe:   boolean;		// .26 H: periodic TxFIFO empty
+	    _:       0..1;		// .27
+	    cidschg: boolean;		// .28 connector ID status change
+	    discint: boolean;		// .29 disconnect detected
+	    srqint:  boolean;		// .30 session request
+	    wkupint: boolean;		// .31 wakeup detected
+	}: packed, lsb, out;
+	rxsts:	 RecvDStatus: in;	// D; H must cast to RecvHStatus// 01C
+	rxstsp:	 RecvDStatus: in;	// D; H must cast to RecvHStatus// 020
+	rxfsiz:	 RxFIFODesc: out;					// 024
+	tx0fsiz: TxFIFODesc: out;	// DH same layout		// 028
+	nptxsts: TxFIFODesc: out;	// H-only FIXME			// 02C
+	_:  [2]_uint32;
+	ccfg:							        // 038
+	{   _:      0..0xFFFF;		// .00-15
+	    powerup:boolean;		// .16 power down deactivated
+	    _:      0..1;		// .17
+	    senseA: boolean;		// .18 enable A Vbus sensing
+	    senseB: boolean;		// .19 enable B Vbus sensing
+	    sofout: boolean;		// .20 enable SOF output to pin
+	}: packed, lsb, bits(32), out;
+	cid:     _uint32;		// core ID			// 03C
+	_:   [48]_uint32;
+	ptxfsiz: TxFIFODesc: out;	// H-only			// 100
+	txfsiz: [3] TxFIFODesc: out;					// 104
+    };
+    type otggbl: @OTGRegs;
+    const usbg: otggbl = 0x5000_0000;
+//    var usbg: OTGRegs: external(0x5000_0000);
+    /*
+     * Global FIFO Space (32-bit access only?)
+     */
+    type FIFOEntry: [1024]_uint32;      // 4K bytes each
+    type FIFOSpace: [NumTxFIFO]FIFOEntry: in, out;
+    const usbfifo: @FIFOSpace =  0x5000_1000;
+
+    const vector_norm = 67;
+    const vector_wkup = 42;
+
+    /*
+     * These procedures operate on the global registers
+     */
+    proc (ug: otggbl) SetDeviceMode()
+    {
+	ug.usbcfg.fdmod = true;
+	// Delay_mS(50);
+    }
+
+    proc (ug: otggbl) SetHostMode()
+    {
+	ug.usbcfg.fhmod = true;
+	// Delay_mS(50);
+    }
+
+    proc (ug: otggbl) SetGlobalIntr(enable: boolean)
+    {
+	ug.ahbcfg.gintmsk = enable;
+    }
+
+    proc (ug: otggbl) CoreReset()
+    {   var to: _uint;
+	var fail: boolean;
+
+	fail = false;
+	// wait for AHB master idle state
+	to = 200000;
+	loop
+	{   // Delay_uS(5);
+	  exit ug.rstctl.ahbidle;
+	    to -= 1;
+	  exit to == 0 with fail = true;
+	}
+	// core soft reset
+	ug.rstctl = { .csrst=true };
+	to = 200000;
+	loop
+	{
+	  exit !ug.rstctl.csrst;
+	    to -= 1;
+	  exit to == 0 with fail = true;
+	}
+	// Delay_uS(5);
+    }
+
+    proc (ug: otggbl) CoreInit()
+    {   var sc: rcc.RCCregs;
+
+	sc = rcc.rcc;
+	rcc.ClockEnable(PWR);	// why?
+	sc.cfg.pll.otgfspre = DIV3;     // Must do before enabling clock
+	rcc.ClockEnable(OTGFS);	// Enable clock to device
+	nvic.Enable(vector_norm);
+//	nvic.Enable(vector_wkup);
+	usbg.SetGlobalIntr(false);   // disable global interrupts
+	// Core Initialize
+	usbg.usbcfg.physel = FULL;
+	usbg.ccfg = { .powerup=true, .senseB=true };
+	// Delay_mS(50);
+	usbg.CoreReset();
+    }
+
+    proc (ug: otggbl) FlushRxFIFO()
+    {   var to: _uint;
+
+	ug.rstctl = { .rxfflsh = true };    
+	to = 200000;
+	loop
+	{ exit !ug.rstctl.rxfflsh;
+	    to -= 1;
+	  exit to == 0;
+	}
+	// Delay_uS(5);
+    }
+
+    // num=16 means all
+    proc (ug: otggbl) FlushTxFIFO(num: _uint)
+    {   var to: _uint;
+
+	ug.rstctl = { .txfflsh=true, .txfnum=num };    
+	to = 200000;
+	loop
+	{ exit !ug.rstctl.txfflsh;
+	    to -= 1;
+	  exit to == 0;
+	}
+	// Delay_uS(5);
+    }
+
+    proc (ug: otggbl) ReadPacket(bb: @[]_byte /*align(4)*/, nb: _uint)
+    {   var nw: _uint;
+	type pwa: @[]_uint32;
+	var bw: pwa;
+	var i: _uint;
+
+	bw = pwa(bb);
+	nw = (nb + 3)/4;
+	i = 0;
+	while i < nw do
+	{   bw[i] = usbfifo[0][0];
+	    i += 1;
+	}    
+    }
+
+    proc (ug: otggbl) WritePacket(epnum: _uint,
+    				  bb: @[]_byte /*align(4)*/, nb: _uint)
+    {   var nw: _uint;
+	type pwa: @[]_uint32;
+	var bw: pwa;
+	var i: _uint;
+
+	bw = pwa(bb);
+	nw = (nb + 3)/4;
+	i = 0;
+	while i < nw do
+	{   usbfifo[epnum][0] = bw[i];
+	    i += 1;
+	}    
+    }
+
+    // Interrupt Routine
+    proc (sts: IntSts) DevIntr();		// forward method
+    proc (sts: IntSts) HostIntr();		// forward method
+
+    proc Interrupt(): : global("OTGFS_IRQ")
+    {   var sts: IntSts;
+
+	sts = usbg.intsts;     // clears FIFO status bits in hardware
+	if sts.cmod == DEVICE then
+	    sts.DevIntr();
+	else
+	    sts.HostIntr();
+    }
+
+}
+// vim: ts=8 sw=4 noet nowrap
+

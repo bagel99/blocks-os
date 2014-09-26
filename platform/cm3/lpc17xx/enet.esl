@@ -362,13 +362,18 @@ package eth
     /*
      * The following bound procedures operate directly on the device registers
      */
+    proc (en: Enet) PhyAddress(adr: _uint)
+    {
+	en@.maddr.phyadr = adr;
+    }
+
     proc (en: Enet) PhyWrite(reg: PhyRegAddr, data: _uint16): boolean
     {   var n: _uint;
 
 if db > 4 then {debug.str("PhyWrite: ");
 debug.hex8(_uint8(reg)); debug.chr(','); debug.hex16(data); debug.nl();}
 	en@.mcomd = {.read=false};
-	en@.maddr = {.regadr=reg, .phyadr=sys.PhyAddr};
+	en@.maddr = {.regadr=reg, .phyadr=sys.PhyAddr}; // FIXME - use .phyadr
 	en@.mwrite = data;
 	n = PhyRWTimeout;
 	while en@.mind.busy && n > 0 do n -= 1;
@@ -381,7 +386,7 @@ if db > 5 then {debug.str("PhyWrite: n="); debug.uint(n); debug.nl();}
 	var data: _uint16;
 
 	en@.mcomd = {.read=true};
-	en@.maddr = {.regadr=reg, .phyadr=sys.PhyAddr};
+	en@.maddr = {.regadr=reg, .phyadr=sys.PhyAddr}; // FIXME - use .phyadr
 	n = PhyRWTimeout;
 	while en@.mind.busy && n > 0 do n -= 1;
 if db > 5 then {debug.str("PhyRead: n="); debug.uint(n); debug.nl();}

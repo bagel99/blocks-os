@@ -12,7 +12,7 @@ import systick;
 import nvic;
 
 // STM32F10x stuff
-import sysctl;
+import rcc;
 
 
 /*
@@ -30,7 +30,7 @@ import usb_mouse;
 proc main()
 {   var led1on: boolean;
 
-    sysctl.Init();
+    rcc.Init();
     sys.Init();
     debug.Init();
     usbdev.MouseInit();

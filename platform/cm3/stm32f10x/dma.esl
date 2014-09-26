@@ -44,8 +44,6 @@ package dma
     };
     type Dma: @DmaReg;
 
-
-    const device: [2] Dma = { 0x40020000, 0x40020400 };
     const vector: [2][8]_uint8 =
     { //    0   1   2   3   4   5   6   7  - channels, there is no chan 0
 	 {  0, 11, 12, 13, 14, 15, 16, 17 }, 	// DMA1

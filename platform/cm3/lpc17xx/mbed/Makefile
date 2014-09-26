@@ -13,12 +13,15 @@ OPT=	-i	# disable inlining
 AS=	arm-as -mcpu=cortex-m3
 LD=	arm-ld
 OBJCOPY=arm-objcopy
+OBJDUMP=arm-objdump
 NM=	arm-nm
-LIBDIR= ../../../../../esl-code/lib/arch/cm3
-LIBOBJ= memset.o memcpy.o memcmp.o mem.o
+LIB= 	../../lib/lib.a
 
 # keep intermediate files, for now
 .PRECIOUS: %.elf %.s %.ll
+
+%.dis: %.elf
+	$(OBJDUMP) -d $< >$@
 
 %.map: %.elf
 	$(NM) -n $< >$@
@@ -26,8 +29,8 @@ LIBOBJ= memset.o memcpy.o memcmp.o mem.o
 %.bin: %.elf
 	$(OBJCOPY) -I elf32-littlearm -O binary $< $@
 
-%.elf: %.o startup.o $(LIBOBJ)
-	$(LD) -T ../lpc17xx.ld startup.o $<  $(LIBOBJ) -o $@
+%.elf: %.o startup.o mem.o $(LIB)
+	$(LD) -T ../lpc17xx.ld startup.o $<  mem.o $(LIB) -o $@
 
 %.o: %.s
 	$(AS) -o $@ $<
@@ -53,15 +56,6 @@ startup.o: ../startup.S
 mem.o:	../../../mem_ff.esl
 	$(ESLC) $(ARCH) $(DBG) $(OPT) $<
 	$(AS) -o $@ mem_ff.s
-
-memset.o: $(LIBDIR)/memset.S
-	$(AS) -o memset.o $(LIBDIR)/memset.S
-
-memcpy.o: $(LIBDIR)/memcpy.S
-	$(AS) -o memcpy.o $(LIBDIR)/memcpy.S
-
-memcmp.o: $(LIBDIR)/memcmp.S
-	$(AS) -o memcmp.o $(LIBDIR)/memcmp.S
 
 clean:
 	rm -f *.bin *.elf *.o *.s *.ll

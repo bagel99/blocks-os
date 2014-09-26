@@ -1,5 +1,5 @@
 /*
- * USB Device Driver forOTG_FS on STM32F107
+ * USB Device Driver for OTG_FS on STM32F107
  *
  * Reference: ST RM0008, doc id 13902 rev 13
  *
@@ -7,9 +7,10 @@
  * $Id: otg_fs.esl 359 2012-05-11 21:23:36Z bgl $
  */
 
-import sysctl;
+import rcc;
 import nvic;
 import usb;
+import otgfs;
 
 package usbdev
 {
@@ -30,340 +31,9 @@ package usbdev
     const db_act  =   0x0004;
     const db_start =  0x0002;
     const db_init =   0x0001;
-    /*
-     * HARDWARE REGISTERS - Global Registers
-     */
-    const NumTxFIFO = 4;
 
-    type FIFODesc:
-    {   start:   _uint16;		// .00-15
-	depth:   _uint16;		// .16-31
-    }: packed, lsb;
-    // Device mode Receive Packet status
-    type RecvDPktSts:
-    (   GOUT_NAK=1, OUT=2, OUT_FIN=3, SETUP_FIN=4, SETUP=6 );
-    type RecvDStatus:
-    {   epnum:     0..15;		// .00-03 EP number
-	bcnt:    0..0x7FF;		// .04-14 byte count
-	dpid:    (DATA0,DATA1,DATA2,MDATA); // .15-16 Data PID
-	pktsts:  RecvDPktSts: bits(4);	// .17-20
-	frmnum:  0..15;			// .21-24 D: frame number mod 16
-	_:       0..0x7F;
-    }: packed, lsb;
-    // Device mode Receive Packet status
-    type RecvHPktSts: ( IN=2, IN_FIN=3, DT_ERR=5, CH_HALT=7 );
-    type RecvHStatus:
-    {   chnum:     0..15;		// .00-03 channel number
-	bcnt:    0..0x7FF;		// .04-14 byte count
-	dpid:    (DATA0,DATA1,DATA2,MDATA); // .15-16 Data PID
-	pktsts:  RecvHPktSts: bits(4);	// .17-20
-	_:       0..15;
-	_:       0..0x7F;
-    }: packed, lsb;
-
-    type OTGGlobalRegs:
-    {
-	csr:								// 000
-	{   srqscs:  boolean;		// .00
-	    srq:     boolean;		// .01
-	    _:       0..0b111111;       // .02-07
-	    hngscs:  boolean;		// .08
-	    hnprq:   boolean;		// .09
-	    hshnpen: boolean;		// .10
-	    dhnpen:  boolean;		// .11
-	    _:       0..0b1111;		// .12-15
-	    cidsts:  (A,B);		// .16
-	    dbct:    boolean;		// .17
-	    asvld:   boolean;		// .18
-	    bsvld:   boolean;		// .19
-	    _:       0..0xFFF;		// .20-31
-	}: packed, lsb, in, out;
-	int:								// 004
-	{   _:       0..0b11;		// .00-01
-	    sedet:   boolean;		// .02
-	    _:       0..0b11111;	// .03-07
-	    srsschg: boolean;		// .08
-	    hnsschg: boolean;		// .09
-	    _:       0..0x7F;		// .10-16
-	    hngdet:  boolean;		// .17
-	    adtochg: boolean;		// .18
-	    dbcdne:  boolean;		// .19
-	    _:       0..0xFFF;		// .20-31    
-	}: packed, lsb, in, out;
-	ahbcfg:								// 008
-	{   gintmsk: boolean;		// .00
-	    _:       0..0b111111;       // .01-06
-	    txfelvl: boolean;		// .07
-	    ptxfelvl:boolean;		// .08
-	    _:       0..0x7F_FFFF;      // .09-31
-	}: packed, lsb, out;
-	usbcfg:								// 00C
-	{   tocal:   0..7;		// .00-02
-	    _:       0..0b1111;		// .03-06
-	    physel:  (LOW,FULL): ro;	// .07
-	    srpcab:  boolean;		// .08
-	    hnpcap:  boolean;		// .09
-	    trdt:    0..15;		// .10
-	    _:       0..0x7FFF;		// .11-28
-	    fhmod:   boolean;		// .29
-	    fdmod:   boolean;		// .30
-	    ctxpkt:  boolean;		// .31  do not set!    
-	}: packed, lsb, out;
-	rstctl:								// 010
-	{   csrst:   boolean;		// .00
-	    hsrst:   boolean;		// .01
-	    fcrst:   boolean;		// .02
-	    _:       0..1;		// .03
-	    rxfflsh: boolean;		// .04
-	    txfflsh: boolean;		// .05
-	    txfnum:  0..0b11111;	// .06-10
-	    _:       0..0xFFFFF;	// .11-30
-	    ahbidle: boolean;		// .31
-	}: packed, lsb, in, out;
-	intsts:								// 014
-	{   cmod:    (DEVICE, HOST): ro;// .00 current mode
-	    mmis:    boolean;		// .01 mode mismatch
-	    otgint:  boolean: ro;	// .02 OTG protocol event
-	    sof:     boolean;		// .03 start of frame
-	    rxflvl:  boolean: ro;	// .04 RxFIFO not empty
-	    nptxfe:  boolean: ro;	// .05 non-periodic TxFIFO empty
-	    ginakeff:boolean: ro;	// .06 IN non-periodic NAK effective
-	    gonakeff:boolean: ro;	// .07 OUT non-periodic NAK effective
-	    _:       0..0b11;		// .08-09
-	    esusp:   boolean;		// .10 D: early suspend
-	    usbsusp: boolean;		// .11 D: suspend detected
-	    usbrst:  boolean;		// .12 D: reset detected
-	    enumdne: boolean;		// .13 D: enumeration done
-	    isoodrp: boolean;		// .14 D
-	    eopf:    boolean;		// .15 D: end of periodic frame
-	    _:       0..0b11;		// .16-17
-	    iepint:  boolean: ro;	// .18 D: in endpoint interrupt
-	    oepint:  boolean: ro;	// .19 D: out endpoint interrupt
-	    iisoixf: boolean;		// .20 D
-	    iisooxf: boolean;		// .21 HD
-	    _:       0..0b11;		// .22-23
-	    hprtint: boolean: ro;	// .24 H
-	    hcint:   boolean;		// .25 H
-	    ptxfe:   boolean;		// .26 H
-	    _:       0..1;		// .27
-	    cidschg: boolean;		// .28 connector ID status change
-	    discint: boolean;		// .29 H: disconnect detected
-	    srqint:  boolean;		// .30 session request
-	    wkupint: boolean;		// .31 wakeup detected
-	}: packed, lsb, in, out;
-	intmsk:								// 018
-	{   _:       0..1;
-	    mmis:    boolean;		// .01 mode mismatch
-	    otgint:  boolean: ro;	// .02 OTG protocol event
-	    sof:     boolean;		// .03 start of frame
-	    rxflvl:  boolean: ro;	// .04 RxFIFO not empty
-	    nptxfe:  boolean: ro;	// .05 non-periodic TxFIFO empty
-	    ginakeff:boolean: ro;	// .06 IN non-periodic NAK effective
-	    gonakeff:boolean: ro;	// .07 OUT non-periodic NAK effective
-	    _:       0..0b11;		// .08-09
-	    esusp:   boolean;		// .10 D: early suspend
-	    usbsusp: boolean;		// .11 D: suspend detected
-	    usbrst:  boolean;		// .12 D: reset detected
-	    enumdne: boolean;		// .13 D: enumeration done
-	    isoodrp: boolean;		// .14
-	    eopf:    boolean;		// .15 D: end of periodic frame
-	    _:       0..0b11;		// .16-17
-	    iepint:  boolean: ro;	// .18 D: in endpoint interrupt
-	    oepint:  boolean: ro;	// .19 D: out endpoint interrupt
-	    iisoixf: boolean;		// .20
-	    iisooxf: boolean;		// .21
-	    _:       0..0b11;		// .22-23
-	    hprtint: boolean: ro;	// .24
-	    hcint:   boolean: ro;	// .25
-	    ptxfe:   boolean: ro;	// .26
-	    _:       0..1;		// .27
-	    cidschg: boolean;		// .28 connector ID status change
-	    discint: boolean;		// .29
-	    srqint:  boolean;		// .30 session request
-	    wkupint: boolean;		// .31 wakeup detected
-	}: packed, lsb, out;
-	rxsts:	 RecvDStatus: in;	// must cast if host		// 01C
-	rxstsp:	 RecvDStatus: in;	// must cast if host		// 020
-	rxfsiz:								// 024
-	{   depth:   _uint16;
-	    _:       _uint16;
-	}: packed, lsb, out;
-	tx0fsiz: FIFODesc: out;						// 028
-	nptxsts: _uint32;		// H-only FIXME			// 02C
-	_:  [2]_uint32;
-	ccfg:							        // 038
-	{   _:      0..0xFFFF;		// .00-15
-	    powerup:boolean;		// .16
-	    _:      0..1;		// .17
-	    senseA: boolean;		// .18
-	    senseB: boolean;		// .19
-	    sofout: boolean;		// .20
-	    _:      0..0x7FF;		// .21-31
-	}: packed, lsb, out;
-	cid:     _uint32;						// 03C
-	_:   [48]_uint32;
-	ptxfsiz: FIFODesc: out;						// 100
-	txfsiz: [3] FIFODesc: out;					// 104
-    };
-    type usbgbl: @OTGGlobalRegs;
-    const usbg: usbgbl = 0x5000_0000;
-    /*
-     * Global FIFO Space (32-bit access only?)
-     */
-    type FIFOEntry: [1024]_uint32;      // 4K bytes each
-    type FIFOSpace: [NumTxFIFO]FIFOEntry: in, out;
-    const usbfifo: @FIFOSpace =  0x5000_1000;
-
-
-    /*
-     * These procedures operate on the global registers
-     */
-    proc (ug: usbgbl) SetDeviceMode()
-    {
-	ug.usbcfg.fdmod = true;
-	// Delay_mS(50);
-    }
-
-    proc (ug: usbgbl) SetGlobalIntr(enable: boolean)
-    {
-	ug.ahbcfg.gintmsk = enable;
-    }
-
-    proc (ug: usbgbl) CoreReset()
-    {   var to: _uint;
-	var fail: boolean;
-
-	fail = false;
-	// wait for AHB master idle state
-	to = 200000;
-	loop
-	{   // Delay_uS(5);
-	  exit ug.rstctl.ahbidle;
-	    to -= 1;
-	  exit to == 0 with fail = true;
-	}
-	// core soft reset
-	ug.rstctl = { .csrst=true };
-	to = 200000;
-	loop
-	{
-	  exit !ug.rstctl.csrst;
-	    to -= 1;
-	  exit to == 0 with fail = true;
-	}
-	// Delay_uS(5);
-    }
-
-    proc (ug: usbgbl) FlushRxFIFO()
-    {   var to: _uint;
-
-	ug.rstctl = { .rxfflsh = true };    
-	to = 200000;
-	loop
-	{ exit !ug.rstctl.rxfflsh;
-	    to -= 1;
-	  exit to == 0;
-	}
-	// Delay_uS(5);
-    }
-
-    proc (ug: usbgbl) FlushTxFIFO(num: _uint)
-    {   var to: _uint;
-
-	ug.rstctl = { .txfflsh=true, .txfnum=num };    
-	to = 200000;
-	loop
-	{ exit !ug.rstctl.txfflsh;
-	    to -= 1;
-	  exit to == 0;
-	}
-	// Delay_uS(5);
-    }
-
-
-    proc (ug: usbgbl) ReadPacket(bb: @[]_byte /*align(4)*/, nb: _uint)
-    {   var nw: _uint;
-	type pwa: @[]_uint32;
-	var bw: pwa;
-	var i: _uint;
-
-	bw = pwa(bb);
-	nw = (nb + 3)/4;
-	i = 0;
-	while i < nw do
-	{   bw[i] = usbfifo[0][0];
-	    i += 1;
-	}    
-    }
-
-    proc (ug: usbgbl) WritePacket(epnum: _uint,
-    				  bb: @[]_byte /*align(4)*/, nb: _uint)
-    {   var nw: _uint;
-	type pwa: @[]_uint32;
-	var bw: pwa;
-	var i: _uint;
-
-	bw = pwa(bb);
-	nw = (nb + 3)/4;
-	i = 0;
-	while i < nw do
-	{   usbfifo[epnum][0] = bw[i];
-	    i += 1;
-	}    
-    }
-
-    proc EnumerationDone();	// forward
-    proc DeviceReset();		// forward
-    proc OEPDone();		// forward
-    proc IEPDone();		// forward
-    proc Suspend();		// forward
-    proc StartOfFrame();	// forward
-    proc RxStatusQueue();	// forward
-
-    // Interrupt Routine
-    proc Interrupt(): : global("OTG_IRQ")
-    {   var g: usbgbl = usbg;
-	var sts: ?g.intsts;
-
-	sts = g.intsts;     // clears FIFO status bits in hardware
-if db & db_int != 0 then {debug.str("*INT "); debug.hex32(_uint32(sts)); debug.nl();}
-	if sts.cmod == DEVICE then
-	{   if sts.enumdne then
-	    {   g.intsts = { .enumdne=true };	// clear interrupt
-		EnumerationDone();
-	    }
-	    if sts.usbrst then
-	    {   g.intsts = { .usbrst=true };	// clear interrupt
-		DeviceReset();
-	    }
-	    if sts.oepint then
-	    {   g.intsts = { .oepint=true };	// clear interrupt
-		OEPDone();
-	    }
-	    if sts.iepint then
-	    {   g.intsts = { .iepint=true };	// clear interrupt
-		IEPDone();
-	    }
-	    if sts.usbsusp then
-	    {   g.intsts = { .usbsusp=true };	// clear interrupt
-		Suspend();
-	    }
-	    if sts.rxflvl then
-	    {   // read-only bit, can't be cleared
-		RxStatusQueue();
-	    }
-	    if sts.sof then // FIXME - ignore?
-	    {   g.intsts = { .sof=true };	// clear interrupt
-//		StartOfFrame();
-	    }
-	    // clear any unhandled interrupts
-	    g.intsts = { .esusp=true,
-			 .eopf=true,
-			 .cidschg=true, .srqint=true, .wkupint=true }; 
-	}
-    }
-
-
+    alias otgfs.NumTxFIFO as NumTxFIFO;
+    alias otgfs.usbg as usbg;
 
     /*
      * HARDWARE REGISTERS - Device Mode Registers
@@ -587,9 +257,6 @@ if db & db_int != 0 then {debug.str("*INT "); debug.hex32(_uint32(sts)); debug.n
     type dev: @OTGDeviceRegs;
     const usbd: dev = 0x5000_0800;
     
-    const vector_norm = 67;
-    const vector_wkup = 42;
-
     const MaxPktSize = 1024;
     const MaxPktSize0 = 64;     // Endpoint 0 is special
 
@@ -679,7 +346,7 @@ if db & db_sa != 0 then { debug.str("SA "); debug.hex8(addr); debug.nl();}
 	if len > ep.maxpkt then len = ep.maxpkt;
 	avail = usbd.iep[ep.num].txfsts.avail * 4;
 	if len > avail then len = avail;
-if db & db_tx != 0 then {debug.str("Fill "); debug.uint(ep.num);
+if db & db_tx != 0 then {debug.str("TxF "); debug.uint(ep.num);
 debug.str(" a="); debug.uint(avail);
 debug.str(" l="); debug.uint(len);
 debug.str(" c="); debug.uint(ep.xfercnt); debug.nl();}
@@ -757,17 +424,21 @@ if db & db_strt != 0 then {debug.str("So\n");}
     proc (ep: eps) EP0StartOutForSetup()
     {   var ud: dev = usbd;
 
-if db & db_setup != 0 then debug.str("EP0START\n");
+if db & db_setup != 0 then debug.str("EP0S\n");
 	// mcnt below is really setup count
 	ud.oep[0].tsiz = { .xfrsiz = 8*3, .pktcnt=1, .mcnt=3 };
     }
 
-    proc (ep: eps) EP0StartOut()
+    proc (ep: eps) EP0StartOut(buf: _address, len: _uint)
     {   var ud: dev = usbd;
 	var ctl: OEPCTLx;
 	var siz: EPTSIZx;
 
-if db & db_setup != 0 then debug.str("EP0SO\n");
+if db & db_setup != 0 then {debug.str("EP0SO "); debug.uint(len); debug.nl();}
+	ep.t.isin = false;
+	ep.xferbuf = buf;
+	ep.xferlen = len;
+	ep.xfercnt = 0;
 	ctl = ud.oep[0].ctl;
 	siz = ud.oep[0].tsiz;
 	siz.xfrsiz = ep.maxpkt;    // WHY?
@@ -778,12 +449,16 @@ if db & db_setup != 0 then debug.str("EP0SO\n");
 	ud.oep[0].ctl = ctl;
     }
 
-    proc (ep: eps) EP0StartIn()
+    proc (ep: eps) EP0StartIn(buf: _address, len: _uint)
     {   var ud: dev = usbd;
 	var ctl: IEPCTLx;
 	var tsiz: EPTSIZx;
 
-if db & db_setup != 0 then debug.str("EP0SI\n");
+if db & db_setup != 0 then {debug.str("EP0SI "); debug.uint(len); debug.nl();}
+	ep.t.isin = true;
+	ep.xferbuf = buf;
+	ep.xferlen = len;
+	ep.xfercnt = 0;
 	ctl = ud.iep[0].ctl;
 	tsiz = ud.iep[0].tsiz;
 	if ep.xferlen == 0 then
@@ -795,27 +470,9 @@ if db & db_setup != 0 then debug.str("EP0SI\n");
 	ctl.cnak = true;    // stop NAKing
 	ctl.epena = true;   // ro for EP0?
 	ud.iep[0].ctl = ctl;
-if db & db_setup != 0 then ud.DumpEPInRegs(0); 
+//if db & db_setup != 0 then ud.DumpEPInRegs(0); 
 	if ep.xferlen > 0 then
 	    ud.iepempmsk.iep[0] = true;     // enable fifo empty interrupt
-    }
-
-    proc (ep: eps) EP0SetupInStatus()
-    {
-if db & db_setup != 0 then debug.str("EP0SIS\n");
-	ep.t.isin = true;
-	ep.xferlen = 0;    // recv zero length packet
-	ep.xfercnt = 0;
-	ep.EP0StartIn();
-    }
-
-    proc (ep: eps) EP0SetupOutStatus()
-    {
-if db & db_setup != 0 then debug.str("EP0SOS\n");
-	ep.t.isin = false;
-	ep.xferlen = 0;    // send zero length packet
-	ep.xfercnt = 0;
-	ep.EP0StartOut();
     }
 
     proc (ep: eps) EP0Activate()
@@ -853,12 +510,8 @@ if db & db_sudump != 0 then debug.dumpb("setup", uds.buf, 8);
         rqst = usb.pSetupPkt(uds.buf[0:8]);
         if rqst.type.dir == IN then
         {   adr, len = SetupIn(rqst);
-	    uds.ep0.xferbuf = adr;
-	    uds.ep0.xferlen = _min(len, rqst.length);
-	    uds.ep0.xfercnt = 0;
-            uds.ep0.t.isin = true;
 	    uds.state = DATAIN;
-	    uds.ep0.EP0StartIn();
+	    uds.ep0.EP0StartIn(adr, _min(len, rqst.length));
 	}
 	else    // dir == OUT
 	{   // handle SetAddress here
@@ -868,17 +521,13 @@ if db & db_sudump != 0 then debug.dumpb("setup", uds.buf, 8);
 	    else 
 		adr, len = SetupOut(rqst);
             if rqst.length != 0 then
-	    {   uds.ep0.xferbuf = adr;
-		uds.ep0.xferlen = _min(len, rqst.length);
-		uds.ep0.xfercnt = 0;
-	        uds.ep0.t.isin = false;
-		uds.state = DATAOUT;
-		uds.ep0.EP0StartOut();
+	    {   uds.state = DATAOUT;
+		uds.ep0.EP0StartOut(adr, _min(len, rqst.length));
 	    }
 	    else
 	    {   uds.ep0.t.isin = true;
 		uds.state = STATUSIN;
-		uds.ep0.EP0SetupInStatus();
+		uds.ep0.EP0StartIn(0,0);
 	    }
 	}
     }
@@ -903,7 +552,7 @@ if db & db_setup != 0 then debug.str("DIn\n");
 	    else
 	    {   // complete transfer
 		uds.state = STATUSOUT;
-		uds.ep0.EP0SetupOutStatus();
+		uds.ep0.EP0StartOut(0,0);
 	    }
 	}
 	is DATAOUT then
@@ -915,12 +564,11 @@ if db & db_setup != 0 then debug.str("DOn\n");
 	    else
 	    {   // complete transfer
 		uds.state = STATUSIN;
-		uds.ep0.EP0SetupInStatus();
+		uds.ep0.EP0StartIn(0,0);
 	    }
 	}
 	is STATUSIN, STATUSOUT then
 	{
-if db & db_setup != 0 then debug.str("SIO\n");
 	    // set ep0.xfercnt, etc to zero
 	    uds.state = IDLE;
 	}
@@ -1012,7 +660,6 @@ const TEST: boolean = true;
 
     proc DeviceStart()
     {
-	var ug: usbgbl = usbg;
 	var ud: dev = usbd;
 	var i: _uint;
 	var offs, size: _uint;
@@ -1033,7 +680,7 @@ if TEST then {
 	}
 }
 if db & db_start != 0 then {debug.str("rxfsiz="); debug.uint(size); debug.nl();}
-	ug.rxfsiz = { .depth=size };
+	usbg.rxfsiz = { .depth=size };
 	// Now do the transmit fifo sizes
 	offs = size;
 if TEST then {
@@ -1043,7 +690,7 @@ if TEST then {
 }
 if db & db_start != 0 then {debug.str("txfsiz0="); debug.uint(size);
 debug.str(" start="); debug.uint(offs); debug.nl();}
-	ug.tx0fsiz = { .start=offs, .depth=size };
+	usbg.tx0fsiz = { .start=offs, .depth=size };
 	for i from 0 to NumEP-1 do
 	{   if usbds.inx[i].t.isconfig then
 	    {   offs += size;
@@ -1052,14 +699,14 @@ debug.str(" start="); debug.uint(offs); debug.nl();}
 if db & db_start != 0then {debug.str("txfsiz"); debug.uint(i+1);
 debug.chr('='); debug.uint(size);
 debug.str(" start="); debug.uint(offs); debug.nl();}
-		ug.txfsiz[i] = { .start=offs, .depth=size };
+		usbg.txfsiz[i] = { .start=offs, .depth=size };
 	    }
 //usbds.inx[i].EPDump();
 	}
 
 	// Flush the FIFOs
-	ug.FlushTxFIFO(16);	// 16 means flush all
-	ug.FlushRxFIFO();
+	usbg.FlushTxFIFO(16);	// 16 means flush all
+	usbg.FlushRxFIFO();
 	// Clear any pending interrupts
 	ud.oepmsk = { .xfrc=false };	// disable all
 	ud.iepmsk = { .xfrc=false };	// disable all
@@ -1067,32 +714,19 @@ debug.str(" start="); debug.uint(offs); debug.nl();}
 	ud.aintmsk = { {[0]=false}, {[0]=false} };    // disable all
 	ud.aintmsk = { {[0]=true}, {[0]=true} };    // enable EP0 interrupts
 	// Enable device interrupts and global interrupt
-	ug.intmsk = { .usbrst=true, .usbsusp=true, .wkupint=true,
+	usbg.intmsk = { .usbrst=true, .usbsusp=true, .wkupint=true,
 		      .enumdne=true, .rxflvl=true, .iepint=true, .oepint=true };
-if db & db_start != 0 then {debug.str("sts="); debug.hex32(_uint32(ug.intsts)); debug.nl();}
-	ug.SetGlobalIntr(true);
+	usbg.SetGlobalIntr(true);
     }
 
     proc DeviceInit()
-    {   var sc: sysctl.SysCtl = sysctl.SysCtlAddr;
-	var ug: usbgbl = usbg;
-	var ud: dev = usbd;
+    {   var ud: dev = usbd;
 
 if db & db_init != 0 then debug.str("DeviceInit\n");
-	sysctl.ClockEnable(PWR);	// why?
-	sc.cfg.pll.otgfspre = DIV3;     // Must do before enabling clock
-	sysctl.ClockEnable(OTGFS);	// Enable clock to device
-	nvic.Enable(vector_norm);
-//	nvic.Enable(vector_wkup);
+	usbg.CoreInit();
 	// Initialize all EP software state
 	usbds.EPInit0();
-	ug.SetGlobalIntr(false);   // disable global interrupts
-	// Core Initialize
-	ug.usbcfg.physel = FULL;
-	ug.ccfg = { .powerup=true, .senseB=true };
-	// Delay_mS(50);
-	ug.CoreReset();
-	ug.SetDeviceMode();
+	usbg.SetDeviceMode();
 	/*
 	 * Initialize core device-mode registers
 	 */
@@ -1111,7 +745,7 @@ if db & db_init != 0 then debug.str("DeviceInit\n");
     {   var ud: dev = usbd;
 	var i: _uint;
 
-if db & db_other != 0 then {debug.str("Reset\n");}
+if db & db_other != 0 then {debug.str("RST\n");}
 	ud.ctl.rwusig = 0;      // clear remote wakeup signalling
 	ud.FlushTxFIFO(0);
 	// clear any pending interrupts
@@ -1133,7 +767,7 @@ if db & db_other != 0 then {debug.str("Reset\n");}
     // Enumeration done interrupt handler
     proc EnumerationDone()
     {
-if db & db_other != 0 then {debug.str("EnumD\n");}
+if db & db_other != 0 then {debug.str("END\n");}
 	usbg.usbcfg.trdt = 9;		// why?
 	usbds.ep0.EP0Activate();	// only call
 	usbds.state = IDLE;
@@ -1142,16 +776,13 @@ if db & db_other != 0 then {debug.str("EnumD\n");}
 
     // RxStatusQueue interrupt handler
     proc RxStatusQueue()
-    {   var ug: usbgbl = usbg;
-	var sts: RecvDStatus;
+    {   var sts: otgfs.RecvDStatus;
 	var ep: eps;
 
-	ug.intmsk.rxflvl = false;     // disable interrupt
+	usbg.intmsk.rxflvl = false;     // disable interrupt
 	// read and pop receive status
-	sts = ug.rxstsp;
-if db & db_other != 0 then {debug.str("RxSQ "); debug.uint(sts.epnum);
-debug.chr(' '); debug.hex32(_uint32(sts.pktsts));
-debug.chr(' '); debug.uint(sts.bcnt); debug.nl();}
+	sts = usbg.rxstsp;
+if db & db_other != 0 then {debug.str("RSQ "); debug.hex32(_uint32(sts)); debug.nl();}
 	// get endpoint state
 	ep = usbds.GetOutEP(sts.epnum);
 	if sts.pktsts
@@ -1162,31 +793,31 @@ debug.chr(' '); debug.uint(sts.bcnt); debug.nl();}
 		{   // FIXME
 		}
 		else
-		    ug.ReadPacket(ep.xferbuf, sts.bcnt);
+		    usbg.ReadPacket(ep.xferbuf, sts.bcnt);
 		ep.xfercnt += sts.bcnt;
 	    }
 	    ep.xferlen = sts.bcnt;
 	}
 	is SETUP then
 	{   ep.xferbuf = usbds.buf;
-	    ug.ReadPacket(ep.xferbuf, 8);
+	    usbg.ReadPacket(ep.xferbuf, 8);
 	    ep.xfercnt += sts.bcnt;
 	    ep.xferlen = sts.bcnt;
 	}
 	// call any implementation specific routine
-	ug.intmsk.rxflvl = true;     // re-enable interrupt
+	usbg.intmsk.rxflvl = true;     // re-enable interrupt
     }
 
     // Suspend interrupt handler
     proc Suspend()
     {
-if db & db_other != 0 then {debug.str("SUSP\n");}
+if db & db_other != 0 then {debug.str("SUS\n");}
     }
 
     // StartOfFrame interrupt handler
     proc StartOfFrame()
     {
-//if db & db_sof != 0 then {debug.str("StartOfFrame\n");}
+//if db & db_sof != 0 then {debug.str("SOF\n");}
     }
 
     // Output Endpoint transfer(s) complete interrupt handler
@@ -1198,12 +829,13 @@ if db & db_other != 0 then {debug.str("SUSP\n");}
 	var i: _uint;
 
 	aepint = ud.aint;		// get interrupt status for all EPs
+if db & db_other != 0 then {debug.str("OED "); debug.hex32(_uint32(aepint)); debug.nl();}
 	i = 0;
 	// FIXME - ffo could speed this up
 	while i < NumTxFIFO do
 	{   if aepint.oep[i] then
 	    {   epint = ud.oep[i].int;  // get interrupt status for this EP
-if db & db_oepd != 0 then {debug.str("OEPD "); debug.uint(i);
+if db & db_oepd != 0 then {debug.chr('\t'); debug.uint(i);
 debug.chr(' '); debug.hex32(_uint(epint)); debug.nl();}
 		if i == 0 then
 		    ep = usbds.ep0;
@@ -1251,11 +883,12 @@ debug.chr(' '); debug.hex32(_uint(epint)); debug.nl();}
 	var i: _uint;
 
 	aepint = ud.aint;		// get interrupt status for all EPs
+if db & db_iepd != 0 then {debug.str("IED "); debug.hex32(_uint(aepint)); debug.nl();}
 	i = 0;
 	while i < NumTxFIFO do
 	{   if aepint.iep[i] then
 	    {   epint = ud.iep[i].int;  // get interrupt status for this EP
-if db & db_iepd != 0 then {debug.str("IEPD "); debug.uint(i);
+if db & db_iepd != 0 then {debug.chr('\t'); debug.uint(i);
 debug.chr(' '); debug.hex32(_uint(epint)); debug.nl();}
 		if i == 0 then
 		    ep = usbds.ep0;
@@ -1290,6 +923,48 @@ debug.chr(' '); debug.hex32(_uint(epint)); debug.nl();}
 	    }
 	    i += 1;
 	}
+    }
+
+    /*
+     * Device specific interrupt handler
+     */
+    proc (sts: otgfs.IntSts) HostIntr(): : weak
+    {
+    }
+
+    proc (sts: otgfs.IntSts) DevIntr()
+    {
+	if sts.enumdne then
+	{   usbg.intsts = { .enumdne=true };	// clear interrupt
+	    EnumerationDone();
+	}
+	if sts.usbrst then
+	{   usbg.intsts = { .usbrst=true };	// clear interrupt
+	    DeviceReset();
+	}
+	if sts.oepint then
+	{   usbg.intsts = { .oepint=true };	// clear interrupt
+	    OEPDone();
+	}
+	if sts.iepint then
+	{   usbg.intsts = { .iepint=true };	// clear interrupt
+	    IEPDone();
+	}
+	if sts.usbsusp then
+	{   usbg.intsts = { .usbsusp=true };	// clear interrupt
+	    Suspend();
+	}
+	if sts.rxflvl then
+	{   // read-only bit, can't be cleared
+	    RxStatusQueue();
+	}
+	if sts.sof then // FIXME - ignore?
+	{   usbg.intsts = { .sof=true };	// clear interrupt
+//	    StartOfFrame();
+	}
+	// clear any unhandled interrupts
+	usbg.intsts = { .esusp=true, .eopf=true,
+		  .cidschg=true, .srqint=true, .wkupint=true }; 
     }
 }
 // vim: ts=8 sw=4 noet nowrap

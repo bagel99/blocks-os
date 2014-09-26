@@ -26,9 +26,9 @@ package event
 	ACTIVATE,	// from top to bottom requesting some activation
     );
 
-    if _uint?size == 8 then
-	type SizeT: _uint32;	// 64-bit machines
-    else
+//    if _uint?size == 8 then
+//	type SizeT: _uint32;	// 64-bit machines
+//    else
 	type SizeT: _uint16;
 
     type EventTag: _uint8;

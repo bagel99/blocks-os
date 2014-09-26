@@ -3,10 +3,10 @@
  * There are 5 UARTs.
  *
  * Copyright (c) 2011, Brian G. Lucas.  See LICENSE file.
- * $Id: uart.esl 287 2012-02-03 18:03:30Z bgl $
+ * $Id$
  */
 
-import sysctl;
+import rcc;
 
 package uart
 {
@@ -17,7 +17,7 @@ package uart
 
     // Define register bits.
     // All registers can be accessed as 32 or 16-bits at a time.
-    // We will work 16-bits at a time.
+    // We will work 32-bits at a time.
     type CR1:
     {   sbk:    boolean;	// .00
 	rwu:    boolean;	// .01
@@ -32,8 +32,7 @@ package uart
 	wake:   boolean;	// .11
 	width:  Width;		// .12
 	ue:     boolean;	// .13 enable uart
-	_:      0..0b11;
-    }: packed, lsb;
+    }: packed, lsb, bits(32);
     type UartRegs:
     {   sr:							// 0x00
 	{   pe:  boolean;       // .00
@@ -46,15 +45,10 @@ package uart
 	    txe: boolean;       // .07
 	    lbd: boolean;       // .08 cleared by writing 0
 	    cts: boolean;       // .09 cleared by writing 0
-	    _:   0..0x3F;
-	}: packed, lsb, in, out;
-	_:   _uint16;
-	dr:  _uint16: in, out;	// only low 9 bits are data	// 0x04  				 // 0x04
-	_:   _uint16;
-	brr: _uint16: out;  // actually binary fractional(12.4)
-	_:   _uint16;
+	}: packed, lsb, bits(32), in, out;
+	dr:  _uint32: in, out;	// only low 9 bits are data	// 0x04
+	brr: _uint32: out;  // actually binary fractional(12.4) // 0x08
 	cr1: CR1: in, out;					// 0x0C
-	_:   _uint16;
 	cr2:							// 0x10
 	{   addr:   0..15;
 	    _:      0..1;
@@ -67,9 +61,7 @@ package uart
 	    clken:  boolean;
 	    stop:   Stop;
 	    linen:  boolean;
-	    _:      0..1;
-	}: packed, lsb, in, out;
-	_:   _uint16;
+	}: packed, lsb, bits(32), in, out;
 	cr3:							// 0x14
 	{   eie:    boolean;
 	    iren:   boolean;
@@ -82,59 +74,29 @@ package uart
 	    rtse:   boolean;
 	    ctse:   boolean;
 	    cgtsie: boolean;
-	    _:      0..0x1F;
-	}: packed, lsb, out;
-	_:   _uint16;
+	}: packed, lsb, bits(32), out;
 	gtpr:							// 0x18
 	{   psc:    0..255;
 	    gt:     0..255;
-	}: packed, lsb, out;
-	_:   _uint16;
+	}: packed, lsb, bits(32), out;
     };
 
     type Uart:    @UartRegs;
 
     type UartTypes: (UART, USART);
-    const devices: []
-    {   addr:   Uart;
-        vector: _uint8;
-	dev:    sysctl.Device;
-        bus:    sysctl.Bus;
-        type:   UartTypes;
-    } =
-    {   { 0x4001_3800, 37, USART1, APB2, USART },
-	{ 0x4000_4400, 38, USART2, APB1, USART },
-	{ 0x4000_4800, 39, USART3, APB1, USART },
-	{ 0x4000_4C00, 52, UART4,  APB1, UART  },
-	{ 0x4000_5000, 53, UART5,  APB1, UART  }
-    };
-
-    // Methods
-    proc (u: Uart) GetDevIndex(): _uint
-    {   var i: _uint;
-
-	i = 0;
-	while i < devices?len do
-	{   if u == devices[i].addr then return i;
-	    i += 1;
-	}
-	return i;   // FIXME: what to return on error
-    }
 
     proc (u: Uart) SetFormat(w: Width, s: Stop, p: Parity)
     {
-	u@.cr1.width = w;
-	u@.cr1.parity = p;
-	u@.cr2.stop = s;
+	u.cr1.width = w;
+	u.cr1.parity = p;
+	u.cr2.stop = s;
     }
 
     proc (u: Uart) SetSpeed(speed: _uint32)
     {   var clk: _uint32;
 	var intdiv, fracdiv: _uint32;
-        var i: _uint;
 
-	i = u.GetDevIndex();
-        if devices[i].bus
+	if chip.GetBusByAddress(_address(u))
         is APB2 then clk = sys.P2Clock;
         is APB1 then clk = sys.P1Clock;
         else return;    // eh?
@@ -144,21 +106,22 @@ package uart
 
     proc (u: Uart) Send(data: _byte)
     {
-	while !u@.sr.txe do
+	while !u.sr.txe do
 	    {}		// spin until xmit ready
-	u@.dr = data;
+	u.dr = data;
     }
 
     proc Init(n: _uint): Uart
     {   var u: Uart;
-	var sc: sysctl.SysCtl;
 	var cr1: CR1;
+	var d: chip.Device;
 
-	if n == 0 || n >= devices?len then return 0;
-	n -= 1;     // become zero based
-	sysctl.ClockEnable(devices[n].dev);
-	sysctl.DeviceReset(devices[n].dev);
-	u = devices[n].addr;
+	if n == 0 || n > chip.uarts?len then return 0;
+	n -= 1;    // zero-based
+	d = chip.uarts[n];
+	rcc.ClockEnable(d);
+	rcc.DeviceReset(d);
+	u = Uart(chip.uartaddr[n]);;
 	u.SetFormat(BITS8, STOP1, NONE);
 	u.SetSpeed(115200);
 	cr1 = u.cr1;

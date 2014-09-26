@@ -4,7 +4,7 @@
  * Reference: RM0008 rev. 13
  *
  * Copyright (c) 2012, Brian G. Lucas.  See LICENSE file.
- * $Id: gpio.esl 283 2012-02-02 22:32:42Z bgl $
+ * $Id$
  */
 
 package iwdt
@@ -26,7 +26,7 @@ package iwdt
 	}: packed, lsb, bits(32), in, ro;
     };
     type IWDT: @IWDTRegs;
-    const iwdt: IWDT = 0x4000_3000;
+    const iwdt: IWDT = chip.iwdtaddr;
 
     proc (iwdt: IWDT) SetTimeOut(timeout: _uint32): boolean
     {   var n: _uint32;

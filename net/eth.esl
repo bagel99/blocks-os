@@ -237,8 +237,6 @@ if db > 2 then { debug.str("eth.Run I\n"); }
 	}
 	else
 	{
-if db > 1 then { debug.str("eth.Run ");  debug.uint8(_uint8(e.code));
-debug.chr(','); debug.uint8(e.tag); debug.nl(); }
 	    if e.code
 	    is SEND then
 	    {   eb.Xmit(pMBuf(e));

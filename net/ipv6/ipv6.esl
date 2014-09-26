@@ -2,7 +2,7 @@
  * IPv6
  * Needs more work.
  *
- * Copyright (c) 2009-2012, Brian G. Lucas.  See LICENSE file.
+ * Copyright (c) 2009-2014, Brian G. Lucas.  See LICENSE file.
  * $Id$
  */
 
@@ -11,12 +11,76 @@ import timer;
 
 package ipv6	// continue with implementation
 {
+    alias event.Event as Event;
+    alias event.pEvent as pEvent;
+    alias mbuf.pMBuf as pMBuf;
+    alias block.Block as Block;
+    alias block.pBlock as pBlock;
+    alias block.BlockID as BlockID;
+
     if !_defined(db) then
     {   if _defined(debug.db_ipv6) then
 	    alias debug.db_ipv6 as db;
 	else
 	    const db = 0;
     }
+
+    type Upper:
+    {   next:    @Upper;
+	bid:     BlockID;
+	tag:     _uint8;
+	proto:   Proto;
+    };
+    type pUpper: @Upper;
+    
+
+    if _defined(sys.NIPv6Lower) then
+	alias sys.NIPv6Lower as NIPv6Lower;
+    else
+	const NIPv6Lower = 2;
+
+    // PREFIX CACHE
+    type AddrState: (DOWN, TENTATIVE, WAITDAD, DEPRECATED, PREFERRED);
+    type IntfAddrEntry:
+    {   addr:   IPv6Addr;
+	next:   @IntfAddrEntry;
+	vlifet: _uint32;	// lifetime in seconds
+	len:    _uint8;		// prefix length
+	state:  AddrState;
+    }: align(8);
+    type pIntfAddrEntry: @IntfAddrEntry;
+
+    // INTERFACE STATE
+    // For the interfaces we are interested in, namely ethernet and PPP,
+    // interface ids are 8 bytes long.
+    const iidlen = 8;
+    type Lower:
+    {   iid:       [iidlen]_byte;       // interface ID, may be smaller
+	ifn:       _uint8;
+	bid:       BlockID;
+	type:      comm.LinkType;
+        state:     AddrState;		// FIXME
+	rsage:     _uint16;		// router solicitation aging
+	hdr:       _uint8;		// space for link level header(s)
+	trl:       _uint8;
+	mtu:       _uint16;		// e.g, 1500 for ethernet
+	prefixes:  @IntfAddrEntry;
+	multicast: @IntfAddrEntry;
+	neighbors: @NCacheEntry;	// forward
+    }: align(8);
+    type pLower: @Lower;
+
+    type IPv6Block(Block):
+    {   upper:     pUpper;			// upper level protocols
+	lower:     [NIPv6Lower]pLower;		// interfaces
+	fraghead:  @FragEntry;			// forward
+	hdr:       _uint8;			// max over all interfaces
+	trl:       _uint8;			// max over all interfaces
+	ifcount:   _uint8;			// number of ready interfaces
+	IsRouter:  boolean;
+	iftimer:   (NONE, RUN);			// interface timer state
+    };
+    type pIPv6Block: @IPv6Block;
 
     // The lower level is an IPv6 'interface'.
 
@@ -35,16 +99,6 @@ package ipv6	// continue with implementation
     type pNCacheEntry: @NCacheEntry;
     const ReachableTO = 60;
     const IncompleteTO = 5;
-
-    // PREFIX CACHE
-    type IntfAddrEntry:
-    {   addr:   IPv6Addr;
-	next:   @IntfAddrEntry;
-	vlifet: _uint32;	// lifetime in seconds
-	len:    _uint8;		// prefix length
-	state:  AddrState;
-    }: align(8);
-    type pIntfAddrEntry: @IntfAddrEntry;
 
 
 // BEGIN DEBUG
@@ -121,6 +175,18 @@ package ipv6	// continue with implementation
 	ifn -= 1;
 	if ifn < NIPv6Lower then
 	    return ib.lower[ifn];
+	return 0;
+    }
+
+    // FIXME - allow access to all address, not just the first
+    proc (ib: pIPv6Block) GetAddress(ifn: _uint, addr: @IPv6Addr): _uint
+    {   var intf: pLower;
+
+	intf = ib.GetInterface(ifn);
+	if intf != 0 && intf.state == PREFERRED then    // FIXME - state per address
+	{   addr@ = intf.prefixes.addr;
+	    return 1;   // FIXME - return total number of addresses
+	}
 	return 0;
     }
 
@@ -254,7 +320,7 @@ if db > 3 then {debug.str("ipv6.NCacheTimer should send NS\n");}
     {   var nexttime: _uint;
 	var toaddr, myaddr: IPv6Addr;
 
-if db> 4 then { debug.str("ipv6.IntfTimer "); debug.uint8(intf.ifn);
+if db > 4 then { debug.str("ipv6.IntfTimer "); debug.uint8(intf.ifn);
 debug.str(" state="); debug.uint8(_uint8(intf.state)); debug.nl(); }
 	nexttime = 1;   // default
 	if intf.state
@@ -700,8 +766,7 @@ debug.nl();}
 if db > 3 then {debug.str("ipv6.StartTimer\n");}
 	if ib.iftimer == NONE then
 	{   ib.iftimer = RUN;
-	    te = _new(timer.TimerEvent);
-	    te.code = TSTART;
+	    te = timer.Alloc(TSTART);
 	    te.tag = ib.id;
 	    te.ticks = timer.SecondsToTicks(5);    // FIXME: if first then should be random
 	    TimerID.Send(te);
@@ -739,8 +804,6 @@ if db > 3 then {debug.str("ipv6.Timer deleted\n");}
     proc Run(b: pBlock, e: pEvent)
     {   var ib: pIPv6Block;
 
-if db > 4 then {debug.str("ipv6.Run ");  debug.uint8(_uint8(e.code));
-debug.chr(','); debug.uint8(e.tag); debug.nl();}
         ib = pIPv6Block(b);
         if e.code
         is RCVD then    // packet received from interface

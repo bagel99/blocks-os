@@ -19,10 +19,10 @@ import systick;
 import nvic;
 
 // STM32F10x stuff
-import sysctl;
+import rcc;
 import exti;
 
-import usbdevotg;
+import usbdev;
 import usb_ledbut;
 
 var button1, button2: boolean: in, out;
@@ -44,7 +44,7 @@ proc EINT10_15_IRQ()
 
 proc main()
 {
-    sysctl.Init();
+    rcc.Init();
     sys.Init();
     debug.Init();
     usbdev.HIDInit();

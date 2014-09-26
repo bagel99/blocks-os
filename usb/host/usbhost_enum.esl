@@ -5,12 +5,18 @@
  * $Id$
  */
 
+import block;
 import usbevent;
 import usb_hub;
+import usbhost;
+import mbuf;
 
 package usbenum
 {
-    const db = 5;
+    if _defined(debug.db_usbenum) then
+	alias debug.db_usbenum as db;
+    else
+	const db = 0;
 
     alias event.Event  as Event;
     alias event.pEvent as pEvent;
@@ -27,22 +33,102 @@ package usbenum
 
     const NumRegistered = 4;
 
-    type State: (DOWN, DISC, CONF0, CONF1, CONF2, CONF3, CONF4, CONF5, READY);
+    type DevStates: (DISC, DEV1, DEV2, DEV3, DEV4, DEV5, DEV6, READY, HUB, ORPHAN);
+    type HubStates: (HUB0, HUB1, HUB2, HUB3, HUB4, HUB5, HUB6, HUB7, HUB8, HUB9,
+    		     HUB10, HUB11, HUB12, HUB13, HUB14, HUBX);
+    type PortStates: (DISC, RESET, CONN);
+    type HubMask: [8]boolean: packed, lsb;
+    type DevEntry:
+    {	next:      @DevEntry;	// list of all devices
+	mbsave:    pMBuf;	// MBuf containing super descriptor, hub reuses
+	state:     DevStates;
+	devadr:    _uint8;	// hardware address of device
+	hub:       _uint8;	// hardware address of hub
+	port:      _uint8;
+	speed:     usb.Speeds;
+	driver:    block.BlockID;
+	class:     _uint8;
+	subcls:    _uint8;
+	proto:     _uint8;
+	vid:       _uint16;
+	pid:       _uint16;
+	mps0:	   _uint16;
+	mbintr:    pMBuf;	// hubs only - MBuf for hub interrupt polling
+	hstate:    HubStates;	// hubs only
+	nports:    _uint8;	// hubs only - total number of ports
+	portn:     _uint8;	// hubs only - current port under service
+	service:   HubMask;	// hubs only
+	pstatus:   usb.hub.PortStatus;	// hubs only - status of port under service
+	pstate:    [7]PortStates;
+    };
+    type pDevEntry: @DevEntry;
+
     type USBEnumBlock(Block):
-    {	state:  State;
-	devadr: _uint8;
-	class:  _uint8;
-	subcls: _uint8;
-	proto:  _uint8;
-	vid:    _uint16;
-	pid:    _uint16;
-	mps0:	_uint16;
-	superdesc: pMBuf;	// MBuf containing super descriptor
-	numreg: _uint;
-	bid:      [NumRegistered]block.BlockID;
-	registry: [NumRegistered]RegisterData;
+    {	rstate: _uint8;		// currently unused
+	devadr: _uint8;		// next hardware address to be assigned
+	devices:  pDevEntry;
+	registry: @usbevent.RegisterEvent;
     };
     type pUSBEnumBlock: @USBEnumBlock;
+
+    proc (ab: pUSBEnumBlock) NewDevice(hub: _uint8, port: _uint8, speed: usb.Speeds): pDevEntry
+    {   var d: pDevEntry;
+
+	d = _new(DevEntry);
+if db > 1 then { debug.str("ND @"); debug.hex(_uintptr(d)); 
+debug.chr(' '); debug.uint8(hub); debug.chr(':'); debug.uint8(port); debug.nl(); }
+	_zero(d);
+	d.hub = hub;
+	d.port = port;
+	d.speed = speed;
+	d.next = ab.devices;
+	ab.devices = d;
+	return d;
+    }
+
+    proc (ab: pUSBEnumBlock) FindDevice(devadr: _uint8): pDevEntry
+    {   var d: pDevEntry;
+
+	d = ab.devices;
+	while d != 0 && d.devadr != devadr do
+	    d = d.next;
+	return d;
+    }
+
+    proc (ab: pUSBEnumBlock) GetNewAddress(): _uint8
+    {
+	ab.devadr += 1;
+	if ab.devadr > 127 then ab.devadr = 2;
+	// FIXME - check for uniqueness
+	return ab.devadr;
+    }
+
+    proc (ab: pUSBEnumBlock) Register(re: usbevent.pRegisterEvent)
+    {
+if db > 1 then { debug.str("Reg: c=");  debug.uint8(re.data.class);
+debug.str(" s="); debug.uint8(re.data.subcls); debug.nl(); }
+	re.next = ab.registry;
+	ab.registry = re;
+    }
+
+    proc (ab: pUSBEnumBlock) FindDriver(d: pDevEntry): block.BlockID
+    {   var re: usbevent.pRegisterEvent;
+	var match: boolean;
+
+	re = ab.registry;
+	while re != 0 do
+	{   match = true;
+	    if re.data.mask.class  && re.data.class  != d.class  then match = false; 
+	    if re.data.mask.subcls && re.data.subcls != d.subcls then match = false; 
+	    if re.data.mask.proto  && re.data.proto  != d.proto  then match = false; 
+	    if re.data.mask.vid    && re.data.vid    != d.vid    then match = false; 
+	    if re.data.mask.pid    && re.data.pid    != d.pid    then match = false; 
+	    if match then
+		return re.tag;
+	    re = usbevent.pRegisterEvent(re.next);
+	}
+	return 0;
+    }
 
     proc (ab: pUSBEnumBlock) NewURB(pipe: Pipe, size: _uint): pMBuf
     {   var mb: pMBuf;
@@ -54,7 +140,8 @@ package usbenum
 	return mb;
     }
 
-    proc (ab: pUSBEnumBlock) SetEPActive(pipe: Pipe, type: usb.EPType, maxpkt: _uint, interval: _uint)
+    proc (ab: pUSBEnumBlock) SetEPActive(pipe: Pipe, type: usb.EPType, speed: usb.Speeds, 
+					 maxpkt: _uint, interval: _uint)
     {   var ae: usbevent.pActivateEvent;
 
 	ae = usbevent.AllocActivateEvent(0);
@@ -62,8 +149,93 @@ package usbenum
 	ae.pipe = pipe;
 	ae.mtu = maxpkt;
 	ae.type = type;
+	ae.speed = speed;
 	ae.inter = interval;
 	USBHOSTID.Send(ae);
+    }
+
+    const HubDescDevice:usb.DescType = {usb.DescNumber(9), CLASS};
+
+    proc (ab: pUSBEnumBlock) GetHubDescriptor(mb: pMBuf, len: _uint)
+    {   var cmd: usb.pSetupPkt;
+
+	mb.Reset(0);	// in case mb was used before
+	cmd = usb.pSetupPkt(mb.GrowTail(usb.SetupPkt?size));
+	cmd.type = { .recip=Device, .stype=Class, .dir=IN };
+	cmd.request = _uint8(usb.StandardRequests.GetDescriptor);
+	cmd.value = _uint8(HubDescDevice) << 8;
+	cmd.index = 0;
+	cmd.length = len;
+	mb.GrowTail(len);
+	USBHOSTID.Send(mb);
+    }
+
+    proc (ab: pUSBEnumBlock) GetHubStatus(mb: pMBuf, len: _uint)
+    {   var cmd: usb.pSetupPkt;
+
+	mb.Reset(0);	// in case mb was used before
+	cmd = usb.pSetupPkt(mb.GrowTail(usb.SetupPkt?size));
+	cmd.type = { .recip=Device, .stype=Class, .dir=IN };
+	cmd.request = _uint8(usb.StandardRequests.GetStatus);
+	cmd.value = 0;
+	cmd.index = 0;
+	cmd.length = len;
+	mb.GrowTail(len);
+	USBHOSTID.Send(mb);
+    }
+
+    proc (ab: pUSBEnumBlock) GetPortStatus(mb: pMBuf, port: _uint)
+    {   var cmd: usb.pSetupPkt;
+
+	mb.Reset(0);	// in case mb was used before
+	cmd = usb.pSetupPkt(mb.GrowTail(usb.SetupPkt?size));
+	cmd.type = { .recip=Other, .stype=Class, .dir=IN };
+	cmd.request = _uint8(usb.StandardRequests.GetStatus);
+	cmd.value = 0;
+	cmd.index = _uint16(port);
+	cmd.length = usb.hub.PortStatus?size;
+	mb.GrowTail(usb.hub.PortStatus?size);
+	USBHOSTID.Send(mb);
+    }
+
+    proc (ab: pUSBEnumBlock) SetPortFeature(mb: pMBuf, port: _uint, feature: usb.hub.PortFeatures)
+    {   var cmd: usb.pSetupPkt;
+
+	mb.Reset(0);	// in case mb was used before
+	cmd = usb.pSetupPkt(mb.GrowTail(usb.SetupPkt?size));
+	cmd.type = { .recip=Other, .stype=Class, .dir=OUT };
+	cmd.request = _uint8(usb.hub.HubRequests.SetFeature);
+	cmd.value = _uint8(feature);
+	cmd.index = _uint16(port);
+	cmd.length = 0;
+	USBHOSTID.Send(mb);
+    }
+
+    proc (ab: pUSBEnumBlock) ClearPortFeature(mb: pMBuf, port: _uint, feature: usb.hub.PortFeatures)
+    {   var cmd: usb.pSetupPkt;
+
+	mb.Reset(0);	// in case mb was used before
+	cmd = usb.pSetupPkt(mb.GrowTail(usb.SetupPkt?size));
+	cmd.type = { .recip=Other, .stype=Class, .dir=OUT };
+	cmd.request = _uint8(usb.hub.HubRequests.ClearFeature);
+	cmd.value = _uint8(feature);
+	cmd.index = _uint16(port);
+	cmd.length = 0;
+	USBHOSTID.Send(mb);
+    }
+
+    proc (ab: pUSBEnumBlock) GetDeviceStatus(mb: pMBuf)
+    {   var cmd: usb.pSetupPkt;
+
+	mb.Reset(0);	// in case mb was used before
+	cmd = usb.pSetupPkt(mb.GrowTail(usb.SetupPkt?size));
+	cmd.type = { .recip=Device, .stype=Standard, .dir=IN };
+	cmd.request = _uint8(usb.StandardRequests.GetStatus);
+	cmd.value = 0;
+	cmd.index = 0;
+	cmd.length = 2;
+	mb.GrowTail(2);
+	USBHOSTID.Send(mb);
     }
 
     proc (ab: pUSBEnumBlock) GetDeviceDescriptor(mb: pMBuf, len: _uint)
@@ -119,206 +291,420 @@ package usbenum
 	cmd.length = 0;
 	USBHOSTID.Send(mb);
     }
-/*
-    proc (ab: pUSBEnumBlock) SetupEndPoints()
+
+    proc (ab: pUSBEnumBlock) SetupEndPoints(d: pDevEntry)
     {   var nep, n: _uint;
     	type pDesc: @usb.Descriptor;
-	var d: pDesc;
+	var gd: pDesc;
 	var id: pInterfaceDesc;
 	type pEPDescArray: @[]usb.EndpointDesc;
 	var ep: pEPDescArray;
 	var mb: pMBuf;
 	var pipe: Pipe;
 
-	mb = ab.superdesc;
-debug.str("SetupEndPoints: ");
-mb.Dump(true);
-	d = pDesc(mb.Data());
+	mb = d.mbsave;		// has config superdescriptor
+debug.str("SEP: ");
+	gd = pDesc(mb.Data());
 	// expecting configuration descriptor first
-	if d.Type == usb.DescConfig then
-	    mb.ShrinkHead(d.Length);
-	d = pDesc(mb.Data());
+	if gd.Type == usb.DescConfig then
+	    mb.ShrinkHead(gd.Length);
+	gd = pDesc(mb.Data());
 	// expection interface descriptor
-	if d.Type == usb.DescInterface then
-	{   id = pInterfaceDesc(d);
-debug.str("id="); debug.hex32(_uint32(id)); debug.nl();
+	if gd.Type == usb.DescInterface then
+	{   id = pInterfaceDesc(gd);
+//debug.str("id="); debug.hex32(_uint32(id)); debug.nl();
 	    nep = id.NEP;
 debug.str("nep="); debug.uint(nep); debug.nl();
 	}
 	// skip until we find endpoint descriptor
 	loop
-	{   mb.ShrinkHead(d.Length);
-	    d = pDesc(mb.Data());
-	  exit d.Type == usb.DescEndpoint;
+	{   mb.ShrinkHead(gd.Length);
+	    gd = pDesc(mb.Data());
+	  exit gd.Type == usb.DescEndpoint;
 	}
-	ep = pEPDescArray(d);
-debug.str("ep="); debug.hex32(_uint32(ep)); debug.nl();
+	ep = pEPDescArray(gd);
+//debug.str("ep="); debug.hex32(_uint32(ep)); debug.nl();
 	for n from 0 to nep-1 do
 	{
+if db > 2 then {
 debug.str("EP["); debug.uint(n); debug.str("]: num="); debug.uint8(ep[n].Address.Num);
 debug.str(" in="); debug.uint8(_uint8(ep[n].Address.Dir));
 debug.str(" type="); debug.uint8(_uint8(ep[n].Attr.Type));
 debug.str(" maxpkt="); debug.uint16(ep[n].MaxSize);
 debug.str(" itvl="); debug.uint8(ep[n].Interval);
-debug.nl();
-	    pipe.dev = ab.devadr;	// FIXME
+debug.nl(); }
+	    pipe.dev = d.devadr;	// FIXME
+
 	    pipe.epn = ep[n].Address.Num;
-	    ab.SetEPActive(pipe, ep[n].Attr.Type, ep[n].MaxSize, ep[n].Interval);
+//	    ab.SetEPActive(pipe, ep[n].Attr.Type, ep[n].MaxSize, ep[n].Interval);
+	    ab.SetEPActive(pipe, ep[n].Attr.Type, d.speed, ep[n].MaxSize, ep[n].Interval);
 	}
     }
-*/
 
-    proc (ab: pUSBEnumBlock) InitHub()
-    {
-debug.str("InitHub ");  debug.uint8(ab.devadr);  debug.nl();
+    /*
+     * The hub state machine reuses the same MBuf for control packets.
+     * It never has more than one URB in the device driver at a time.
+     * So get one large enough.
+     */
+//    const HubURBSize = usb.SetupPkt?size + _max(??);
+
+    proc (ab: pUSBEnumBlock) HubNewDevice(d: pDevEntry, port: _uint, ps: @usb.hub.PortStatus)
+    {   var nd: pDevEntry;
+	var mb: pMBuf;
+	var len: _uint;
+	var speed: usb.Speeds;
+
+	if ps.lospeed then
+	{   speed = LOW;
+	    len = 8;
+	}
+	else if ps.hispeed then
+	{   speed = HIGH;
+	    len = 64;
+	}
+	else
+	{   speed = FULL;
+	    len = 8;		// FIXME - is this right?
+	}
+	nd = ab.NewDevice(d.devadr, port, speed);
+	// Allocate an MBuf large enough for subsequent stuff and start initialization
+	mb = ab.NewURB({.dev=0, .epn=0}, usb.SetupPkt?size+64);
+	ab.GetDeviceDescriptor(mb, len);
+	nd.state = DEV1;
     }
 
-    proc (ab: pUSBEnumBlock) NotifyDriver()
-    {   var i: _uint;
-	var match: boolean;
+    proc (ab: pUSBEnumBlock) HubDiscDevice(d: pDevEntry, port: _uint)
+    {
 
-	for i from 0 to ab.numreg-1 do
-	{   match = true;
-	    if ab.registry[i].mask.class  && ab.registry[i].class  != ab.class  then match = false; 
-	    if ab.registry[i].mask.subcls && ab.registry[i].subcls != ab.subcls then match = false; 
-	    if ab.registry[i].mask.proto  && ab.registry[i].proto  != ab.proto  then match = false; 
-	    if ab.registry[i].mask.vid    && ab.registry[i].vid    != ab.vid    then match = false; 
-	    if ab.registry[i].mask.pid    && ab.registry[i].pid    != ab.pid    then match = false; 
-	    if match then
-	    {   if ab.bid[i] == 0 then	// its for us, must be a hub
-	    	    ab.InitHub();
-	    	else
-	    	{   ab.superdesc.code = UP;
-	    	    ab.bid[i].Send(ab.superdesc);
-	    	}
-		return;
+    }
+
+    proc (ab: pUSBEnumBlock) HubCheck(d: pDevEntry)
+    {
+if db > 2 then { debug.str("HC\n"); }
+    }
+
+    proc (ab: pUSBEnumBlock) PortCheck(d: pDevEntry): boolean
+    {   var mb: pMBuf;
+
+	while d.portn <= d.nports do
+	{   if d.service[d.portn] then		// this port wants service
+	    {   d.service[d.portn] = false;	// clear the bit
+if db > 2 then { debug.str("PortCheck "); debug.uint8(d.portn); debug.nl(); }
+	    	mb = d.mbsave;
+	    	ab.GetPortStatus(mb, d.portn);
+		return true;
 	    }
+    	    d.portn += 1;
+    	}
+	return false;	    
+    }
+
+    proc (ab: pUSBEnumBlock) HubIssueIntrURB(d: pDevEntry)
+    {   var mb: pMBuf;
+
+	mb = d.mbintr;	// interrupt URB
+	mb.code = RCVD;
+	mb.Reset(0);
+	mb.GrowTail(HubMask?size);
+	USBHOSTID.Send(mb);
+    }
+
+    proc (ab: pUSBEnumBlock) HubEvent(d: pDevEntry, mb: pMBuf)
+    {
+	type pPS: @usb.hub.PortStatus;
+	var pps: pPS;
+	var ps: usb.hub.PortStatus;
+
+if db > 2 then { debug.str("HE ");  debug.uint8(_uint8(d.hstate));  debug.nl(); }
+	if d.hstate
+	is HUB0 then		// service GetHubDescriptor
+	{   // parse hub descriptor
+	   d.nports = 4;	// FIXME - from hub descriptor
+	   d.mbintr = ab.NewURB({.dev=d.devadr, .epn=1}, 8);	// interrupt URB
+	   ab.GetDeviceStatus(mb);
+	   d.hstate = HUB1;
+	}
+	is HUB1 then		// service GetDeviceStatus
+	{   d.hstate = HUB2;
+	    ab.GetHubStatus(mb, 4);
+	}
+	is HUB2 then		// service GetHubStatus
+	{   d.hstate = HUB3;
+	    d.portn = 1;
+	    ab.SetPortFeature(mb, d.portn, power);
+
+	}
+	is HUB3 then		// power up ports
+	{   d.portn += 1;
+	    if d.portn <= d.nports then
+		ab.SetPortFeature(mb, d.portn, power);
+	    else
+	    {   d.hstate = HUB4;
+		d.portn = 1;
+		ab.GetPortStatus(mb, d.portn);
+	    }
+	}
+	is HUB4 then		// service initial GetPortStatus
+	{   d.portn += 1;
+	    if d.portn <= d.nports then
+		ab.GetPortStatus(mb, d.portn);
+	    else
+	    {   d.hstate = HUB5;
+		ab.SetupEndPoints(d);
+		mbuf.Free(d.mbsave);	// the device superdescriptor
+		d.mbsave = mb;
+		ab.HubIssueIntrURB(d);
+	    }
+	}
+	is HUB5 then		// service interrupt pipe
+	{   type pHMask: @HubMask;
+	    var phm: pHMask;
+	    phm = pHMask(mb.Data());
+	    d.service = phm@;
+if db > 2 then { debug.str("HI m="); debug.hex8(_uint8(d.service)); debug.nl(); }
+	    d.portn = 1;
+	    if d.service[0] then
+	    {	ab.HubCheck(d);
+	    	d.hstate = HUBX;
+	    }
+	    else if ab.PortCheck(d) then
+		d.hstate = HUB6;
+	    else	// null interrupt, nothing to do
+		ab.HubIssueIntrURB(d);
+	}
+	is HUB6 then		// service GetPortStatus
+	{   // parse port status
+	    pps = pPS(mb.Data());
+	    ps = pps@;
+if db > 2 then { debug.str("PS "); debug.hex32(_uint32(ps)); debug.nl(); }
+	    if ps.Cconnect then
+	    {   ab.ClearPortFeature(mb, d.portn, Cconnect);
+	    	if ps.connect then
+		    d.hstate = HUB7;
+		else
+		    d.hstate = HUB11;
+	    }
+	    else if ps.Creset then
+	    {   ab.ClearPortFeature(mb, d.portn, Creset);
+		d.hstate = HUB9;
+	    }
+	    else if ps.Cenable then
+	    {   ab.ClearPortFeature(mb, d.portn, Cenable);
+	        if ps.enable then
+	            d.hstate = HUB12;
+	        else
+	    	    d.hstate = HUB11;
+	    }
+	    else if ps.Csuspend then
+	    {   ab.ClearPortFeature(mb, d.portn, Csuspend);
+		d.hstate = HUB12;	// FIXME?
+	    }
+	    else if ps.Covercurrent then
+	    {   ab.ClearPortFeature(mb, d.portn, Covercurrent);
+		d.hstate = HUB12;	// FIXME?
+	    }
+	    else
+	    {   d.portn += 1;
+		if ! ab.PortCheck(d) then	// no more ports need service
+		{
+		    ab.HubIssueIntrURB(d);
+		    d.hstate = HUB5;
+		}
+	    }
+	}
+	is HUB7 then			// Cconnection cleared, device is connected
+	{
+	    ab.SetPortFeature(mb, d.portn, reset);
+	    d.hstate = HUB8;
+	}
+	is HUB8 then			// device is being reset, wait for interrupt
+	{
+	    ab.HubIssueIntrURB(d);
+	    d.hstate = HUB5;
+	}
+	is HUB9 then			// Creset cleared
+	{
+	    ab.GetPortStatus(mb, d.portn);
+	    d.hstate = HUB10;
+	}
+	is HUB10 then			// got port status of newly connected device
+	{   // parse port status
+	    pps = pPS(mb.Data());
+	    ab.HubNewDevice(d, d.portn, pps);	// start life for a new device
+	    ab.HubIssueIntrURB(d);
+	    d.hstate = HUB5;
+	}
+	is HUB11 then			// condition cleared, device is not connected
+	{
+	    ab.HubIssueIntrURB(d);
+	    ab.HubDiscDevice(d, d.portn);
+	    ab.HubIssueIntrURB(d);
+	    d.hstate = HUB5;
+	}
+	is HUB12 then			// condition cleared, device is not enabled
+	{
+	    ab.HubIssueIntrURB(d);
+	    d.hstate = HUB5;
+	}
+    }
+
+    proc (ab: pUSBEnumBlock) DevEvent(d: pDevEntry, mb: pMBuf)
+    {
+	var dd: pDeviceDesc;
+	var cd: pConfigDesc;
+	var id: pInterfaceDesc;
+
+if db > 2 then { debug.str("DE ");  debug.uint8(_uint8(d.state));  debug.nl();
+mb.Dump(true); }
+	if d.state
+	is DEV1 then
+	{   // FIXME - check valid device descriptor
+	    dd = pDeviceDesc(mb.Data());
+	    d.mps0 = dd.MaxSize0;
+	    ab.GetNewAddress();
+if db > 1 then {
+debug.str("dev=0x"); debug.hex8(ab.devadr); debug.nl();
+}
+	    ab.SetAddress(mb, ab.devadr);
+	    d.state = DEV2;
+	}
+	is DEV2 then
+	{   d.devadr = ab.devadr;
+	    mb.info = _uint16(Pipe{.dev=d.devadr, .epn=0});	// update devadr
+	    ab.SetEPActive({.dev=d.devadr, .epn=0}, CNTL, UNKN, d.mps0, 0);
+	    ab.GetDeviceDescriptor(mb, usb.DeviceDesc?size);
+	    d.state = DEV3;
+	}
+	is DEV3 then
+	{   // FIXME - check valid device descriptor
+	    dd = pDeviceDesc(mb.Data());
+if db > 1 then {
+debug.str("vend=0x"); debug.hex16(dd.Vendor);
+debug.str(" prod=0x"); debug.hex16(dd.Product); debug.nl();
+}
+	    d.vid = dd.Vendor;
+	    d.pid = dd.Product;
+	    ab.GetConfigDescriptor(mb, 0, usb.ConfigDesc?size);
+	    d.state = DEV4;
+	}
+	is DEV4 then
+	{   // FIXME - check valid configuration descriptor
+	    cd = pConfigDesc(mb.Data());
+	    ab.GetConfigDescriptor(mb, 0, cd.TotLen);
+	    d.state = DEV5;
+	}
+	is DEV5 then
+	{   // FIXME - check valid configuration descriptor
+	    cd = pConfigDesc(mb.Data());
+	    d.mbsave = mb;
+	    id = pInterfaceDesc(mb.Offset(cd.Length));
+if db > 1 then {
+debug.str("ConfN="); debug.uint8(cd.ConfigN);
+debug.str(" NumInt="); debug.uint8(cd.NIntf); debug.nl();
+debug.str("Intf="); debug.uint8(id.IntfN);
+debug.str(" Class=0x"); debug.hex8(id.Class);
+debug.str(" SubCls=0x"); debug.hex8(id.SubClass);
+debug.str(" Proto=0x"); debug.hex8(id.Protocol);
+debug.str(" NEP="); debug.uint8(id.NEP);
+debug.nl();
+}
+	    d.class = id.Class;
+	    d.subcls = id.SubClass;
+	    d.proto = id.Protocol;
+	    mb = ab.NewURB({.dev=d.devadr, .epn=0}, usb.SetupPkt?size+64);
+	    ab.SetConfiguration(mb, cd.ConfigN);
+	    d.state = DEV6;
+	}
+	is DEV6 then
+	{   d.driver = ab.FindDriver(d);
+	    if d.driver != 0 then
+	    {   if d.driver == ab.id then	// its for us, must be a hub
+		{   d.state = HUB;
+		    d.hstate = HUB0;
+		    ab.GetHubDescriptor(mb, 15);	// FIXME - why 15? 
+		}
+		else			// notify registered driver
+		{   d.state = READY;
+		    d.mbsave.code = UP;
+		    d.driver.Send(d.mbsave);
+		    d.mbsave = 0;
+		    mbuf.Free(mb);
+		}
+	    }
+	    else	// nobody wants device
+	    {   d.state = ORPHAN;
+		mbuf.Free(mb);
+	    }
+	}
+	is HUB then
+	    ab.HubEvent(d, mb);
+	else	// shouldn't happen?
+	{
 	}
     }
 
     proc Run(b: pBlock, e: pEvent)
     {   var ab: pUSBEnumBlock;
+	var d: pDevEntry;
 	var mb: pMBuf;
-	var len: _uint;
-	var cmd: usb.pSetupPkt;
-	var dd: pDeviceDesc;
-	var cd: pConfigDesc;
-	var id: pInterfaceDesc;
+	var pipe: Pipe;
 
 	ab =  pUSBEnumBlock(b);
 if db > 1 then { debug.str("usbenum.Run ");  debug.uint8(_uint8(e.code));
 debug.chr(','); debug.uint8(e.tag); debug.nl(); }
 	if e.code
-	is RCVD then
-	{
-	}
-	is SEND then
+	is SEND, RCVD then
 	{   mb = pMBuf(e);
-if db > 2 then { debug.str("SEND state=");  debug.uint8(_uint8(ab.state));  debug.nl();
-mb.Dump(true); }
-	    if ab.state
-	    is CONF0 then
-	    {   // FIXME - check valid device descriptor
-		dd = pDeviceDesc(mb.Offset(usb.SetupPkt?size));
-	    	ab.mps0 = dd.MaxSize0;
-	    	ab.devadr += 1;
-	    	ab.SetAddress(mb, ab.devadr);
-		ab.state = CONF1;
-			   	
-	    }
-	    is CONF1 then
-	    {   mb.info = _uint16(Pipe{.dev=ab.devadr, .epn=0});	// update device address
-		ab.SetEPActive({.dev=ab.devadr, .epn=0}, CNTL, ab.mps0, 0);
-		ab.GetDeviceDescriptor(mb, usb.DeviceDesc?size);
-		ab.state = CONF2;
-	    }
-	    is CONF2 then
-	    {   // FIXME - check valid device descriptor
-		dd = pDeviceDesc(mb.Offset(usb.SetupPkt?size));
-if db > 1 then {
-debug.str("vendor=0x"); debug.hex16(dd.Vendor);
-debug.str(" product=0x"); debug.hex16(dd.Product); debug.nl();
+	    pipe = Pipe(mb.info);
+	    d = ab.FindDevice(pipe.dev);
+	    if d != 0 then
+	    	ab.DevEvent(d, mb);
+	    else	// shouldn't happen?
+{
+debug.str("No device dev="); debug.uint8(pipe.dev); debug.nl();
+	    	mbuf.Free(mb);
 }
-		ab.vid = dd.Vendor;
-		ab.pid = dd.Product;
-		ab.GetConfigDescriptor(mb, 0, usb.ConfigDesc?size);
-		ab.state = CONF3;
-	    }
-	    is CONF3 then
-	    {   // FIXME - check valid configuration descriptor
-		cd = pConfigDesc(mb.Offset(usb.SetupPkt?size));
-		ab.GetConfigDescriptor(mb, 0, cd.TotLen);
-		ab.state = CONF4;
-	    }
-	    is CONF4 then
-	    {   // FIXME - check valid configuration descriptor
-	    	mb.ShrinkHead(usb.SetupPkt?size);
-		cd = pConfigDesc(mb.Data());
-		ab.superdesc = mb;
-		id = pInterfaceDesc(mb.Offset(cd.Length));
-if db > 1 then {
-debug.str("ConfigNum="); debug.uint8(cd.ConfigN);
-debug.str(" NumIntf="); debug.uint8(cd.NIntf); debug.nl();
-debug.str("IntfNum="); debug.uint8(id.IntfN);
-debug.str(" Class=0x"); debug.hex8(id.Class);
-debug.str(" SubClass=0x"); debug.hex8(id.SubClass);
-debug.str(" Protocol=0x"); debug.hex8(id.Protocol);
-debug.str(" NumEP="); debug.uint8(id.NEP);
-debug.nl();
-}
-		ab.class = id.Class;
-		ab.subcls = id.SubClass;
-		ab.proto = id.Protocol;
-		mb = ab.NewURB({.dev=ab.devadr, .epn=0}, usb.SetupPkt?size+64);
-		ab.SetConfiguration(mb, cd.ConfigN);
-		ab.state = CONF5;
-	    }
-	    is CONF5 then
-	    {
-		mbuf.Free(mb);
-		ab.state = READY;
-		ab.NotifyDriver();
-	    }
-	    is READY then
-	    {
-	    }
-
 	}
 	is INFORM then
 	{
 	    var ie: usbevent.pInformEvent;
+	    var len: _uint;
 	    ie = usbevent.pInformEvent(e);
 	    len = ie.mtu;
+	    d = ab.NewDevice(1, 0, UNKN);		// root hub, FIXME - port?
+	    d.speed = ie.speed;
+	    d.mps0 = len;
+	    event.Free(ie);
 	    // Allocate an MBuf large enough for subsequent stuff and start initialization
 	    mb = ab.NewURB({.dev=0, .epn=0}, usb.SetupPkt?size+64);
 	    ab.GetDeviceDescriptor(mb, len);
-	    ab.state = CONF0;
+	    d.state = DEV1;
+	}
+	is OPEN then
+	{
+	    ab.Register(usbevent.pRegisterEvent(e));
 	}
 	is START then
 	{   e.tag = ab.id;
 	    USBHOSTID.Send(e);	// forward START to driver
-	    ab.state = DISC;
-	    ab.devadr = 0;
+//	    ab.state = DISC;
 	}
 	else
 	{
 // debug.str("unknown event");
 	    event.Free(e);
-	}	
+	}
     }
-
+	
     proc (ab: pUSBEnumBlock) Init()
-    {
-	ab.state = DISC;
+    {   var re: usbevent.pRegisterEvent;
+
+//	ab.state = DISC;
 	ab.devadr = 1;
-	// register hubs to us
-	ab.registry[0] = { {.class=true, .subcls=true}, .class=0x09, .subcls=0 };
-	ab.bid[0] = 0;	// means us
-	ab.numreg = 1;
-	// FIXME - TEMP register MSC, remove when registering works
-	ab.registry[1] = { {.class=true, .subcls=true, .proto=true}, .class=0x08, .subcls=0x06, .proto=0x50};
-	ab.bid[1] = USBHOSTMSC;
-	ab.numreg = 2;
+	re = usbevent.AllocRegisterEvent();
+	re.data = { {.class=true, .subcls=true}, .class=0x09, .subcls=0 };
+	re.tag = ab.id;	// means us
+	ab.Register(re);
     }
 
     proc NewBlock(id: block.BlockID): pBlock
@@ -330,6 +716,7 @@ if db > 0 then { debug.str("usbenum: NewBlock ");
 debug.uint8(id); debug.chr(' ');
 debug.hex(_uint(ab)); debug.nl(); }
 	ab.BlockInit(id, Run);
+	ab.Init();
 
 	return ab;
     }

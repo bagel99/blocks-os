@@ -48,26 +48,28 @@ package usbhost
     const ED_BASE:   @[]ohci.ED = 0x2007C100;	// 8 * 16 = 128 bytes
     const TD_BASE:   @[]ohci.TD = 0x2007C180;	// 24 * 16 = 384 bytes
 
-    const NumEP = 4;
+    const NumEP = 8;
 
     var ourmb: mbuf.pMBuf;		// FIXME - temporary
 
+    // state fields loaded into software state of TD
+    const TDDONE = 0;
+    const TDMORE = 1;
+    const TDCMD  = 2;
+    const TDACK  = 3;
+    
     type EPInfo:
-    {   type:    usb.EPType;
+    {   pipe:    Pipe;
+	active:  boolean;
+	type:    usb.EPType;
 	ed:      @ohci.ED;		// ED for this endpoint
 	urbh:    pMBuf;			// head of list of URBs
     };
-    type DevState: (DISC, RESET, CONF1, READY);
     type State:
     {	hc:      HC;		// hardware registers
 	edfree:  @ohci.ED;	// free list of EDs
 	tdfree:  @ohci.TD;	// free list of TDs
-	d:			// device status, should be list or array
-	{   state:  DevState;
-	    speed:  (UNKN, LOW, FULL, HIGH);
-	    nep:    _uint8;		// number of endpoints
-	    ep:     [NumEP]EPInfo;
-	};
+	ep:     [NumEP]EPInfo;
     };
     type UHS: @State;
 
@@ -80,61 +82,19 @@ package usbhost
     // BEGIN - COULD BE MOVED TO usb_ohci
 
     // BEGIN -DEBUG
-    proc (td: @ohci.TD) Dump()
+    proc DumpCmd(cmd: @usb.SetupPkt)
     {
-	debug.str("TD @"); debug.hex32(_uint32(td)); debug.str(": ");
-	debug.hex32(_uint32(td.info));  //debug.chr(' ');
-	    debug.str(" CC="); debug.uint8(_uint8(td.info.cc));
-	    debug.str(" EC="); debug.uint8(td.info.ec);
-	    debug.str(" DI="); debug.uint8(td.info.di);
-	    debug.str(" R="); debug.uint8(_uint8(td.info.r));
-	    debug.str(" T="); debug.uint8(_uint8(td.info.t));
-	    debug.str(" DP="); debug.uint8(_uint8(td.info.dp));
-	    debug.str("\n\t");
-	debug.hex32(_uint32(td.cbp));  debug.chr(' ');
-	debug.hex32(_uint32(td.nextTD));  debug.chr(' ');
-	debug.hex32(_uint32(td.be));  debug.nl();
-    }
-		
-    proc (ed: @ohci.ED) Dump(tds: boolean)
-    {   var tdh, tdt: @ohci.TD;
- 
-	tdh = ed.headp;
-	tdt = ed.tailp;
-	debug.str("ED @"); debug.hex32(_uint32(ed)); debug.str(": ");
-	debug.hex32(_uint32(ed.info));  debug.chr(' ');
-	debug.hex32(_uint32(tdt));  debug.chr(' ');
-	debug.hex32(_uint32(tdh));  debug.chr(' ');
-	debug.hex32(_uint32(ed.nextED));
-	if _uint32(tdh) & 1 != 0 then
-	    debug.str(" HALTED");
-	debug.nl();
-	if tds then
-	{   type pTD: @ohci.TD;
-	    tdh = pTD(_uintptr(tdh) & 0xFFFF_FFF0);	// clear lower bits
-	    while tdh != 0 && tdh != tdt do
-	    {   tdh.Dump();
-		tdh = tdh.nextTD;
-	    }
-	}
+	debug.str("CMD ");
+	debug.hex8(_uint8(cmd.type));  debug.chr(' ');
+	debug.hex8(cmd.request); debug.chr(' ');
+	debug.hex16(cmd.value); debug.chr(' ');
+	debug.hex16(cmd.index); debug.chr(' ');
+	debug.hex16(cmd.length); debug.nl();
     }
 
     proc DumpRegs()
     {
 	debug.dumpw("Regs", _address(_uint32(0x5000_C000)), 22);
-    }
-
-    proc DumpIntrList()
-    {	var hc: @ohci.HC = 0x5000_C000;
-	var i: _uint;
-
-	debug.str("IntrList\n");
-	for i from 0 to ohci.NIntr-1 do
-	{   if hc.HCCA.IntrList[i] != 0 then
-	    {	debug.uint(i); debug.chr(':');
-		hc.HCCA.IntrList[i].Dump(false);
-	    }
-	}
     }
 
     proc DumpAll()
@@ -154,6 +114,7 @@ package usbhost
 	{   ed.Dump(true);
 	    ed = ed.nextED;
 	}
+	hc.HCCA.DumpIntrList(true);
     }	
     // END - DEBUG
 		
@@ -290,12 +251,13 @@ ed.Dump(false); }
 	    	pp.nextED = ed;
 	    }
 	}
-if db > 3 then DumpIntrList();	
+if db > 4 then hc.HCCA.DumpIntrList(false);
+	hs.hc.Control.ple = true;	// enable periodic list
     }
 
     proc (hs: UHS) RemoveEDIntr(ed: @ohci.ED)
     {   var i: _uint;
-	var pp, pc, pn: @ohci.ED;
+	var pp, pc: @ohci.ED;
 
 	// FIXME - early terminate once removed from the specified number of lists
 	for i from 0 to ohci.NIntr-1 do
@@ -360,19 +322,20 @@ if db > 3 then debug.str("enqtd\n");
 	    atd.nextTD = dtd;		// point to new dummy
 	    ed.tailp = dtd;		// tail is new dummy also
 	}
-if db > 3 then ed.Dump(true);
+if db > 4 then ed.Dump(true);
     }
 
     // END - COULD BE MOVED TO usb_ohci
 
     var gub: pUHBlock;	// FIXME - a way for interrupt to get the state
 
+    // put URB on end of list for this endpoint
     proc (epi: @EPInfo) EnqURB(urb: pMBuf)
     {   var urbp, urbn: pMBuf;
 
 	urb.SetNext(0);
 	urbp = epi.urbh;
-	if urbp == 0 then
+	if urbp == 0 then	// list is empty
 	    epi.urbh = urb;
 	else
 	{   loop
@@ -383,20 +346,53 @@ if db > 3 then ed.Dump(true);
 	    urbp.SetNext(urb);
 	}
     }
-
-    proc (epi: @EPInfo) DeqURB(urb: pMBuf)
-    {
-    }
 /*
-    proc (hs: UHS) SendAck(epi: @EPInfo, pipe: Pipe)
-    {
-	epi.cntl.ack = true;
-	if epi.cntl.dir == IN then
-	    hs.EnqueueTD(epi.ed, {.dp=OUT, .sw=_uint16(pipe)}, 0, 0);//FIXME .T?
+    proc (epi: @EPInfo) DeqURB(urb: pMBuf)
+    {   var urbp, urbn: pMBuf;
+
+	urbp = epi.urbh;
+	if urbp == 0 then
+	    return;	// shouldn't happen
+	if urbp == urb then	// first on list
+	    epi.urbh = urbp.GetNext();
 	else
-	    hs.EnqueueTD(epi.ed, {.dp=IN, .sw=_uint16(pipe)}, 0, 0);//FIXME .T?
+	{   loop
+	    {   urbn = urbp.GetNext();
+	      exit urbn == urb;
+	        urbp = urbn;
+	    }
+	    urbp.SetNext(urpn.GetNext());
+	}
     }
 */
+
+    proc (hs: UHS) FindEndPoint(pipe: Pipe): @EPInfo
+    {   var i: _uint;
+
+	for i from 0 to NumEP-1 do
+	{   if hs.ep[i].pipe == pipe && hs.ep[i].active then
+		return hs.ep[i];
+	}
+	return 0;
+    }
+
+    proc (hs: UHS) NewEndPoint(pipe: Pipe): @EPInfo, boolean
+    {   var i: _uint;
+
+	for i from 0 to NumEP-1 do
+	{   if hs.ep[i].pipe == pipe  && hs.ep[i].active then
+		return hs.ep[i], false;
+	}
+	for i from 0 to NumEP-1 do
+	{   if !hs.ep[i].active then
+	    {   hs.ep[i].active = true;
+	    	hs.ep[i].pipe = pipe;
+		return hs.ep[i], true;
+	    }
+	}
+	return 0, true;
+    }
+
     proc (hs: UHS) SubmitURB(dir: usb.EPDir, mb: pMBuf): boolean
     {
     	var pipe: Pipe;
@@ -406,18 +402,21 @@ if db > 3 then ed.Dump(true);
 	var len: _uint;
 	var buf: _address;
 
-if db > 2 then
-{
-debug.str("S "); debug.hex32(_uintptr(mb)); debug.nl();
-}
 	pipe = Pipe(mb.info);
-	// Check than the endpoint has an ED allocated
-	if pipe.epn >= NumEP then return false;		// epn not in range
+if db > 2 then {
+debug.str("US "); debug.hex32(_uintptr(mb));
+debug.chr(' '); debug.uint8(pipe.dev); debug.chr('.'); debug.uint8(pipe.epn); debug.nl(); }
 	len = mb.Size();;
 	buf = mb.Data();
-	epi = hs.d.ep[pipe.epn];
+	epi = hs.FindEndPoint(pipe);
+	if epi == 0 then	// error, illegal pipe
+	{
+debug.str("EP not found\n");
+	    return false;
+	}
 	ed = epi.ed;
-	if ed == 0 then return false;			// ep not activated
+	if ed == 0 then return false;		// ep not activated
+if db > 2 then DumpCmd(usb.pSetupPkt(buf));
 	if epi.type
 	is CNTL then
 	{
@@ -427,35 +426,33 @@ debug.str("S "); debug.hex32(_uintptr(mb)); debug.nl();
 	    hs.EnqueueTD(ed,
 	      {.cc=NotAccessed1, .dp=SETUP, .t=DATA0, .di=6, .sw2=2, .sw=_uint16(pipe)},
 	      _address(cmd), usb.SetupPkt?size);
+	    buf = mb.ShrinkHead(usb.SetupPkt?size);	// move past the command packet
 	    if cmd.type.dir == IN then
 	    {	// Data
 		if len != 0 then
 		{   hs.EnqueueTD(ed,
-		      {.cc=NotAccessed1, .dp=IN, .t=DATA1, .di=6, .r=true, .sw2=0, .sw=_uint16(pipe)},
-		      mb.Offset(usb.SetupPkt?size), len);
+		      {.cc=NotAccessed1, .dp=IN, .t=DATA1, .di=6, .r=true, .sw2=TDDONE, .sw=_uint16(pipe)},
+		      buf, len);
 		}
 		// Status ACK
 		hs.EnqueueTD(ed,
-		  {.cc=NotAccessed1, .dp=OUT, .t=DATA1, .sw2=3, .sw=_uint16(pipe)}, 0, 0);
+		  {.cc=NotAccessed1, .dp=OUT, .t=DATA1, .sw2=TDACK, .sw=_uint16(pipe)}, 0, 0);
 	    }
 	    else		// .dir == OUT
 	    {	// Data
 		if len != 0 then
 		{   hs.EnqueueTD(ed,
-		      {.cc=NotAccessed1, .dp=OUT, .t=DATA1, .sw2=0, .sw=_uint16(pipe)},
-		      mb.Offset(usb.SetupPkt?size), len);
+		      {.cc=NotAccessed1, .dp=OUT, .t=DATA1, .sw2=TDDONE, .sw=_uint16(pipe)},
+		      buf, len);
 		}
 		// Status ACK
 		hs.EnqueueTD(ed,
-		  {.cc=NotAccessed1, .dp=IN, .t=DATA1, .sw2=3,  .sw=_uint16(pipe)}, 0, 0);
+		  {.cc=NotAccessed1, .dp=IN, .t=DATA1, .sw2=TDACK,  .sw=_uint16(pipe)}, 0, 0);
 	    }
 	    hs.hc.CommandStatus.clf = true;		// set cntl list filled
 	}
 	is BULK then
 	{
-//	    len = _min(epi.xferlen, epi.maxpkt);
-//debug.str("SB len="); debug.uint(len);
-//debug.str(" buf="); debug.hex32(_uintptr(buf)); debug.nl();
 	    if dir == IN then
 	    	hs.EnqueueTD(ed, {.cc=NotAccessed1, .dp=IN, .sw=_uint16(pipe)}, buf, len);
 	    else
@@ -464,6 +461,10 @@ debug.str("S "); debug.hex32(_uintptr(mb)); debug.nl();
 	}
 	is INTR then
 	{
+	    if dir == IN then
+	    	hs.EnqueueTD(ed, {.cc=NotAccessed1, .dp=IN, .r=true, .sw=_uint16(pipe)}, buf, len);
+	    else
+		hs.EnqueueTD(ed, {.cc=NotAccessed1, .dp=OUT, .sw=_uint16(pipe)}, buf, len);
 	}
 	is ISOC then
 	{
@@ -472,30 +473,32 @@ debug.str("S "); debug.hex32(_uintptr(mb)); debug.nl();
 	return true;
     }
 
-    proc (hs: UHS) ActivateEP(pipe: Pipe, type: usb.EPType, maxpkt: _uint, interval: _uint8): boolean
+    proc (hs: UHS) ActivateEP(pipe: Pipe, type: usb.EPType, speed: usb.Speeds, 
+			      maxpkt: _uint, interval: _uint8): boolean
     {   var epi: @EPInfo;
     	var ed: @ohci.ED;
 	var edi: ohci.EDInfo;
+	var new: boolean;
 
 	if pipe.epn >= NumEP then return false;
 if db > 1 then {
 debug.str("ActivateEP: epn="); debug.uint8(pipe.epn);
 debug.str(" type="); debug.uint8(_uint8(type));
+debug.str(" spd="); debug.uint8(_uint8(speed));
 debug.str(" hwadr="); debug.uint8(pipe.dev);
 debug.str(" itvl="); debug.uint8(interval);
 debug.nl(); }
-	epi = hs.d.ep[pipe.epn];
+	epi, new = hs.NewEndPoint(pipe);
 	ed = epi.ed;
-	if ed == 0 then		// need to allocate an ED
+	if new then		// need to allocate an ED
 	{
 	    ed = hs.NewED(edi);	// get an ED with attached dummy TD
 	    epi.ed = ed;
 	    epi.type = type;
-	    hs.d.nep += 1;
 	    edi.fa = pipe.dev;
 	    edi.en = pipe.epn;
 	    edi.d = USE_TD;
-	    if hs.d.speed == LOW then
+	    if speed == LOW then
 	    	edi.s = LOW;
 	    else
 	    	edi.s = FULL;
@@ -511,8 +514,8 @@ debug.nl(); }
 	    is INTR then hs.InsertEDIntr(ed, interval);
 	    is ISOC then hs.InsertEDIsoc(ed, interval);
 	}
-	else	// just update the ED
-	{
+	else	// just update the ED, either dev assigned and/or maxpkt changed
+	{   ed = epi.ed;
 	    edi = ed.info;
 	    edi.mps = maxpkt;
 	    if pipe.dev != 0 then
@@ -564,7 +567,7 @@ debug.nl(); }
 	hc.HCCA = hcca;	//FIXME		// set communcations area
 	 // enable OHCI interrupts
 	hc.Control.hcfs = Operational;		// make operational
-	hc.RhStatus = { .lpsc = true};		// enable global power
+	hc.RhStatus = {.Clocalpower=true};	// enable global power
 
 	hc.InterruptEnable = { .wdh=true, .rhsc=true, .mie=true };
 	ui.enable = true;	// enable global USB interrupt
@@ -586,27 +589,29 @@ debug.str("Init: vector="); debug.uint8(vector); debug.nl();
 	var urb: pMBuf;
 	var done: boolean;
 
-if db > 3 then debug.str("D\n");
+if db > 3 then debug.str("UD\n");
 	td = hs.hc.HCCA.DoneHead;
 	while td != 0 do
 	{
 	    done = false;
 	    tdn = td.nextTD;
 	    tdi = td.info;
-	    pipe = Pipe(tdi.sw);
-	    epi = hs.d.ep[pipe.epn];
+	    pipe = Pipe(tdi.sw);		// FIXME - save index of epi in tdi.sw?
+	    epi = hs.FindEndPoint(pipe);
 if db > 3 then td.Dump();
 	    // check for error
 	    if tdi.cc != 0 then
 	    {
-debug.str("TD error=");  debug.uint8(_uint8(tdi.cc)); debug.nl();
+td.TDError();
 if db <= 3 then td.Dump();
 		if tdi.cc
 		is DataOverrun then
 		{
-		    ;	// terminate transfer
 		}
 		is DataUnderrun then	// device returned less data
+		{
+		}
+		is Stall then
 		{
 		}
 		done = true;
@@ -616,21 +621,22 @@ if db <= 3 then td.Dump();
 	    {
 //debug.str("EPcntl=");  debug.uint8(_uint8(epi.cntl));
 		if td.info.sw2
-		is 0 then	// final data
+		is TDDONE then	// final data
 		{
 		    // check for short IN
 		    if tdi.r && td.cbp != 0 then
-		    {
-debug.str("TD short IN\n");
+		    {   var unused: _uint;
+			unused = _uint32(td.be)+1-_uint32(td.cbp);
+debug.str("TD short IN unused=");  debug.uint(unused); debug.nl();
 			urb = epi.urbh;
 			if urb != 0 then
-			    urb.ShrinkTail(_uint32(td.be)+1-_uint32(td.cbp));
+			    urb.ShrinkTail(unused);
 		    }
 		}
-		is 2 then	// command
+		is TDCMD then	// command
 		{
 		}
-		is 3 then	// ack
+		is TDACK then	// ack
 		{
 		    done = true;
 		}
@@ -659,52 +665,37 @@ debug.nl(); }
     }
 
     proc (hs: UHS) PortReset()
-    {   var ed: @ohci.ED;
-	var edi: ohci.EDInfo;
-	var epi: @EPInfo;
-	var mps: _uint;
+    {   var mps: _uint;
+	var speed: usb.Speeds;
 
-if db > 3 then debug.str("conf\n");
 timer.Delay_ms(500);
-	if !hs.hc.RhPortStatus[0].ccs then
-	{   hs.d.state = DISC;
+if db > 2 then { debug.str("PortReset ");  debug.hex32(_uint32(hs.hc.RhPortStatus[0])); debug.nl();}
+	if !hs.hc.RhPortStatus[0].connect then
+	{
 	    return;
 	}
-	if hs.hc.RhPortStatus[0].lsda then
-	   hs.d.speed = LOW;
-	else
-	   hs.d.speed = FULL;
-	hs.hc.RhPortStatus[0].SetPortEnable();		// enable port
-	hs.d.state = CONF1;
-	mps = 64;
-	if hs.d.speed
-	is HIGH then {}	// FIXME - hardware doesn't support
-	is LOW then
-	{   mps = 8;
-	    edi = { .fa=0, .en=0, .d=USE_TD, .s=LOW, .k=false, .f=NORMAL, .mps=8 };
+	if hs.hc.RhPortStatus[0].lospeed then
+	{  speed = LOW;
+	   mps = 8;
 	}
-	else	// FULL
-	    edi = { .fa=0, .en=0, .d=USE_TD, .s=FULL, .k=false, .f=NORMAL, .mps=64 };
-
-	ed = hs.NewED(edi);	// get an ED with attached dummy TD
-	epi = hs.d.ep[0];
-	epi.ed = ed;
-	epi.type = CNTL;
-	hs.d.nep = 1;
-	hs.InsertEDCntl(ed);	// link it in HC list
+	else
+	{  speed = FULL;
+	   mps = 64;
+	}
+	hs.hc.RhPortStatus[0].SetPortEnable();		// enable port
+        hs.ActivateEP({.dev=0, .epn=0}, CNTL, speed, mps, 0);
 
 	var ie: usbevent.pInformEvent;
-	ie = _new(usbevent.InformEvent);	// FIXME - alloc in interrupt
-	ie.code = INFORM;
-	ie.xsize = 0;
+	ie = usbevent.AllocInformEvent();	// FIXME - alloc in interrupt
+	ie.tag = gub.id;
 	ie.mtu = mps;
+	ie.speed = speed;
 	gub.bid.Send(ie);	
     }
 
     proc (hs: UHS) Connect()
     {
 if db > 3 then debug.str("conn\n");
-	hs.d.state = RESET;
 	// reset device and wait for interrupt caused by reset clearing
 	hs.hc.RhPortStatus[0].SetPortReset();		// reset port
     }
@@ -738,15 +729,15 @@ if db > 4 then
 if db > 4 then
 {   debug.str("r "); debug.hex32(_uint32(rhsts)); debug.nl();
 }
-	    if rhsts.csc then		// connect status change
-	    {	hc.RhPortStatus[0].csc = true;  // clear status change bit
-		if rhsts.ccs then	// connected
+	    if rhsts.Cconnect then	// connect status change
+	    {	hc.RhPortStatus[0].Cconnect = true;  // clear status change bit
+		if rhsts.connect then	// connected
 	    	    hs.Connect();
 	    	else			// disconnected
 	    	    hs.Disconnect();
 	    }
-	    if rhsts.prsc then		// port reset status change
-	    {	hc.RhPortStatus[0].prsc = true; // clear status change bit
+	    if rhsts.Creset then		// port reset status change
+	    {	hc.RhPortStatus[0].Creset = true; // clear status change bit
 		hs.PortReset();
 	    }
 	}
@@ -778,15 +769,15 @@ debug.chr(','); debug.uint8(e.tag); debug.nl(); }
 	    is ACTIVATE then
 	    {   var ae: usbevent.pActivateEvent;
 	    	ae = usbevent.pActivateEvent(e);
-	    	ub.state.ActivateEP(ae.pipe, ae.type, ae.mtu, ae.inter);
-	    	_delete(ae);
+	    	ub.state.ActivateEP(ae.pipe, ae.type, ae.speed, ae.mtu, ae.inter);
+	    	event.Free(ae);
 	    }
 	    is START then
 	    {   ub.bid = e.tag;
-		_delete(e);
+		event.Free(e);
 	    }
 	    else
-		_delete(e);
+		event.Free(e);
 	}
     }
 

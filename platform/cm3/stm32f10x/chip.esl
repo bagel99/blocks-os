@@ -2,11 +2,130 @@
  * STM32F10x chip indentification registers
  *
  * Copyright (c) 2011, Brian G. Lucas.  See LICENSE file.
- * $Id: cpu.esl 352 2012-03-21 01:10:38Z bgl $
+ * $Id$
  */
 
 package chip
 {
+    type Bus: (APB2, APB1, AHB1, NOBUS);
+    type BusInfo:
+    {   lo:   _address;
+	hi:   _address;
+    };
+
+    const bus: [Bus]BusInfo =
+    {	[APB1] = { 0x4000_0000, 0x4000_7FFF },
+	[APB2] = { 0x4001_0000, 0x4001_7FFF },
+	[AHB1] = { 0x4001_8000, 0xA000_FFFF },
+	[NOBUS]= { 0, 0 }
+    };
+
+    type Device:	// FIXME - once converted over, collapse spaces
+    (   // 32 APB2 DEVICES
+	AFIO,   _,      GPIOA,  GPIOB,  GPIOC,  GPIOD,  GPIOE,  GPIOF,
+	GPIOG,  ADC1,   ADC2,   TIM1,   SPI1,   TIM8,   USART1, ADC3,
+	_,      _,      _,      TIM9,   TIM10,  TIM11,  _,      _,
+	_,      _,      _,      _,      _,      _,      _,      _,
+	// 32 APB1 DEVICES
+	TIM2,   TIM3,   TIM4,   TIM5,   TIM6,   TIM7,   TIM12,  TIM13,
+	TIM14,  _,      _,      WWDG,   _,      _,      SPI2,   SPI3,
+	_,      USART2, USART3, UART4,  UART5,  I2C1,   I2C2,   USB,
+	_,      CAN,    BKP,    PWR,    DAC,    _,      _,      _,
+	// 32 AHB DEVICES
+	DMA1,   DMA2,   SRAM,   _,      FMIF,   _,      CRC,    _,
+	_,      _,      _,      _,      OTGFS,  _,      ETHMAC, ETHTX,
+	ETHRX,  _,      _,      _,      _,      _,      _,      _,
+	_,      _,      _,      _,      _,      _,      _,      NODEV	
+    );
+
+    type DevInfo:
+    {	bus:   Bus;
+    	inx:   0..31;		// bit index for clock/reset control
+	addr:  _uint8;		// index to calculate bus address
+    	vect:  _uint8;
+    }: packed, bits(32);
+
+    const dev: [Device]DevInfo =
+    {
+	[AFIO]   = { APB2,  0,  0,  0 },
+	[GPIOA]  = { APB2,  2,  2,  0 },
+	[GPIOB]  = { APB2,  3,  3,  0 },
+	[GPIOC]  = { APB2,  4,  4,  0 },
+	[GPIOD]  = { APB2,  5,  5,  0 },
+	[GPIOE]  = { APB2,  6,  6,  0 },
+	[GPIOF]  = { APB2,  7,  7,  0 },
+	[GPIOG]  = { APB2,  8,  8,  0 },
+	[SPI1]   = { APB2, 12, 12, 35 },
+	[USART1] = { APB2, 14, 14, 37 },
+	[SPI2]   = { APB1, 14, 14, 36 },
+	[SPI3]   = { APB1, 15, 15, 51 },
+	[USART2] = { APB1, 17, 17, 38 },
+	[USART3] = { APB1, 18, 18, 39 },
+	[UART4]  = { APB1, 19, 19, 52 },
+	[UART5]  = { APB1, 20, 20, 53 },
+	[OTGFS]  = { AHB1, 12,  0, 67 },
+	[ETHMAC] = { AHB1, 14,  0, 71 },
+	[ETHTX]  = { AHB1, 15,  0,  0 },
+	[ETHRX]  = { AHB1, 16,  0,  0 },
+    };
+
+    
+    const rccaddr:  _address = 0x4002_1000;
+    const afioaddr: _address = 0x4001_0000;
+    const flshaddr: _address = 0x4002_2000;
+    const extiaddr: _address = 0x4001_0400;
+    const iwdtaddr: _address = 0x4000_3000;
+    const gpios: []Device =
+    {	GPIOA,  GPIOB,  GPIOC,  GPIOD,  GPIOE,  GPIOF,  GPIOG
+    };
+    // This table to speed things up rather than compute address each time
+    const gpioaddr: []_address =
+    {	0x4001_0800, 0x4001_0C00, 0x4001_1000, 0x4001_1400,
+	0x4001_1800, 0x4001_1C00, 0x4001_2000
+    };
+    const uarts: []Device =
+    {	USART1, USART2, USART3, UART4,  UART5
+    };
+    const uartaddr: []_address =
+    {	0x4001_3800, 0x4000_4400, 0x4000_4800, 0x4000_4C00,
+	0x4000_5000
+    };
+    const spis: []Device =
+    {	SPI1, SPI2, SPI3 };
+    const spiaddr: []_address =
+    {	0x4001_3000, 0x4000_3800, 0x4000_3C00
+    };
+    const dmas: []Device =
+    {	DMA1, DMA2
+    };
+    const dmaddr: []_address =
+    {	0x4002_0000, 0x4002_0400
+    };
+    const enetaddr: _address = 0x4002_8000;
+	
+    proc GetBusByAddress(a: _address): Bus
+    {   var b: Bus;
+
+	// pointers only compare == or !=, must cast for <=
+	for b from APB2 to NOBUS do
+	{   if _uintptr(bus[b].lo) <= _uintptr(a) &&
+	       _uintptr(a) <= _uintptr(bus[b].hi) then
+		return b;
+	}
+	return NOBUS;
+    };
+    
+    proc GetDeviceBus(d: Device): Bus: inline
+    {
+	return dev[d].bus;
+    }
+
+    proc GetDeviceVector(d: Device): _uint8: inline
+    {
+	return dev[d].vect;
+    }
+
+	
     type InfoRegs:
     {   flashsz: _uint16;						// 00
     	_:       _uint16;

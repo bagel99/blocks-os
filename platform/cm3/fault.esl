@@ -7,6 +7,7 @@
 
 import syscb;
 import debug;
+import nvic;
 
 package fault
 {
@@ -16,7 +17,7 @@ package fault
 
     proc Init()
     {
-	scb.shcrs = { .ufenb=true, .bfenb=true, .mfenb=true };
+	scb.shcsr = { .ufenb=true, .bfenb=true, .mfenb=true };
 //	scb.ccr = { .div0=true, .unalign=true };
     }
 

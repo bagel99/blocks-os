@@ -143,7 +143,7 @@ package lcd
 	ds.Comd(VIDNORM);
     }
 
-    proc (ds: DS) PutPixel(x: _uint, y: _uint, pix: boolean)
+    proc (ds: DS) ShowPixel(x: _uint, y: _uint, pix: boolean)
     {   var pbyte: @_uint8;
 	var mask: _uint8;
 
@@ -156,14 +156,14 @@ package lcd
 	    pbyte@ = pbyte@ & ~mask;
     }
 
-    proc (ds: DS) PutNewLine()
+    proc (ds: DS) NewLine()
     {
 	if ds.fp == 0 then return;
     }
 
-    proc (ds: DS) PutChar(c: _uint16)
-    {   var gp: @font.Glyph;
-	var k, n, h, w, x, y: _uint;
+    proc (ds: DS) ShowChar(c: _uint16)
+    {   var g: @font.Glyph;
+	var k, n, h, w, x, y, b: _uint;
 	var bm: _uint8;
 
 //debug.str("PutChar ");  debug.hex16(c); debug.nl();
@@ -172,31 +172,46 @@ package lcd
 	{   ds.col += ds.fp.space;
 	}
 	else
-	{   gp = ds.fp.GetGlyph(c);
-//debug.str("gp="); debug.hex32(_uint32(gp)); debug.nl();
-	    if gp == 0 then return;	// no glyph
-	    x = ds.col + gp.xoffs;
-	    y = ds.row + gp.yoffs;
-	    k = gp.bitmap;	// bit map starting index
+	{   g = ds.fp.GetGlyph(c);
+//debug.str("g="); debug.hex32(_uint32(g)); debug.nl();
+	    if g == 0 then return;	// no glyph
+	    x = ds.col;
+	    y = ds.row;
+	    k = g.bitmap;	// bit map starting index
 //debug.str("x="); debug.uint(x);
 //debug.str(" y="); debug.uint(y);
 //debug.str(" k="); debug.uint(k); debug.nl();
-	    for h from 0 to gp.height-1 do
-	    {   for w from 0 to gp.width-1 do
-		{   if (w%8) == 0 then
-		    {   bm = ds.fp.bitmaps[k];
-			k += 1;
+	    b = 0;
+	    for h from 0 to g.height-1 do
+	    {   if h < g.yoffs || h > g.yoffs + g.ysize -1 then
+	    	{   for w from 0 to g.width -1 do
+	    		ds.ShowPixel(x+w, y+h, 0);
+	    	}
+	    	else
+		{   for w from 0 to g.width-1 do
+		    {   if w < g.xoffs || w > g.xoffs + g.xsize -1 then
+	    		    ds.ShowPixel(x+w, y+h, 0);
+			else
+			{   if b == 0 then
+			    {   bm = ds.fp.bitmaps[k];
+				k += 1;
+				b = 8;
+			    }
+			    if (bm&0x80) != 0 then
+				ds.ShowPixel(x+w, y+h, 1);
+			    else
+				ds.ShowPixel(x+w, y+h, 0);
+			    bm = bm << 1;
+			    b -= 1;
+			}
 		    }
-		    if (bm&0x80) != 0 then
-		    	ds.PutPixel(x+w, y+h, 1);
-		    bm = bm << 1;
 		}
 	    }
-	    ds.col += gp.xoffs + gp.width;
+	    ds.col += g.xoffs + g.width;
 	}
     }
 
-    proc (ds: DS) PutString(s: @[]_byte)
+    proc (ds: DS) ShowString(s: @[]_byte)
     {   var i: _uint;
 	var c: _uint16;
 
@@ -206,7 +221,7 @@ package lcd
 	loop
 	{   c = _uint16(s[i]);	// FIXME - UTF8
 	  exit c == 0;
-	    ds.PutChar(c);
+	    ds.ShowChar(c);
 	    i += 1;
 	}
     }

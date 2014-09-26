@@ -5,16 +5,12 @@ package debug
     const db_connect = 1;
     const db_usbhost = 3;
     const NoWrap = false;
-    const BufSiz = 16394;
+    const BufSiz = 24576;
 }
 
 import trace;	// use trace as debug port
 import debug;
 import uart;
-
-var button: boolean: in, out;
-var once: boolean = false;
-
 var u: uart.Uart;				// for debug print
 
 proc Fatal()
@@ -28,6 +24,12 @@ proc Fatal()
     }
     loop {}
 }
+
+//import memcheck;    
+
+var button: boolean: in, out;
+var once: boolean = false;
+
 
 
 import fault;
@@ -80,6 +82,8 @@ debug.str("Starting test-usbhost...\n");
     var e: event.pEvent;
     e = event.Alloc(START);
     USBENUMID.Send(e);
+    e = event.Alloc(START);
+    USBHOSTMSC.Send(e);
 
     sys.ledon(3);
     u = uart.Init(sys.DebugPort);		// for debug print

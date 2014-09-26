@@ -19,7 +19,7 @@ package debug
 
 import fault;
 import syscb;
-import sysctl;
+import rcc;
 import nvic;
 
 import mbuf;
@@ -140,7 +140,7 @@ proc main(): _int
 {   var serialno: _uint32;
 
     sys.Init();
-    sysctl.Init();
+    rcc.Init();
     fault.Init();
     debug.Init();
     sys.ledon(0);							// 01

@@ -2,7 +2,7 @@
  * STM32F10x Analog to Digital Converter.
  *
  * Copyright (c) 2012, Brian G. Lucas.  See LICENSE file.
- * $Id: adc.esl 291 2012-02-04 21:32:04Z bgl $
+ * $Id$
  */
 
 package adc

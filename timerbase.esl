@@ -32,6 +32,20 @@ package timer
     };
     type pTimerEvent: @TimerEvent;
 
+    proc Alloc(code: event.Code): pTimerEvent: inline
+    {   var te: pTimerEvent;
+
+	te = _new(TimerEvent);
+	te.code = code;
+	te.xsize = TimerEvent?size - Event?size;
+	return te;
+    }
+
+    proc Free(te: pTimerEvent):: inline
+    {
+	_delete(te);
+    }	
+
     type Timer(Block):
     {	list:   pTimerEvent;	// waiting for ticks timer to expire
 	cticks:  _uint32;	// current timeout is ticks

@@ -6,7 +6,6 @@
  */
 
 import inet;
-import block;
 
 package ipv4
 {
@@ -19,12 +18,6 @@ package ipv4
     alias inet.Proto as Proto;
     alias inet.ULHeader4 as ULHeader;
     alias inet.pULHeader4 as pULHeader;
-    alias event.Event as Event;
-    alias event.pEvent as pEvent;
-    alias mbuf.pMBuf as pMBuf;
-    alias block.Block as Block;
-    alias block.pBlock as pBlock;
-    alias block.BlockID as BlockID;
 
     if _defined(sys.NIPv4Lower) then
 	alias sys.NIPv4Lower as NIPv4Lower;
@@ -70,69 +63,96 @@ package ipv4
     const zeros: [12]_byte = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
 
 
-    // Address Resolution (ARP) Cache
-    type AddrState:(INCOMPLETE, REACHABLE, STALE, DELAY, PROBE);
+    proc ToDec(x: _byte, t: @[3]_byte): _uint
+    {   var i: _uint;
+	var n, k: _uint;
 
-    type AddrEntry:
-    {   next:   @AddrEntry;
-	addr:   IPv4Addr;
-	queue:	pMBuf;
-	state:  AddrState;
-	age:    _uint8;
-	laddr:  net.MAC;
-    };
-    type pAddrEntry: @AddrEntry;
-
-    type Upper:
-    {   next:    @Upper;
-	proto:   Proto;
-	bid:     BlockID;
-	tag:     _uint8;
-    };
-    type pUpper: @Upper;
+	i = 0;
+	n = 100;
+	do
+	{   k,x = x/n, x%n;
+	    n = n/10;
+	    if k != 0 || i > 0 || n == 0 then
+	    {   t[i] = k + '0';
+	        i += 1;
+	    }
+	} while n != 0;
+	return i;
+    }
     
-    // Additional DHCP state
-    type DHCPStates: (Down, Select, Request, Bound, Renew, Rebind);
-    type DHCPState:
-    {   offered:   inet.IPv4Addr;
-	server:    inet.IPv4Addr;
-	state:     DHCPStates;
-	retries:   _uint8;
-	timeRT:    _uint8;      // short timeout for messages retries
-	timeleft:  _uint32;
-	timeRenew: _uint32;	// T1
-	timeRebind:_uint32;	// T2
-	timeLease: _uint32;
-    };
-    type pDHCPState: @DHCPState;
+    proc AddrToText(a: @IPv4Addr, t: @[15]_byte): _uint
+    {   var i, j: _uint;
 
-    type Lower:
-    {   AddrCache: pAddrEntry;
-	dhcp:      @DHCPState;
-	addr:      IPv4Addr;		// IP address of this interface
-	mask:      IPv4Addr;		// address mask of network
-	mac:       [6]_byte;		// for ethernet
-	ifn:       _uint8;
-	bid:       BlockID;
-	state:     (DOWN, UP);
-	type:      comm.LinkType;
-	hdr:       _uint8;		// space for link level header(s)
-	trl:       _uint8;
-	mtu:       _uint16;		// e.g, 1500 for ethernet
-	IDSeqno:   _uint16;		// header sequence number
-    }: align(4);
-    type pLower: @Lower;
+	j = 0;
+	i = 0;
+	loop
+	{   j += ToDec(a[i], t[j:]);
+	  exit i == 3;
+	    t[j] = '.';
+	    j += 1;
+	    i += 1;
+	}
+	return j;
+    }
 
-    type IPv4Block(Block):
-    {   upper:     pUpper;		// upper level protocols
-	lower:     [NIPv4Lower]pLower;	// interfaces
-	hdr:       _uint8;		// max over all interfaces
-	trl:       _uint8;		// max over all interfaces
-	ifcount:   _uint8;		// number of ready interfaces
-	IsRouter:  boolean;
-	defifn:    _uint8;		// default route interface number
-    };
-    type pIPv4Block: @IPv4Block;
+    proc FmDec(s: @[]_byte): _uint, _uint
+    {   var i: _uint;
+	var v: _uint;
+
+	v = 0;
+	i = 0;
+	loop
+	{   if s[i]
+	    is '0'..'9' then v = v * 10 + (s[i] - '0');
+	    else
+	        return v, i;
+	    i += 1;
+	}
+    }
+
+    proc TextToAddr(t: @[]_byte, n: _uint, a: @IPv4Addr): _boolean
+    {   var i, j, k: _uint;
+	var v: _uint;
+
+	i = 0;
+	j = 0;
+	loop
+	{   v, k = FmDec(t[j:]);
+	    if k == 0 || v > 255 then return false;
+	    a[i] = v;
+	    i += 1;
+	  exit i == IPv4AddrLen;
+	    j += k;
+	    if t[j] != '.' then return false;
+	    j += 1;
+	}
+	return true;
+    }
+    
+    // BEGIN DEBUG
+    proc PrintAddr(addr: @IPv4Addr)
+    {   var i: _uint;
+
+	i = 0;
+	loop
+	{   debug.uint8(addr@[i]);
+	    i += 1;
+	  exit i > 3;
+	    debug.chr('.');
+	}
+    }
+
+    proc PrintLink(linkaddr: @net.MAC)
+    {   var i: _uint;
+
+	i = 0;
+	while i < 6 do
+	{   debug.hex8(linkaddr@[i]);
+	    i += 1;
+	}
+    }
+    // END DEBUG
+
 }
 // vim: ts=8 sw=4 noet nowrap
 	

@@ -1,6 +1,17 @@
 /*
  * 16-bit Frame Check Sequence used in PPP
  */
+/*
+ * Name: X-25
+ * Parameters:
+ * width=16
+ * poly=0x1021
+ * init=0xffff
+ * refin=true
+ * refout=true
+ * xorout=0xffff
+ * check=0x906e
+ */
 package fcs16
 {
     const INIT: _uint16 = 0xffff;

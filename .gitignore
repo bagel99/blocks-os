@@ -2,6 +2,7 @@
 Notes*
 *.s
 *.o
+*.a
 *.elf
 *.bin
 *.map

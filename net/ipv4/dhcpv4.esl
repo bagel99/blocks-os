@@ -231,8 +231,8 @@ package dhcpv4
 
     proc (intf: ipv4.pLower) DHCPTimer(secs: _uint)
     {
-debug.str("DHCPTimer: state=");  debug.uint8(_uint8(intf.dhcp.state));
-debug.str(" timeleft=");  debug.uint32(intf.dhcp.timeleft);  debug.nl();
+if dbg > 2 then {debug.str("DHCPTimer: state=");  debug.uint8(_uint8(intf.dhcp.state));
+debug.str(" timeleft=");  debug.uint32(intf.dhcp.timeleft);  debug.nl();}
 	if intf.dhcp.timeleft == 0 then
 	    return;	// no active timer
 	if secs < intf.dhcp.timeleft then
@@ -267,13 +267,16 @@ debug.str(" timeleft=");  debug.uint32(intf.dhcp.timeleft);  debug.nl();
 	}
     }
 
-    proc (intf: ipv4.pLower) DHCPBind(newaddr: @IPv4Addr)
+    proc (intf: ipv4.pLower) DHCPBind()
     {
-	intf.addr = newaddr@;
+	intf.addr = intf.dhcp.offered;
+	intf.mask = intf.dhcp.mask;
+if ipv4.db > 0 then {debug.str("\taddr="); ipv4.PrintAddr(intf.addr);
+debug.str(" mask="); ipv4.PrintAddr(intf.mask); debug.nl();}
     }
 
     // A table to save indexes of the value of the interesting options
-    type OptInx: (MSGTYPE, SERVERID, ROUTER, LEASETIME, T1TIME, T2TIME);
+    type OptInx: (MSGTYPE, SERVERID, SUBNETMASK, ROUTER, LEASETIME, T1TIME, T2TIME);
     type OptInxTable: [OptInx]_uint8;	// no more than 255 bytes of options
 
     proc (intf: ipv4.pLower) DHCPSaveOptions(db: @[]_byte, oinx: @OptInxTable)
@@ -281,6 +284,10 @@ debug.str(" timeleft=");  debug.uint32(intf.dhcp.timeleft);  debug.nl();
 	type pNet32: @Net32;
 	var pn: pNet32;
 
+	if oinx[SUBNETMASK] != 0 then
+    	{
+    	    intf.dhcp.mask = db[oinx[SUBNETMASK]:4];
+    	}
     	if oinx[LEASETIME] != 0 then
     	{   pn = pNet32(db[oinx[LEASETIME]:4]);
     	    intf.dhcp.timeLease = pn@;
@@ -312,6 +319,7 @@ debug.str(" timeleft=");  debug.uint32(intf.dhcp.timeleft);  debug.nl();
 	    is END then i = 256;	// end loop
 	    is MSGTYPE then   { oinx[MSGTYPE] =   i+2; i += 3; }
 	    is SERVERID then  { oinx[SERVERID] =  i+2; i += 6; }
+	    is SUBNETMASK then{ oinx[SUBNETMASK]= i+2; i += 6; }
 	    is ROUTER then    { oinx[ROUTER] =    i+2; i += 6; }
 	    is LEASETIME then { oinx[LEASETIME] = i+2; i += 6; }
 	    is T1TIME then    { oinx[T1TIME] =    i+2; i += 6; }
@@ -325,7 +333,7 @@ debug.str(" timeleft=");  debug.uint32(intf.dhcp.timeleft);  debug.nl();
     {	var dh: pDHCPHeader;
 	var uh4: inet.pULHeader4;
 	var chksum: _uint16;
-    	var OT: OptInxTable;
+    	var OT: OptInxTable;	// array of indices to interesting options
 
 debug.str("dhcp.Recv");
     	// FIXME - check UDP checksum
@@ -355,14 +363,16 @@ debug.str("\tAck\n");
 		if intf.dhcp.state
 		is Request then
 		{
+		    intf.dhcp.offered = dh.yiaddr;
 		    intf.DHCPSaveOptions(dh.options, OT);
-		    intf.DHCPBind(dh.yiaddr);
+		    intf.DHCPBind();
 		    intf.DHCPState(Bound);
 		}
 		is Renew, Rebind then
 		{
+		    intf.dhcp.offered = dh.yiaddr;
 		    intf.DHCPSaveOptions(dh.options, OT);
-		    intf.DHCPBind(dh.yiaddr);
+		    intf.DHCPBind();
 		    intf.DHCPState(Bound);
 		}
 	    }

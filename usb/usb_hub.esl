@@ -13,40 +13,72 @@ package usb	// extends package
 {
   package hub
   {
-    type HUBProtocol: (FULL, SingleTT, MultipleTT, RSVD=255);
+    type HubProtocol: (FULL, SingleTT, MultipleTT, RSVD=255);
 
-    type HUBRequest:    // Class specific requests
+    type HubDescNumber: (HUB=0, PORT=3);
+    const HubDescType:DescType = {DescNumber(9), CLASS};
+    
+    type HubRequests:    // Class specific requests
     (   GetStatus=0, ClearFeature=1, SetFeature=3, GetDescriptor=6, SetDescriptor=7,
 	ClearTTBuffer=8, ResetTT=9, GetTTState=10, StopTT=11
     );
 
-    type HUBFeatures: (Clocalpower, Covercurrent);
-    type PORTFeatures: (connection, enable, suspend, overcurrent, reset);
+    type HubFeatures: (Clocalpower, Covercurrent);
+    type PortFeatures:
+    (	connect, enable, suspend, overcurrent, reset,
+    	power=8, lowspeed,
+    	Cconnect=16, Cenable, Csuspend, Covercurrent, Creset,
+    	indicator=22
+    );
 
+    // Response to GetHubDescriptor
+    const MaxPorts = 255;
+    type HubCharacter:
+    {   PowerMode:   (GANGED, INDIVID, ALWAYS, ALWAYS2);// .00-01
+	Compound:    boolean;				// .02
+	OverCurrMode:(GLOBAL, INDIVID, NONE, NONE2);	// .03-04
+	TTThink:     (BIT8, BIT16, BIT24, BIT32);	// .05-06
+	Indicators:  boolean;				// .07
+    }: packed, lsb, bits(8);
+    type PortMask: [8]boolean: packed, lsb;
+    type HubDesc(usb.Descriptor):
+    {	NbrPorts:    _uint8;			// 2
+	Character:   HubCharacter;		// 3
+	Rsvd:        _uint8;			// 4 - reserved
+	PwrDelay:    _uint8;			// 5 - time in 2ms units
+	Current:     _uint8;			// 6 - in mA
+	Variable:    []PortMask;		// 7...
+    };
+	
     // Response to Hub GetStatus
-    type HUBStatusBits:
+    type HubStatus:
     {   localpower:  boolean;		// .00
 	overcurrent: boolean;		// .01
-    }: packed, lsb, bits(16);
-    type HUBStatus:
-    {   status:   HUBStatusBits;
-	change:   HUBStatusBits;
-    };
+	_:           0..0x3FFF;		// .02-15
+	Clocalpower: boolean;		// .16 - change in localpower status
+	Covercurrent:boolean;		// .17 - change in overcurrent status
+    }: packed, lsb, le, bits(32);
 
     // Response to Port GetStatus
-    type PortStatusBits:
-    {   connected:   boolean;		// .00
-	enabled:     boolean;		// .01
-	suspended:   boolean;		// .02
+    type PortStatus:
+    {   connect:     boolean;		// .00
+	enable:      boolean;		// .01
+	suspend:     boolean;		// .02
 	overcurrent: boolean;		// .03
 	reset:       boolean;		// .04
 	_:           0..0b111;		// .05-07
-	poweroff:    boolean;		// .08
-	lowspeed:    boolean;		// .09
-	highpeed:    boolean;		// .10
+	power:       boolean;		// .08
+	lospeed:     boolean;		// .09
+	hispeed:     boolean;		// .10
 	testmode:    boolean;		// .11
 	indicator:   boolean;		// .12
 	_:           0..0b111;		// .13-15
-    };
+	Cconnect:    boolean;		// .16 - change in connect status
+	Cenable:     boolean;		// .17 - change in enable status
+	Csuspend:    boolean;		// .18 - change in suspend status 
+	Covercurrent:boolean;		// .19 - change in overcurrent status
+	Creset:      boolean;		// .20 - change in reset status
+    }: packed, lsb, le, bits(32);
   }
 }
+

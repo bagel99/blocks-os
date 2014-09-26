@@ -31,15 +31,11 @@ package usb	// extends package
     	}: packed, msb;
     	lun:      _uint8;	// 0D: only low 4-bits used
     	comdlen:  _uint8;	// 0E
-	// UFI command follows	// 0F-1E: not aligned
+    	comdpkt:  []_byte;	// 0F: overlayed by command packet
     }: nopad;
     type pCBW: @CBW;
     const CBWSize = 31;
     const CMDSize = 16;
-    type CBWGeneric(CBW):
-    {   comd:     [CMDSize]_byte;
-    };
-    type pCBWGeneric: @CBWGeneric;
 
     const CSWSignature: _uint32 = 0x53425355;
     type CSWStatus: (PASSED, FAILED, PHASE, _=0xFF);

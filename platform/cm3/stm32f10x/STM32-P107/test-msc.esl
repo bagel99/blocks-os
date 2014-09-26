@@ -24,7 +24,7 @@ import systick;
 import nvic;
 
 // STM32F10x stuff
-import sysctl;
+import rcc;
 
 import usbdevotg;
 import sdcard;
@@ -37,7 +37,7 @@ import usb_storage;
 
 proc main()
 {
-    sysctl.Init();
+    rcc.Init();
     sys.Init();
     debug.Init();
     if sd.Init(3, sys.SDCARD) then

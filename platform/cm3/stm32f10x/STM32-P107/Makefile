@@ -5,7 +5,8 @@ INC=	-I.. -I../.. -I../../.. -I../../.. -I../../../.. \
 	-I../../../../net/ipv4  -I../../../../net/ipv6 \
 	-I../../../../usb -I../../../../fs -I../../../../crc \
 	-I../../../../usb/device/hid \
-	-I../../../../usb/device/msc
+	-I../../../../usb/device/msc \
+	-I../../../../usb/host
 #	-I../../../../fs
 
 DBG=
@@ -15,7 +16,7 @@ LD=	arm-ld
 OBJCOPY=arm-objcopy
 OBJDUMP=arm-objdump
 NM=	arm-nm
-LIBDIR= ../../../../../esl-code/lib/arch/cm3
+LIBDIR= ../../lib
 LIBOBJ= memset.o memcpy.o memcmp.o mem.o
 
 # keep intermediate files, for now
@@ -45,7 +46,7 @@ LIBOBJ= memset.o memcpy.o memcmp.o mem.o
 %.dep: %.esl
 	$(ESLC) -M $(ARCH) $(DBG) $(INC) $(OPT) $<
 
-all:	test-blink42.elf test-inet.elf \
+all:	test-uart.elf test-blink42.elf test-inet.elf test-dhcp.elf \
 	test-udp.elf test-tcp.elf test-http.elf \
 	test-hid.elf test-mouse.elf test-joystick.elf \
 	test-sdcard.elf test-msc.elf

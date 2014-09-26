@@ -1,15 +1,15 @@
 /*
- *
- * Copyright (c) 2013, Brian G. Lucas.  See LICENSE file.
+ * Font data. Version 2.
+ * Copyright (c) 2014, Brian G. Lucas.  See LICENSE file.
  */
 
 package font
 {
     type Glyph:
-    {
-	width:  _uint8;
+    {	width:  _uint8;
 	height: _uint8;
-	nbytes: _uint8;		// number of bytes in bitmap for one row
+	xsize:  _uint8;
+	ysize:  _uint8;
 	xoffs:  _uint8;
 	yoffs:  _uint8;
 	bitmap: _uint16;	// index into bitmap array for this glyph
@@ -22,12 +22,15 @@ package font
     };
 
     type Font:
-    {   width:   _uint8;	// maximum width in pixels
+    {   version: _uint8;	// version number
+	nranges: _uint8;	// number of ranges
+	rsvd:    _uint16;
+	width:   _uint8;	// maximum width in pixels
 	height:  _uint8;	// maximum height in pixels
 	space:   _uint8;	// width of space
-	nranges: _uint8;	// number of ranges
+	base:    _uint8;	// offset to baseline
 	glyphs:  @[]Glyph;
-	bitmaps: @[]_byte;
+	bitmaps: @[]_uint8;
 	range:   []Range;
     };
     type FP: @Font;
@@ -42,18 +45,6 @@ package font
 	    }
 	}
 	return 0;   
-    }
-
-    proc (fp: FP) Dump()
-    {
-	if fp == 0 then return;
-	debug.str("Font\nwidth="); debug.uint8(fp.width);
-	debug.str(" height="); debug.uint8(fp.height);
-	debug.str(" space="); debug.uint8(fp.space);
-	debug.str(" nranges="); debug.uint8(fp.nranges);
-	debug.str("\nglyphs="); debug.hex32(_uint32(fp.glyphs));
-	debug.str(" bitmaps="); debug.hex32(_uint32(fp.bitmaps));
-	debug.nl();
     }
 }
 

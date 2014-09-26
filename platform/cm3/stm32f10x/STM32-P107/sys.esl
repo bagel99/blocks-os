@@ -6,6 +6,7 @@
  * $Id: sys.esl 326 2012-02-24 22:06:49Z bgl $
  */
 
+import rcc;
 import syscb;
 import gpio;
 import nvic;
@@ -46,6 +47,8 @@ package sys
     const BUT1:  gpio.PortDesc = { .bit=0,  .port=A };
     const BUT2:  gpio.PortDesc = { .bit=13, .port=C };
     const SDCARD:gpio.PortDesc = { .bit=4,  .port=A };
+    const USBPWR:gpio.PortDesc = { .bit=7,  .port=D };
+    const USBVBUS:gpio.PortDesc= { .bit=9,  .port=A };
 
     /*
      * Even if the pin is set to the reset default (IN_FLOAT)
@@ -77,12 +80,12 @@ package sys
     	{{ .bit=10, .port=C },	AF_PP_50 },	// MMC_SPI_CLK (SPI3)
     	{{ .bit=11, .port=C },	AF_PP_50 },	// MMC_SPI_MISO (SPI3)
     	{{ .bit=12, .port=C },	AF_PP_50 },	// MMC_SPI_MOSI (SPI3)
-//    	{{ .bit=9,  .port=A },	IN_FLOAT },	// USB_OTG_VBUS
-//    	{{ .bit=10, .port=A },	IN_FLOAT },	// SUB_OTG_ID
     	{{ .bit=11, .port=A },	AF_PP_50 },	// USB_DM
-    	{{ .bit=12, .port=A },	AF_PP_50 }	// USB_DP
-//    	{{ .bit=7,  .port=D },	IN_FLOAT },	// USB_VBUS_ON
-//    	{{ .bit=15, .port=E },	IN_FLOAT }	// USB_FAULT - EXTI 15
+    	{{ .bit=12, .port=A },	AF_PP_50 },	// USB_DP
+    	{ USBVBUS,	        IN_FLOAT },	// USB_OTG_VBUS
+    	{{ .bit=10, .port=A },	IN_PULLUP},	// USB_OTG_ID
+    	{ USBPWR,	        GP_PP_50 },	// USB_VBUS_ON
+    	{{ .bit=15, .port=E },	IN_FLOAT }	// USB_FAULT - EXTI 15
     };
 
     const LEDPorts: [2]gpio.PortDesc = {LED1, LED2};
@@ -97,11 +100,35 @@ package sys
 	gpio.Clr(LEDPorts[which]);
     }
 
+    proc usbpower(which: _uint, on: boolean)
+    {
+	// this board only supports which==0
+	if on then
+	    gpio.Clr(USBPWR);	// active low
+	else
+	    gpio.Set(USBPWR);
+    }
+
+    proc Delay_uS(usec: _uint)
+    {   var k: _uint;
+	var n: _uint: in, out;
+
+	k = 120 * usec/7;	// FIXME - calibrate this
+	n = 0;
+	while n < k do
+	    n += 1;
+    }
+
+    proc Delay_mS(msec: _uint)
+    {
+	Delay_uS(msec * 1000);
+    }
+
     proc Init()
     {   var i: _uint;
 
     	// we need to remap pins, so turn on alternate function control clock
-    	sysctl.ClockEnable(AFIO);
+    	rcc.ClockEnable(AFIO);
 	// configure GPIO pins
 	i = 0;
 	while i < PinOut?len do

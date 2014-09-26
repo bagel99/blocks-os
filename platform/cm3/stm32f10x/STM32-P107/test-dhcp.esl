@@ -16,7 +16,7 @@ package debug
 
 import fault;
 import syscb;
-import sysctl;
+import rcc;
 import nvic;
 
 import mbuf;
@@ -64,15 +64,15 @@ proc main(): _int
 {   var serialno: _uint32;
 
     sys.Init();
-    sysctl.Init();
+    rcc.Init();
     fault.Init();
     debug.Init();
-    sys.led1(true);							// 01
+    sys.ledon(0);							// 01
 debug.str("Starting test-dhcp...\n");
     meminit(HeapStart, 0x8000, 0);	// FIXME
 /*
     // create MAC from serial number
-    serialno = cpu.GetSerialNumber();
+    serialno = chip.GetSerialNumber();
     MyMAC[0] = 0x02;
     MyMAC[1] = 0x00;
     MyMAC[2] = _byte(serialno >> 24);
@@ -97,7 +97,7 @@ debug.str("Starting test-dhcp...\n");
 	IPv6ID.Send(e);
     }
 
-    sys.led2(true);							// 11
+    sys.ledon(1);							// 11
 
     loop
     {

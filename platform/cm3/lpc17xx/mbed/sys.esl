@@ -118,11 +118,11 @@ package sys
 	{LED_BLUE,	   .func=OUTPUT,.init=1}, // Multicolor LED FIXME-PWM5
 	{LED_GREEN,	   .func=OUTPUT,.init=1}, // Multicolor LED FIXME-PWM4
 	{LED_RED,	   .func=OUTPUT,.init=1}, // Multicolor LED FIXME-PWM3
-	{SW_DN,		   .func=INPUT,.pull=UP}, // nav switch
-	{SW_LF,		   .func=INPUT,.pull=UP}, // nav switch
-	{SW_CT,		   .func=INPUT,.pull=UP}, // nav switch
-	{SW_UP,		   .func=INPUT,.pull=UP}, // nav switch
-	{SW_RT,		   .func=INPUT,.pull=UP}, // nav switch
+	{SW_DN,		   .func=INPUT,.pull=DOWN}, // nav switch
+	{SW_LF,		   .func=INPUT,.pull=DOWN}, // nav switch
+	{SW_CT,		   .func=INPUT,.pull=DOWN}, // nav switch
+	{SW_UP,		   .func=INPUT,.pull=DOWN}, // nav switch
+	{SW_RT,		   .func=INPUT,.pull=DOWN}, // nav switch
 	{ACC_CLK,	   .func=ALT2},		// MMA7660 clock
 	{ACC_DAT,	   .func=ALT2},		// MMA7660 data
 //	{ANALOG_OUT,	   .func=ALT2},		// DAC to Analog Out

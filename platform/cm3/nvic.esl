@@ -2,7 +2,7 @@
  * The Nested Vectored Interrupt Control is part of the ARM Cortex-M3 core.
  *
  * Copyright (c) 2009, Brian G. Lucas.  See LICENSE file.
- * $Id: nvic.esl 283 2012-02-02 22:32:42Z bgl $
+ * $Id$
  */
 
 package nvic
@@ -20,7 +20,7 @@ package nvic
 	_:    [16]_uint32;
 	_:    [16]_uint32;
 	_:    [16]_uint32;
-	ipr:  [124] 0..255: out, in;
+	ipr:  [124] 0..255: out;
     };
 
     var nv: NvicRegisters: external(0xE000_E100);
@@ -63,6 +63,15 @@ package nvic
     {
 	asm "cpsid\ti";
     }
+
+    proc SetBasePriority(priority: _uint): _uint
+    {   var rv: _uint;
+
+	asm "mrs $0,BASEPRI", "=r", rv;
+	asm "msr BASEPRI,$0", "r", priority;
+	return rv;
+    }
+	
 }
 // vim: ts=8 sw=4 noet nowrap
 

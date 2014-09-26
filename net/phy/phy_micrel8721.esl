@@ -1,0 +1,84 @@
+/*
+ * Support the Micrel 8721 Ethernet PHY chip.
+ *
+ * Copyright (c) 2014, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+import phy_standard;
+
+package phy
+{
+    // EXTENDED REGISTERS
+    const ICSR  = 27;
+    type ICSR_REG:	// Interrupt Control/Status Register
+    {   jabberie: boolean;	// .15 - jabber interrupt enable
+	rcverrie: boolean;	// .14 - receive error interrupt enable
+	pgrcvie:  boolean;	// .13 - page receive interrupt enable
+	pdetie:   boolean;	// .12 - parallel detect interrupt enable
+	lkpaie:   boolean;	// .11 - link partner ack interrupt enable
+	lkdnie:   boolean;	// .10 - link down interrupt enable
+	rmtfltie: boolean;	// .09 - remote fault interrupt enable
+	lkupie:   boolean;	// .08 - link up interrupt enable
+	jabber:   boolean: ro;	// .07 - jabber intr, clears on read
+	rcverr:   boolean: ro;	// .06 - receive error, clears on read
+	pgrcv:    boolean: ro;	// .05 - page received, clears on read
+	pdet:     boolean: ro;	// .04 - parallel detect fault, clears on read
+	lkpa:     boolean: ro;	// .03 - link partner ack, clears on read
+	linkdn:   boolean: ro;	// .02 - link down, clears on read
+	rmtflt:   boolean: ro;	// .01 - remote fault, clears on read
+	linkup:   boolean: ro;	// .00 - link up, clears on read
+    }: packed, msb, bits(16);
+
+    const PHYCR = 31;
+    type PhyMode: (BUSY, H10, H100, _, _, F10, F100, ISOLATE);
+    type PHYCR_REG:	// PHY Controller
+    {	_:        0..0b11;	// .15-14
+	swapdis:  boolean;	// .13 - pair swap disable
+	energy:   boolean: ro;	// .12 - energy detect
+	forcelk:  boolean;	// .11 - force link
+	pwrsave:  boolean;	// .10 - enable power saving
+	intrlvl:  (LO,HI);	// .09 - interrupt level low or high
+	jabberenb:boolean;	// .08 - enable jabber counter
+	an_done:  boolean;	// .07 - auto negotiation completed	
+	pauseenb: boolean;	// .06 - enable pause (flow control)
+	isolate:  boolean: ro;	// .05 - PHY is in isolate mode
+	mode:     PhyMode: ro;	// .04-02 - PHY mode indication
+	sqeenb:   boolean;	// .01 - enable SQE test
+	scramdis: boolean;	// .00 - disable scramble
+    }: packed, msb, bits(16);
+
+    proc EnableIntr(en: eth.Enet)
+    {
+	en.PhyWrite(ICSR, _uint16(ICSR_REG{.lkdnie=true,.lkupie=true}));
+    }
+
+    proc HandleIntr(en: eth.Enet): boolean
+    {   var pv: _uint16;
+	var ok: boolean;
+	var icsr: ICSR_REG;
+	
+	pv, ok = en.PhyRead(ICSR);	// reading clears interrupt bits
+	icsr = ICSR_REG(pv);
+	return icsr.linkdn || icsr.linkup;	// true in link status changed
+    }
+	
+    proc GetLinkSpeed(en: eth.Enet): Speed, Duplex
+    {   var pv: _uint16;
+	var ok: boolean;
+	var phycr: PHYCR_REG;
+	var speed: Speed;
+	var duplex: Duplex;
+
+	pv, ok = en.PhyRead(PHYCR);
+	phycr = PHYCR_REG(pv);
+	if phycr.mode
+	is H10 then  { speed = S10;  duplex = HALF; }
+	is H100 then { speed = S100; duplex = HALF; }
+	is F10 then  { speed = S10;  duplex = FULL; }
+	is F100 then { speed = S100; duplex = FULL; }
+	else { speed = S100; duplex = FULL; }		// some default	
+	return speed, duplex;
+    }
+}
+

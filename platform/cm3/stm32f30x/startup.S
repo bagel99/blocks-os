@@ -1,5 +1,6 @@
 	.syntax	unified
 	.cpu	cortex-m4
+	.eabi_attribute	6, 10
 	.section ".vectors"
 	.globl  __vectors
 	.type   __vectors,%object

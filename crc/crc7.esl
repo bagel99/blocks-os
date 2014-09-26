@@ -1,6 +1,17 @@
 /*
  * 7 bit CRC used in SD cards
  */
+/*
+ * Name: CRC-7
+ * Parameters:
+ * width=7
+ * poly=0x09
+ * init=0x00
+ * refin=false
+ * refout=false
+ * xorout=0x00
+ * check=0x75
+ */
 
 package crc7
 {

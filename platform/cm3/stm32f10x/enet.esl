@@ -2,7 +2,7 @@
  * STM32F107 Ethernet
  *
  * Copyright (c) 2011, Brian G. Lucas.  See LICENSE file.
- * $Id: enet.esl 366 2012-05-22 01:37:32Z bgl $
+ * $Id$
  */
 
 package eth
@@ -93,7 +93,15 @@ package eth
 	adr2:  _address: out;
     };    
 
-    type MACClockDiv: (DIV42, _, DIV16, DIV26, _, _, _, _);
+    type MACClockDiv: (DIV42, DIV62, DIV16, DIV26, DIV102, _, _, _);
+    type MACIIAR:
+    {   mb:   boolean;		// .00
+	mw:   boolean;		// .01
+	cr:   MACClockDiv;	// .02-04
+	_:    0..1;		// .05
+	mr:   PhyRegAddr;	// .06-10
+	pa:   0..31;		// .11-15
+    }: packed, lsb, bits(32);
 
     type EnetRegs:
     {   mac:
@@ -135,15 +143,7 @@ package eth
 	    }: packed, lsb, out;
 	    hthr: _uint32;					// 0x0008
 	    htlr: _uint32;					// 0x000C
-	    iiar:						// 0x0010
-	    {   mb:   boolean;		// .00
-		mw:   boolean;		// .01
-		cr:   MACClockDiv;	// .02-04
-		_:    0..1;		// .05
-		mr:   PhyRegAddr;	// .06-10
-		pa:   0..31;		// .11-15
-		_:    0..0xFFFF;	// .16-31
-	    }: packed, lsb, in, out;
+	    iiar: MACIIAR: in, out;				// 0x0010
 	    iidr: _uint32;					// 0x0014
 	    fcr:					        // 0x0018
 	    {   fcb:  boolean;		// .00
@@ -319,7 +319,7 @@ package eth
 	};
     };
     type Enet: @EnetRegs;
-    const enet: Enet = 0x4002_8000;
+    const enet: Enet = chip.enetaddr;
     const vector = 61;
 
     const PhyRWTimeout =  0x4FFFF;
@@ -327,31 +327,50 @@ package eth
     /*
      * The following bound procedures operate directly on the device registers
      */
+    proc (en: Enet) PhyAddress(adr: _uint)
+    {
+	en.mac.iiar.pa = adr;
+    }
+
     proc (en: Enet) PhyWrite(reg: PhyRegAddr, data: _uint16): boolean
-    {   var cr: MACClockDiv;
+    {   var iiar: MACIIAR;
     	var n: _uint32;
 
-	cr = en.mac.iiar.cr;	// save clock divider bits
+	iiar = en.mac.iiar;	// save clock divider bits and phy addr
+	iiar.mb = true;
+	iiar.mw = true;
+	iiar.mr = reg;
 	en.mac.iidr = data;
-	en.mac.iiar = { .mb=true, .mw=true, .cr=cr, .mr=reg, .pa=sys.PhyAddr };
+	en.mac.iiar = iiar;
     	n = PhyRWTimeout;
     	while en.mac.iiar.mb && n > 0 do n -= 1;
-if db > 4 then {debug.str("PhyWrite: n="); debug.hex32(n); debug.nl();}
+if db > 4 then {debug.str("PhyWrite: n="); debug.uint(n);
+debug.str(" reg="); debug.uint8(_uint8(reg));
+debug.str(" data="); debug.hex16(data); debug.nl(); }
     	return n > 0;
     }
 
     proc (en: Enet) PhyRead(reg: PhyRegAddr): _uint16, boolean
-    {   var cr: MACClockDiv;
+    {   var iiar: MACIIAR;
     	var n: _uint32;
     	var data: _uint16;
 
-	cr = en.mac.iiar.cr;	// save clock divider bits
-    	en.mac.iiar = { .mb=true, .mw=false, .cr=cr, .mr=reg, .pa=sys.PhyAddr };
+	iiar = en.mac.iiar;	// save clock divider bits and phy addr
+	iiar.mb = true;
+	iiar.mw = false;
+	iiar.mr = reg;
+    	en.mac.iiar = iiar;
     	n = PhyRWTimeout;
     	while en.mac.iiar.mb && n > 0 do n -= 1;
-if db > 4 then {debug.str("PhyRead: n="); debug.uint(n); debug.nl();}
-    	if n == 0 then return 0, false;
+if db > 4 then {debug.str("PhyRead: n="); debug.uint(n);}
+    	if n == 0 then
+    	{
+if db > 4 then {debug.nl();}
+	    return 0, false;
+	}
     	data = _uint16(en.mac.iidr);
+if db > 4 then {debug.str(" reg="); debug.uint8(_uint8(reg));
+debug.str(" data="); debug.hex16(data); debug.nl(); }
     	return data, true;
     }
 
@@ -372,24 +391,31 @@ package eth
     {   var cr: MACClockDiv;
 
 	// Enable clocks to device
-	sysctl.ClockEnable(ETHMAC);
-	sysctl.ClockEnable(ETHTX);
-	sysctl.ClockEnable(ETHRX);
+	rcc.ClockEnable(ETHMAC);
+	rcc.ClockEnable(ETHTX);
+	rcc.ClockEnable(ETHRX);
 	// Configure PLL3
-	sysctl.PLL3Init(MUL10);
+	rcc.PLL3Init(MUL10);
 	// Output PLL3 clock on MCO pin
-	sysctl.MCOInit(PLL3);
+	rcc.MCOInit(PLL3);
 	// Setup MAC clock
 	if sys.HClock < 35_000_000 then		// 20-35 MHz
-	    en.mac.iiar.cr = DIV16;
+	    en.mac.iiar = {.cr=DIV16};
 	else if sys.HClock < 60_000_000 then    // 35-60 MHz
-	    en.mac.iiar.cr = DIV26;
-	else					// 60-72 MHz
-	    en.mac.iiar.cr = DIV42;
-	sysctl.DeviceReset(ETHMAC);
+	    en.mac.iiar = {.cr=DIV26};
+	else if sys.HClock < 100_000_000 then   // 60-100 MHz
+	    en.mac.iiar = {.cr=DIV42};
+	else if sys.HClock < 150_000_000 then   // 100-150 MHz
+	    en.mac.iiar = {.cr=DIV62};
+	else					// 150-168 MHz
+	    en.mac.iiar = {.cr=DIV102};
+	rcc.DeviceReset(ETHMAC);
 	en.mac.a0h = { .mac=(mac[1]<<8) | mac[0], .mo=1 };
 	en.mac.a0l = (mac[5]<<24) | (mac[4]<<16) | (mac[3]<<8) | mac[2];
-	phy.PhyInit(en);
+	if !phy.PhyInit(en) then
+	{
+debug.str("PhyInit failed\n");
+        }
 	if auto_negotiate then
 	    phy.SetAuto(en);
 	else
@@ -604,6 +630,7 @@ if db > 0 then { debug.str("es.Init "); debug.hex32(_uint32(es)); debug.nl(); }
 	    var duplex: Duplex;
 	    if !wasup then
 	    {   speed, duplex = phy.GetLinkSpeed(en);
+if db > 1 then { debug.str("Link up\n"); }
 		en.LinkUp(speed, duplex);
 	    }
 	    return true;

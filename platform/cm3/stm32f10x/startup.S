@@ -90,7 +90,7 @@ __vectors:
 	.long   UNKNOWN_IRQ		/* 80/64: CAN2_RX0		*/
 	.long   UNKNOWN_IRQ		/* 81/65: CAN2_RX1		*/
 	.long   UNKNOWN_IRQ		/* 82/66: CAN2_SCE		*/
-	.long   OTG_IRQ			/* 83/67: OTG_FS		*/
+	.long   OTGFS_IRQ		/* 83/67: OTG_FS		*/
 
 	.size   __vectors,.-__vectors
 
@@ -224,7 +224,7 @@ DefaultHandler:
 	Interrupt DMA_IRQ
 	Interrupt I2S_IRQ
 	Interrupt ENET_IRQ
-	Interrupt OTG_IRQ
+	Interrupt OTGFS_IRQ
 	Interrupt OTG_WKUP_IRQ
 
 

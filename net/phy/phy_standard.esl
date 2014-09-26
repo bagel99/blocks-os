@@ -93,25 +93,26 @@ package phy
 	var i: _uint;
 
 /*
-	if sys.PhyAddr == 0 then	    // not specified, seach for a PHY
+	if !_defined(sys.PhyAddr) then	    // not specified, seach for a PHY
 	{   i = 1;
 	    while i < 32 do
-	    {   sys.PhyAddr = i;
+	    {   en.PhyAddress(i);
 		id1, ok = en.PhyRead(IDR1);
 		id2, ok = en.PhyRead(IDR2);
-	      exit ok && id1 == sys.PhyId1 && (id2&mask2) == sys.PhyId2;
+	      exit ok && id1 == sys.PhyId1 && (id2&mask2) == (sys.PhyId2&mask2);
 	        i += 1;
 	    }
 	    if i > 31 then
-	    {   sys.PhyAddr = 0;
 		return false;
-	    }
 	}
 	else
 */
-	{   id1, ok = en.PhyRead(IDR1);
+	{   en.PhyAddress(sys.PhyAddr);		// we know the chip address
+	    id1, ok = en.PhyRead(IDR1);
+	    if !ok || id1 != sys.PhyId1 then
+	    	return false;
 	    id2, ok = en.PhyRead(IDR2);
-	    if !ok || id1 != sys.PhyId1 || (id2&mask2) != sys.PhyId2 then
+	    if !ok || (id2&mask2) != (sys.PhyId2&mask2) then
 		return false;
 	}
 	// Reset PHY and wait for reset bit to clear

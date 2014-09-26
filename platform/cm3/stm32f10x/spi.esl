@@ -2,7 +2,7 @@
  * STM32F10x SPI.
  *
  * Copyright (c) 2012, Brian G. Lucas.  See LICENSE file.
- * $Id: spi.esl 326 2012-02-24 22:06:49Z bgl $
+ * $Id$
  */
 
 package spi
@@ -78,17 +78,6 @@ package spi
      	}: packed, lsb, out, align(4);            
     };
     type Spi: @SPIReg;
-    const devices: [3]
-    {   addr:   Spi;
-        vector: _uint8;
-	dev:    sysctl.Device;
-        bus:    sysctl.Bus;
-        isi2c:  boolean;
-    } =
-    {   { 0x4001_3000, 35, SPI1, APB2, false },
-	{ 0x4000_3800, 36, SPI2, APB1, false },
-	{ 0x4000_3C00, 51, SPI3, APB1, false }
-    };
 
     proc (spi: Spi) Send(data: _uint16)
     {
@@ -112,7 +101,7 @@ package spi
 	var clk: _uint;
 	var div: _uint;
 
-	if spi == devices[0].addr then
+	if chip.GetBusByAddress(spi) == APB2 then
 	    clk = sys.P2Clock;
 	else
 	    clk = sys.P1Clock;
@@ -131,10 +120,10 @@ package spi
 	var cr1: CR1;
 
 	n -= 1;	// make zero based
-	if n > 2 then return 0;
-	sysctl.ClockEnable(devices[n].dev);
-	sysctl.DeviceReset(devices[n].dev);
-	spi = devices[n].addr;	
+	if n > chip.spis?len-1 then return 0;
+	rcc.ClockEnable(chip.spis[n]);
+	rcc.DeviceReset(chip.spis[n]);
+	spi = Spi(chip.spiaddr[n]);	
 	cr1 = how;
 	if cr1.master then cr1.ssi = 1;
 	spi.cr1 = cr1;

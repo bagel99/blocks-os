@@ -29,6 +29,7 @@ package usb
     type EPType: (CNTL, ISOC, BULK, INTR);
     type SyncType: (NONE, ASYNC, ADAPTIVE, SYNC);	// ISOC only
     type UsageType: (DATA, FEEDBACK, IMPLICIT, _);	// ISOC only
+    type Speeds: (UNKN, LOW, FULL, HIGH);
 
     type EPAttributes:
     {   Type:     EPType;
@@ -143,7 +144,7 @@ package usb
     
 
     /*
-     * Setup Packets
+     * Setup packets
      */
     type StandardRequests:
     (   GetStatus=0, ClearFeature=1, SetFeature=3, SetAddress=5,
@@ -164,6 +165,17 @@ package usb
 	length:  _uint16: le;						// 0x06
     };
     type pSetupPkt: @SetupPkt;
+
+    /*
+     * Data returned by standard requests
+     */
+    type DeviceStatus:
+    {   sts:
+        {   selfpowered:  boolean;
+	    remotewakeup: boolean;
+	}: packed, lsb, bits(8);
+	rsvd:    _uint8;
+    };
 }
 // vim: ts=8 sw=4 noet nowrap
 

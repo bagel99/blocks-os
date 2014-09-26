@@ -11,6 +11,13 @@ import timer;
 
 package ipv4	// continue with implementation
 {
+    alias event.Event as Event;
+    alias event.pEvent as pEvent;
+    alias mbuf.pMBuf as pMBuf;
+    alias block.Block as Block;
+    alias block.pBlock as pBlock;
+    alias block.BlockID as BlockID;
+
     if !_defined(db) then
     {   if _defined(debug.db_ipv4) then
 	    alias debug.db_ipv4 as db;
@@ -18,28 +25,70 @@ package ipv4	// continue with implementation
 	    const db = 0;
     }
 
-    // BEGIN DEBUG
-    proc PrintAddr(addr: @IPv4Addr)
-    {   var i: _uint;
+    // Address Resolution (ARP) Cache
+    type AddrState:(INCOMPLETE, REACHABLE, STALE, DELAY, PROBE);
 
-	i = 0;
-	loop
-	{   debug.uint8(addr@[i]);
-	    i += 1;
-	  exit i > 3;
-	    debug.chr('.');
-	}
-    }
-    proc PrintLink(linkaddr: @net.MAC)
-    {   var i: _uint;
+    type AddrEntry:
+    {   next:   @AddrEntry;
+	addr:   IPv4Addr;
+	queue:	pMBuf;
+	state:  AddrState;
+	age:    _uint8;
+	laddr:  net.MAC;
+    };
+    type pAddrEntry: @AddrEntry;
 
-	i = 0;
-	while i < 6 do
-	{   debug.hex8(linkaddr@[i]);
-	    i += 1;
-	}
-    }
-    // END DEBUG
+    type Upper:
+    {   next:    @Upper;
+	proto:   Proto;
+	bid:     BlockID;
+	tag:     _uint8;
+    };
+    type pUpper: @Upper;
+    
+    // Additional DHCP state
+    type DHCPStates: (Down, Select, Request, Bound, Renew, Rebind);
+    type DHCPState:
+    {   server:    IPv4Addr;
+	offered:   IPv4Addr;
+	mask:      IPv4Addr;
+	state:     DHCPStates;
+	retries:   _uint8;
+	timeRT:    _uint8;      // short timeout for messages retries
+	timeleft:  _uint32;
+	timeRenew: _uint32;	// T1
+	timeRebind:_uint32;	// T2
+	timeLease: _uint32;
+    };
+    type pDHCPState: @DHCPState;
+
+    type Lower:
+    {   AddrCache: pAddrEntry;
+	dhcp:      @DHCPState;
+	addr:      IPv4Addr;		// IP address of this interface
+	mask:      IPv4Addr;		// address mask of network
+	mac:       [6]_byte;		// for ethernet
+	ifn:       _uint8;
+	bid:       BlockID;
+	state:     (DOWN, UP);
+	type:      comm.LinkType;
+	hdr:       _uint8;		// space for link level header(s)
+	trl:       _uint8;
+	mtu:       _uint16;		// e.g, 1500 for ethernet
+	IDSeqno:   _uint16;		// header sequence number
+    }: align(4);
+    type pLower: @Lower;
+
+    type IPv4Block(Block):
+    {   upper:     pUpper;		// upper level protocols
+	lower:     [NIPv4Lower]pLower;	// interfaces
+	hdr:       _uint8;		// max over all interfaces
+	trl:       _uint8;		// max over all interfaces
+	ifcount:   _uint8;		// number of ready interfaces
+	IsRouter:  boolean;
+	defifn:    _uint8;		// default route interface number
+    };
+    type pIPv4Block: @IPv4Block;
 
     proc (intf: pLower) ArpSendRequest(target: @IPv4Addr);  // forward
 
@@ -51,6 +100,17 @@ package ipv4	// continue with implementation
 	if ifz < NIPv4Lower then
 	    return ib.lower[ifz];
 	return 0;
+    }
+
+    proc (ib: pIPv4Block) GetAddress(ifn: _uint, addr: @IPv4Addr): _uint
+    {   var intf: pLower;
+
+	intf = ib.GetInterface(ifn);
+	if intf != 0 && intf.addr != NullAddr then
+	{   addr@ = intf.addr;
+	    return 1;       // one and only valid address
+	}
+	return 0;	    // no valid address
     }
 
     proc (intf: pLower) AddQueue(pnc: pAddrEntry, mb: pMBuf)
@@ -443,11 +503,14 @@ debug.uint16(li.mtu); debug.nl(); }
 	    {   intf.mac = li.id[0:6];
 		intf.addr = MyIPv4Addr;
 		intf.mask = MyIPv4Mask;
-if db > 1 then {debug.str("\taddr="); PrintAddr(intf.addr);
-debug.str(" mask="); PrintAddr(intf.mask); debug.nl();}
 		if intf.addr == NullAddr then
 		{
 		    intf.DHCPStart();
+		}
+		else
+		{
+if db > 0 then {debug.str("\taddr="); PrintAddr(intf.addr);
+debug.str(" mask="); PrintAddr(intf.mask); debug.nl();}
 		}
 	    }
 	    is PPP then
@@ -506,8 +569,7 @@ debug.nl();}
 if db > 1 then {debug.str("ipv4.StartTimer\n");}
 //	if ib.iftimer == NONE then
 //	{   ib.iftimer = RUN;
-	    te = _new(timer.TimerEvent);
-	    te.code = TSTART;
+	    te = timer.Alloc(TSTART);
 	    te.tag = ib.id;
 	    te.ticks = timer.SecondsToTicks(TimerSecs);
 	    TimerID.Send(te);
@@ -537,8 +599,6 @@ if db > 1 then {debug.str("ipv4.Timer\n");}
     {   var mb: pMBuf;
 	var ib: pIPv4Block;
 
-if db > 1 then {debug.str("ipv4.Run ");  debug.uint8(_uint8(e.code));
-debug.chr(','); debug.uint8(e.tag); debug.nl();}
         ib = pIPv4Block(b);
         if e.code
         is RCVD then    // packet received from interface
@@ -560,7 +620,7 @@ debug.chr(','); debug.uint8(e.tag); debug.nl();}
 	    ib.InterfaceUp(li);
 	    _delete(li);
 	    if ib.ifcount == 1 then // first interface came up
-	    {   ib.InformUpper(true);
+	    {   ib.InformUpper(true);   // FIXME - not until we get a valid address?
 		ib.StartTimer();
 	    }
 	}

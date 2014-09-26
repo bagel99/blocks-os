@@ -19,7 +19,7 @@ import systick;
 import nvic;
 
 // STM32F10x stuff
-import sysctl;
+import rcc;
 
 import sdcard;
 
@@ -40,7 +40,7 @@ proc main()
     var pt: _uint8;
     var size, blksz: _uint32;
 
-    sysctl.Init();
+    rcc.Init();
     sys.Init();
     debug.Init();
     if sd.Init(3, sys.SDCARD) then
