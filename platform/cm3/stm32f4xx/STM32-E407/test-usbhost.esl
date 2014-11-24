@@ -1,0 +1,81 @@
+import sys;
+package debug
+{   const db_timer = 0;
+    const db_block   = 2;
+    const db_connect = 1;
+    const db_usbhost = 0xFFFF;
+    const NoWrap = true;
+    const BufSiz = 24576;
+}
+
+import trace;	// use trace as debug port
+import debug;
+
+var button: boolean: in, out;
+var once: boolean = false;
+
+import fault;
+import syscb;
+import nvic;
+
+import block;
+
+const TimerID:   block.BlockID = 1;
+const USBENUMID: block.BlockID = 2;
+const USBHOSTMSC:block.BlockID = 3;
+const USBHOSTID: block.BlockID = 12;
+
+import timer;
+
+import usb;
+
+import usbevent;
+import usbhost;
+import usbhost_msc;
+import usbhost_enum;
+
+//import wait;
+
+var HeapStart: _memory: external("_end");
+
+proc wait()::external;
+
+proc meminit(addr: _address, size: _uint, pool: _uint): : external;
+    
+
+proc main(): _int
+{
+    var c: _byte;				// for debug print
+    var chan1, chan2: _uint;
+    var ok: boolean;
+
+    rcc.Init();		// FIXME - move to sys.Init
+    sys.Init();
+    fault.Init();
+    debug.Init();
+debug.str("Starting test-usbhost...\n");
+    meminit(HeapStart, 0x8000, 0);	// FIXME
+
+//    timer.NewBlock(TimerID);
+    systick.Init(sys.HClock, sys.TicksPerSecond);
+    usbenum.NewBlock(USBENUMID);
+    usbhost.NewBlock(USBHOSTID);
+    usbhostmsc.NewBlock(USBHOSTMSC);
+    sys.ledon(0);
+
+    var e: event.pEvent;
+    e = event.Alloc(START);
+    USBENUMID.Send(e);
+    e = event.Alloc(START);
+    USBHOSTMSC.Send(e);
+
+    loop
+    {
+    	if gpio.Tst(sys.USBVBUS) then sys.ledon(1); else sys.ledoff(1);
+	block.Sched();
+//        wait.Wait();
+    }
+
+    return 0;
+}
+

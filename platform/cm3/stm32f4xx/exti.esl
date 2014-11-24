@@ -1,0 +1,65 @@
+/*
+ * STM32F40x Extended Interrupts
+ *
+ * Copyright (c) 2014, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+import gpio;
+
+package exti
+{
+    type Edge: (RISING, FALLING, BOTH);
+    type ExtiBits: [32]boolean: packed, lsb;   // each register is array of bits
+    type ExtiRegs:
+    {   imr:   ExtiBits: out;
+        emr:   ExtiBits: out;
+        rtsr:  ExtiBits: out;
+        ftsr:  ExtiBits: out;
+        swier: ExtiBits: out;	// clear by writing 1
+        pr:    ExtiBits: in;
+    };
+    type Exti: @ExtiRegs;
+    const exti: Exti = chip.extiaddr;
+
+    const vector: []_uint8 =
+    {  6,  7,  8,  9, 10,	// 0..4
+      23, 23, 23, 23, 23,	// 5..9
+      40, 40, 40, 40, 40, 40,	// 10..15
+       1, 41, 42, 62		// 16..19
+    };
+
+    proc EnableIntr(which: gpio.PortDesc, edge: Edge)
+    {   var xi: Exti;
+    	var vec, bit: _uint;
+
+	xi = exti;
+	bit = which.bit;
+	if which.port == X then		// special case, not in any gpio port
+	    bit += 16;
+	// setup edge(s)
+	if edge
+	is RISING then  xi.rtsr[bit] = true;
+	is FALLING then xi.ftsr[bit] = true;
+	is BOTH then  { xi.rtsr[bit] = true; xi.ftsr[bit] = true; }
+	// enable interrupt
+	if bit <= 19 then
+	   nvic.Enable(vector[which.bit]);
+	xi.imr[bit] = true;
+    }
+
+    proc Pending(which: gpio.PortDesc): boolean
+    {   var xi: Exti;
+
+	xi = exti;
+	return xi.pr[which.bit];
+    }
+
+    proc ClearIntr(which: gpio.PortDesc)
+    {   var xi: Exti;
+
+	xi = exti;
+	xi.pr[which.bit] = true;
+    }	
+}
+

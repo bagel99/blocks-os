@@ -1,0 +1,230 @@
+/*
+ * Board and System stuff
+ *
+ * Copyright (c) 2014, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+package sys
+{
+    const Voltage = 3_3;		// 3.3 volts
+    const CpuXtal = 12_000_000;
+//    const CoreClock = 168_000_000;
+    const CoreClock = 120_000_000;	// FIXME - matches Olimex test program
+    const HClock = CoreClock;
+    const P1Divider = 4;
+    const P2Divider = 2;
+    const P2Clock = CoreClock / 2;
+    const P1Clock = CoreClock / 4;
+    const useHSE: boolean = true;
+    const TicksPerSecond = 50;
+
+    const TopOfStack = 0x2000A000;
+
+    // USART3 is the debug port via RS232 connector on board
+    const DebugPort = 3;
+
+    // Parameters for Ethernet PHY Micrel KS8721BL
+    const phy = "phy_micrel8721";
+    const PhyAddr = 1;
+    const PhyId1 = 0x0022;	// high bits of PHY vendor code
+    const PhyId2 = 0x1619;	// low bits of PHY vendor, model
+}
+
+import rcc;
+import fpu;
+//import systick;
+import gpio;
+import syscfg;
+//import exti;
+import nvic;
+
+package sys
+{
+
+/*
+ * PINOUTS
+
+  PA0  - push button (WAKEUP)
+  PA1  - ETH_RMII_REF_CLK	PP,AF,NOPULL,50MHz
+  PA2  - ETH_RMII_MDIO		PP,AF,NOPULL,50MHz
+  PA3  - ETH_RMII_MDINT		PP,AF,NOPULL,50MHz
+  PA7  - ETH_RMII_CRS_DV	PP,AF,NOPULL,50MHz
+  PA8  - OTG_HS_VBUSON		PP,AF,NOPULL,100MHz
+  PA9  - OTG_FS_VBUS		IN,OD,NOPULL,100MHz
+  PA10 - OTG_FS_ID		IN?,AF?,UP,100MHz
+  PA11 - OTG_FS_DM		PP,AF,NOPULL,100MHz
+  PA12 - OTG_FS_DP		PP,AF,NOPULL,100MHz
+
+  PB0  - USB_FS_VBUSON
+  PB1  - USB_FS_FAULT
+  PB10 - UART3 Tx - marked "boot" on board
+  PB11 - UART3 Rx - marked "boot" on board
+  PB12 - OTG_HS_ID		AF,100MHz
+  PB13 - OTG_HS_VBUS		IN,100MHz
+  PB14 - OTG_HS_DM		AF,100MHz
+  PB15 - OTG_HS_DP		AF,100MHz
+
+  PC1  - ETH_RMII_MDC		PP,AF,NOPULL,50MHz
+  PC4  - ETH_RMII_RXD0		PP,AF,NOPULL,50MHz
+  PC5  - ETH_RMII_RXD1		PP,AF,NOPULL,50MHz
+  PC8  - SD_D0
+  PC9  - SD_D1
+  PC10 - SD_D2
+  PC11 - SD_D3
+  PC11 - SD_CP?
+  PC12 - SD_CLK
+  PC13 - LED on board
+
+  PD2  - SD_CMD
+
+  PE4  - SD_WP (not implemented)
+
+  PF7  - external LED via connector?
+  PF8  - external LED via connector?
+  PF9  - external LED via connector?
+  PF11 - USB_HS_FAULT
+
+  PG11 - ETH_RMII_TX_EN		PP,AF,NOPULL,50MHz
+  PG13 - ETH_RMII_TXD0		PP,AF,NOPULL,50MHz
+  PG14 - ETH_RMII_TXD1		PP,AF,NOPULL,50MHz
+ */
+
+    const LED1: gpio.PortDesc =  	{.port=C,.bit=13};
+    const BUT1: gpio.PortDesc =		{.port=A,.bit= 0};
+    const MDINT: gpio.PortDesc =	{.port=A,.bit= 3};
+    const SDIO_CP: gpio.PortDesc =	{.port=C,.bit=11};
+    const USBPWR: gpio.PortDesc =	{.port=B,.bit= 0};	//FS
+    const USBVBUS: gpio.PortDesc =	{.port=A,.bit= 9};	//FS
+    const USBHSPWR: gpio.PortDesc =	{.port=A,.bit= 8};	//HS
+    const USBHSVBUS: gpio.PortDesc =	{.port=B,.bit=13};	//HS
+
+    const PinOut: [] gpio.PortInit =
+    {	// LEDs
+	{ LED1, OUT, PP, S50, UP },		// only programmble LED on board
+	// buttons
+	{ BUT1, IN,  PP, S50, NONE },		// only user button on board
+        {{.port=B,.bit=10}, AF, PP, S50, UP, .af=USART1_3}, //USART3 Tx
+        {{.port=B,.bit=11}, AF, PP, S50, UP, .af=USART1_3}, //USART3 Rx
+
+
+	// ethernet
+	{{.port=A,.bit= 1}, AF, PP, S50, NONE, .af=ETH},  //ETH_RMII_REF_CLK
+	{{.port=A,.bit= 2}, AF, PP, S50, NONE, .af=ETH},  //ETH_RMII_MDIO
+	{ MDINT,            AF, PP, S50, NONE, .af=ETH},  //ETH_RMII_MDINT
+	{{.port=A,.bit= 7}, AF, PP, S50, NONE, .af=ETH},  //ETH_RMII_CRS_DV
+	{{.port=C,.bit= 1}, AF, PP, S50, NONE, .af=ETH},  //ETH_RMII_MDC	
+	{{.port=C,.bit= 4}, AF, PP, S50, NONE, .af=ETH},  //ETH_RMII_RXD0	
+	{{.port=C,.bit= 5}, AF, PP, S50, NONE, .af=ETH},  //ETH_RMII_RXD1	
+	{{.port=G,.bit=11}, AF, PP, S50, NONE, .af=ETH},  //ETH_RMII_TX_EN
+	{{.port=G,.bit=13}, AF, PP, S50, NONE, .af=ETH},  //ETH_RMII_TXD0
+	{{.port=G,.bit=14}, AF, PP, S50, NONE, .af=ETH},  //ETH_RMII_TXD1
+	// sd card
+//	{{.port=C,.bit= 8}, AF, PP, S50, NONE, .af=SDIO}, //SDIO_D0
+//	{{.port=C,.bit= 9}, AF, PP, S50, NONE, .af=SDIO}, //SDIO_D1
+//	{{.port=C,.bit=10}, AF, PP, S50, NONE, .af=SDIO}, //SDIO_D2
+//	{{.port=C,.bit=11}, AF, PP, S50, NONE, .af=SDIO}, //SDIO_D3
+//	{{.port=C,.bit=12}, AF, PP, S50, NONE, .af=SDIO}, //SDIO_CLK
+//	{{.port=D,.bit= 2}, AF, PP, S50, NONE, .af=SDIO}, //SDIO_CMD
+	// usb otg fs
+	{{.port=A,.bit=11}, AF, PP,S100, NONE, .af=OTGFS},//OTG_FS_DM
+	{{.port=A,.bit=12}, AF, PP,S100, NONE, .af=OTGFS},//OTG_FS_DP
+	{ USBVBUS,          IN, OD,S100, NONE },	  //OTG_FS_VBUS
+	{ USBPWR,          OUT, PP,S100, NONE },	  //OTG_FS_VBUSON
+//	{{.port=A,.bit=10}, IN},			  //OTG_FS_ID
+//	{{.port=B,.bit= 1}, IN},			  //OTG_FS_FAULT
+	// usb otg hs
+//	{{.port=B,.bit=14}, AF, PP,S100, NONE, .af=OTGHS},//OTG_HS_DM
+//	{{.port=B,.bit=15}, AF, PP,S100, NONE, .af=OTGHS},//OTG_HS_DP
+//	{ USBHSVBUS,        IN, OD,S100, NONE },	  //OTG_HS_VBUS
+//	{ USBHSPWR,        OUT, PP,S100, NONE },	  //OTG_HS_VBUSON
+//	{{.port=B,.bit=12}, IN};			  //OTG_HS_ID
+//	{{.port=F,.bit=11}, IN};			  //OTG_HS_FAULT
+    };
+
+    const LEDPorts: []gpio.PortDesc = { LED1 };
+
+    proc ledon(which: _uint)
+    {
+	gpio.Clr(LEDPorts[which]);
+    }
+
+    proc ledoff(which: _uint)
+    {
+	gpio.Set(LEDPorts[which]);
+    }
+
+    proc ledtoggle(which: _uint)
+    {
+	if gpio.Tst(LEDPorts[which]) then
+	    gpio.Clr(LEDPorts[which]);
+	else
+	    gpio.Set(LEDPorts[which]);
+    }
+
+    proc usbpower(which: _uint, on: boolean)
+    {
+	if which == 0 then	// FS
+	{   if on then
+		gpio.Clr(USBPWR);	// active low
+	    else
+		gpio.Set(USBPWR);
+	}
+	else			// HS
+	{
+	}
+    }
+
+    proc Delay_uS(usec: _uint)
+    {   var k: _uint;
+	var n: _uint: in, out;
+
+	k = 120 * usec/7;	// FIXME - calibrate this
+	n = 0;
+	while n < k do
+	    n += 1;
+    }
+
+    proc Delay_mS(msec: _uint)
+    {
+	Delay_uS(msec * 1000);
+    }
+
+/*
+
+if _defined(UserButtonPressed) then {
+    proc Button(): : global("EINT0_IRQ")
+    {
+	if exti.Pending(BTNConfig.port.bit) then
+	{   if UserButtonPressed >= 2 then
+		UserButtonPressed = 0;
+	    else
+		UserButtonPressed += 1;
+            exti.ClearIntr(BTNConfig.port.bit);
+	}		
+    }
+*/
+
+
+    proc Init()
+    {   var i: _uint;
+
+    	rcc.Init();
+    	fpu.Init();
+    	// configure pins
+    	for i from 0 to PinOut?len-1 do
+    	    gpio.Init(PinOut[i]);
+    	// must configure ethernet RMII
+    	syscfg.Enet(RMII);
+/*
+    	systick.Init(rcc.GetAHBFreq(), TicksPerSecond);
+//    	systick.EnableIntr(0xF0);
+//    	systick.EnableIntr(0);
+	exti.GPIOEnable(BTNConfig.port, BTNIntr);
+	nvic.SetPriority(6, 0b00_000000);
+	nvic.Enable(6);
+	exti.Enable(18, L18Intr);
+*/
+    }
+}
+

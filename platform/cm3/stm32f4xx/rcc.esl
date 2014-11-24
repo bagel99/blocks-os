@@ -1,0 +1,350 @@
+/*
+ * STM32F40x Reset and Clock Control
+ * Also, some chip specific stuff not associated with a single device.
+ *
+ * Copyright (c) 2014, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+import chip;
+import flash;
+
+package rcc
+{
+
+    alias sys.CpuXtal as HSEFreq;  // external crystal, board dependent
+
+    /*
+     * Reset and Clock Control Registers
+     */  
+    type PLLSource: (HSI, HSE);
+    type ClockSource: (HSI, HSE, PLL, _);
+    type APBPreScale: (DIV1, DIV2=4,  DIV4, DIV8, DIV16);
+    type AHBPreScale: (DIV1, DIV2=0b1000, DIV4, DIV8, DIV16,
+    		       DIV64, DIV128, DIV256, DIV512);
+    const PreScale: [16]_byte = {0, 0, 0, 0, 1, 2, 3, 4, 1, 2, 3, 4, 6, 7, 8, 9};
+    type MCOPrescale: (NONE, DIV2=4, DIV3, DIV4, DIV5);
+    type BitMap: [32]boolean: packed, lsb;
+
+    type CRreg:
+    {   hsion:  boolean;		//.00
+	hsirdy: boolean: ro;    	//.01
+	_:      0..1;			//.02
+	trim:   0..31;			//.03-07
+	hsical: 0..255: ro;     	//.08-15
+	hseon:  boolean;		//.16
+	hserdy: boolean: ro;    	//.17
+	hsebyp: boolean;		//.18
+	csson:  boolean;		//.19
+	_:      0..0b1111;      	//.20-23
+	pllon:  boolean;		//.24
+	pllrdy: boolean: ro;    	//.25
+	pll2on: boolean;		//.26
+	pll2rdy:boolean: ro;    	//.27
+	_:      0..0b1111;      	//.28-31  
+    }: packed, lsb, bits(32);
+    type PLLCFGreg:    
+    {   pllm:  0..63;			//.00-05
+	plln:  0..511;			//.06-14
+	_:      0..1;			//.15
+	pllp:  0..3;   			//.16-17 - div = 2*(pllp+1)
+	_:     0..0b1111;       	//.18-21
+	pllsrc:PLLSource;     		//.22
+	_:     0..1;			//.23
+	pllq:  0..15;			//.24-27
+	rsvd:  0..0b1111;       	//.28-31 - must be 2 (undocumented)
+    }: packed, lsb, bits(32);
+    type CFGreg:    
+    {   sw:    ClockSource;     	//.00-01
+	sws:   ClockSource: ro; 	//.02-03
+	hpre:  AHBPreScale;     	//.04-07
+	_:     0..0b11;			//.08-09
+	p1pre: APBPreScale;     	//.10-12
+	p2pre: APBPreScale;     	//.13-15
+	rtcpre:0..31;			//.16-20
+	mco1:  (HSI,LSE,HSE,PLL);	//.21-22
+	i2sclk:(PLL2,EXT);		//.23
+	mco1pr:MCOPrescale;		//.24-26
+	mco2pr:MCOPrescale;		//.27-29
+	mco2:  (SYS,PLL2,HSE,PLL);	//.30-31
+    }: packed, lsb, bits(32);
+
+    type RCCregs:
+    {   cr:     CRreg: in, out;     // reset=0x0000XX83			// 00
+    	pllcfg: PLLCFGreg: in,out;  // reset=0x24003010		        // 04
+    	cfgr:	CFGreg: in,out;						// 08
+    	cir:								// 0C
+    	{   lsirdy:  boolean: in, ro;   //.00
+    	    lserdy:  boolean: in, ro;   //.01
+    	    hsirdy:  boolean: in, ro;   //.02
+    	    hserdy:  boolean: in, ro;   //.03
+    	    pllrdy:  boolean: in, ro;   //.04
+    	    pll2rdy: boolean: in, ro;   //.05
+    	    _:       0..1;		//.06
+    	    cssrdy:  boolean: in, ro;	//.07
+    	    lsienb:  boolean: out;	//.08
+    	    lseenb:  boolean: out;	//.09
+    	    hsienb:  boolean: out;	//.10
+    	    hseenb:  boolean: out;	//.11
+    	    pllenb:  boolean: out;	//.12
+    	    pll2enb: boolean: out;	//.13
+    	    _:       0..0b11;		//.14-15
+    	    lsiclr:  boolean: out, wo;	//.16
+    	    lseclr:  boolean: out, wo;	//.17
+    	    hsiclr:  boolean: out, wo;	//.18
+    	    hseclr:  boolean: out, wo;	//.19
+    	    pllclr:  boolean: out, wo;	//.20
+    	    pll2clr: boolean: out, wo;	//.21
+    	    _:       0..1;		//.22
+    	    cssclr:  boolean: out, wo;	//.23
+     	}: packed, lsb, bits(32);
+    	ahb1rst: BitMap: out;						// 10
+    	ahb2rst: BitMap: out;						// 14
+    	ahb3rst: BitMap: out;						// 18
+    	_:       _uint32;						// 1C
+    	apb1rst: BitMap: out;						// 20
+    	apb2rst: BitMap: out;						// 24
+    	_:       _uint32;						// 28
+    	_:       _uint32;						// 2C
+    	ahb1clk: BitMap: out;						// 30
+    	ahb2clk: BitMap: out;						// 34
+    	ahb3clk: BitMap: out;						// 38
+    	_:       _uint32;						// 3C
+    	apb1clk: BitMap: out;						// 40
+    	apb2clk: BitMap: out;						// 44
+    };
+
+    var rcc: RCCregs: external(0x4002_3800);
+//    var rcc: RCCregs: external(chip.rccaddr);	// FIXME - compiler error
+
+    /*
+     * Power Control Registers
+     */
+    type PLSThreshold: (V2_0,V2_1,V2_3,V2_5,V2_6,V2_7,V2_8,V2_9);
+    type PWRregs:
+    {	cr:
+	{   lpds:    boolean;		//.00
+	    pdds:    boolean;		//.01
+	    cwuf:    boolean: wo;	//.02
+	    cvbf:    boolean: wo;	//.03
+	    pvde:    boolean;		//.04
+	    pls:     PLSThreshold;	//.05-07
+	    dbp:     boolean;		//.08
+	    fpds:    boolean;		//.09
+	    _:       0..0b1111;		//.10-13
+	    vos:     (S2,S1);		//.14
+	    _:	 0..1;			//.15
+	}: packed, lsb, bits(32);
+	csr:
+	{   wuf:     boolean: ro;	//.00
+	    sbf:     boolean: ro;	//.01
+	    pvdo:    (HI,LO): ro;	//.02
+	    brr:     boolean: ro;	//.03
+	    _:       0..0b1111;		//.04-07
+	    ewup:    boolean;		//.08
+	    bre:     boolean;		//.09
+	    _:       0..0b1111;		//.10-13
+	    vosrdy:  boolean: ro;	//.14
+	    _:	 0..1;			//.15
+	}: packed, lsb, bits(32);
+    };
+
+    var pwr: PWRregs: external(0x4000_7000);
+
+    proc ClockEnable(which: chip.Device)
+    {   var sc: @RCCregs;
+	var i: 0..31;
+
+	sc = rcc;
+	i = chip.dev[which].inx;
+	if chip.dev[which].bus
+	is APB2 then sc.apb2clk[i] = true;
+	is APB1 then sc.apb1clk[i] = true;
+	is AHB1 then sc.ahb1clk[i] = true;
+	is AHB2 then sc.ahb2clk[i] = true;
+	is AHB3 then sc.ahb3clk[i] = true;
+    }
+
+    proc DeviceReset(which: chip.Device)
+    {   var sc: @RCCregs;
+	var i: 0..31;
+
+	sc = rcc;
+	i = chip.dev[which].inx;
+	if chip.dev[which].bus
+	is APB2 then
+	{   sc.apb2rst[i] = true;
+	    sc.apb2rst[i] = false;
+	}
+	is APB1 then
+	{    sc.apb1rst[i] = true;
+	     sc.apb1rst[i] = false;
+	}
+	is AHB1 then
+	{    sc.ahb1rst[i] = true;
+	     sc.ahb1rst[i] = false;
+	}
+	is AHB2 then
+	{   sc.ahb2rst[i] = true;
+	    sc.ahb2rst[i] = false;
+	}
+	is AHB3 then
+	{   sc.ahb3rst[i] = true;
+	    sc.ahb3rst[i] = false;
+	}
+    }
+
+/*
+    proc MCOInit(sel: MCOSel)
+    {   var sc: @Regs;
+
+	sc = rcc;
+	sc.cfg.mcosel = sel;
+    }
+
+    proc GetMainClockFreq(): _uint32
+    {   var sc: @Regs;
+	var freq: _uint32;
+
+	sc = rcc;
+	if sc.cfg.sws
+	is HSI then freq = HSIFreq;
+	is HSE then freq = HSEFreq;
+	is PLL then
+	{   var mul, div: _uint;
+	    mul = sc.cfg.pllmul + 2;
+	    if sc.cfg.pllsrc == HSI then
+		freq = (HSIFreq/2) * mul;
+	    else
+	    {   div = sc.cfg.xtpre + 1;
+		freq = (HSEFreq/div) * mul;
+	    }
+	}
+	return freq;
+    }
+
+    proc GetAHBFreq(): _uint32
+    {
+	return GetMainClockFreq() >> PreScale[rcc.cfg.hpre];
+    }
+    
+    proc GetAPB1Freq(): _uint32
+    {
+	return GetMainClockFreq() >> PreScale[rcc.cfg.p1pre];
+    }
+    
+    proc GetAPB2Freq(): _uint32
+    {
+	return GetMainClockFreq() >> PreScale[rcc.cfg.p2pre];
+    }
+
+    proc GetClock(which: Device): _uint32
+    {   var freq: _uint32;
+	var i: _uint;
+
+	// check for special cases
+	if which
+	is USB then {}  // FIXME
+	is RTC then {}  // FIXME
+	else
+	{   i = _uint(which);
+	    if i < 32 then
+		freq = GetAPB2Freq();
+	    else if i < 64 then
+		freq = GetAPB1Freq();
+	    else
+		freq = GetAHBFreq();
+	}
+	return freq;
+    }
+
+    proc SetUSBClock(sel: USBSel)
+    { 
+	rcc.cfg.usbpre = sel;
+    }
+
+    proc SetRTCClock(sel: RTCSel)
+    {
+	rcc.bdcr.rtcsel = sel;
+    }
+*/
+
+    /*
+     * Clock calculations for external crystal
+     * XTAL/M is the input to PLL
+     * (XTAL/M)*N is output of PLL
+     * ((XTAL/M)*N)/P is the core clock
+     * ((XTAL/M)*N)/Q must be 48MHz for the USB clock
+     * ((XTAL/M)*N)/R is the I2S clock
+     */
+
+
+    proc Init(): boolean
+    {   var sc: @RCCregs;
+//	var fc: @FlashRegs;
+    	var n: _uint;
+    	var cfg: CFGreg;
+    	var cr: CRreg;
+/*
+	const PLLM = 6;		// XTAL=12: input is 2 MHz
+	const PLLN = 168;	// PLL output is 336 MHz
+	const PLLP = 2;		// 336/2 is core clock 168 MHz
+	const PLLQ = 7;		// 336/7 is 48 MHz
+	const PLLR = 2;		// 336/2 is 168 MHz
+*/
+	// Match Olimex test program
+	const PLLM = 12;	// XTAL=12: input is 1 MHz
+	const PLLN = 240;	// PLL output is 240 MHz
+	const PLLP = 2;		// 240/2 is core clock 120 MHz
+	const PLLQ = 5;		// 240/5 is 48 MHz
+	const PLLR = 2;		// 240/2 is 120 MHz
+
+	sc = rcc;
+	// set everything as it would be after a reset
+	sc.cr.hsion = true;
+	sc.cfgr = {.sw=false};		// reset all bits
+	cr = sc.cr;
+	cr.hseon = false;
+	cr.csson = false;
+	cr.pllon = false;
+	sc.cr = cr;
+	sc.pllcfg = {.pllm=16,.plln=192,.pllq=4,.rsvd=2};
+	sc.cr.hsebyp = false;
+	sc.cir = {.lsirdy=false};	// reset all bits
+
+	// now setup the clock the way we want it
+	sc.cr.hseon = true;		// turn HSE on
+	n = 0x500;
+	do
+	    n -= 1;
+	while !sc.cr.hserdy && n != 0;  // wait for HSE ready
+	if !sc.cr.hserdy then		// HSE is not working
+	    return false;
+
+	// setup voltage regulator
+	// FIXME - ClockEnable(PWR);
+	sc.apb1clk[chip.dev[PWR].inx] = true;
+	pwr.cr.vos = S1;	// voltage regulator scale 1
+
+	// setup bus clock dividers
+	sc.cfgr.hpre =  DIV1;	// AHB: HCLK at SYSCLK
+	sc.cfgr.p1pre = DIV4;	// APB1 at HCLK/4
+	sc.cfgr.p2pre = DIV2;	// APB2 at HCLK/2
+
+	// setup the PLL scaling and turn it on
+	sc.pllcfg = {.pllm=PLLM,.plln=PLLN,.pllq=PLLQ,
+		     .pllp=(PLLP/2)-1,.pllsrc=HSE};
+	sc.cr.pllon = true;
+	while !sc.cr.pllrdy do {}	// FIXME - possible infinity
+
+	// setup flash I$ D$ enable and wait states
+	flash.Init();
+
+	// set PLL as system clock source
+	sc.cfgr.sw = PLL;
+	while sc.cfgr.sws != PLL do {}	// FIXME- possible infinity
+
+	return true;	
+    }
+}
+

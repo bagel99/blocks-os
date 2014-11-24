@@ -1,0 +1,26 @@
+// SIMPLE TEST OF UART
+
+import sys;
+import uart;
+
+var HeapStart: _memory: external("_end");
+proc meminit(addr: _address, size: _uint, pool: _uint): : external;
+
+const text = "Hello world!\n";
+
+proc main(): _int
+{
+    var u: uart.Uart;
+    var i, j: _uint;
+
+    sys.Init();
+    rcc.Init();		// FIXME - move to sys.Init()
+
+    u = uart.Init(sys.DebugPort);
+    for j from 0 to 99 do
+    {   for i from 0 to text?len-1 do
+    	    u.Send(text[i]); 
+    }
+    return 0;
+}
+

@@ -1,0 +1,37 @@
+/*
+ * Definitions for GPIO
+ *
+ * Copyright (c) 2012, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+
+package gpio
+{
+    // Ports
+    type Port: (A, B, C, D, E, F, G, H, I, J, K, _, _, _, _, X);
+    type PortDesc:
+    {   bit:  0..15;
+	port: Port;
+    }: packed, lsb;
+    type Mode:   (IN, OUT, AF, AIN);
+    type OType:  (PP, OD);		// push-pull or open-drain
+    type OSpeed: (S2, S25, S50, S100);
+    type Pull:   (NONE, UP, DOWN, _);   // pull-up/down
+    type AFT:
+    (	NONE,		TIM1_2,		TIM3_5,		TIM8_11,
+	I2C1_3,		SPI1_2,		SPI3,		USART1_3,
+	USART4_6,	CAN1_2TIM12_14,	OTGFS,		ETH,
+	SDIO,		DCMI,		_,		EVENT
+    );
+
+    type PortInit:
+    {   port:  PortDesc;	// .00-07
+        mode:  Mode;		// .08-09
+        ot:    OType;		// .10    type (output only?)
+        os:    OSpeed;		// .11-12 speed (output only?)
+        pu:    Pull;		// .13-14 pull up/down
+        af:    AFT;		// .15-18 alternate function
+    }: packed, lsb, bits(32);
+}
+

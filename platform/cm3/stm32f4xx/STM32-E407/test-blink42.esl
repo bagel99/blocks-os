@@ -1,0 +1,142 @@
+import sys;
+
+package debug
+{   const db_timer = 5;
+}
+
+import trace;
+import debug;
+
+
+import block;
+
+const TimerID: block.BlockID = 1;
+const AppID:   block.BlockID = 2;
+
+import timer;
+//import wait;
+
+package app
+{
+    const db = 1;
+    alias event.Event  as Event;
+    alias event.pEvent as pEvent;
+    alias timer.TimerEvent  as TimerEvent;
+    alias timer.pTimerEvent as pTimerEvent;
+    alias block.Block  as Block;
+    alias block.pBlock as pBlock;
+
+    type AppBlock(Block):
+    {   state: _uint8;
+    };
+    type pAppBlock: @AppBlock;
+
+    const UNIT = 100;	// 100 milliseconds
+
+    proc (ab: pAppBlock) Timeout(te: pTimerEvent)
+    {   var msec: _uint32;
+    	var on: boolean;
+
+	if ab.state
+	is 0, 2, 4, 6, 10, 12 then		// DOT, on 1 unit
+	{   msec = UNIT;
+	    on = true;
+	}
+	is 8, 14, 16, 18 then			// DASH, on 3 units
+	{   msec = UNIT*3;
+	    on = true;
+	}
+	is 1, 3, 5, 7, 11, 13, 15, 17 then	// off 1 unit
+	{   msec = UNIT;
+	    on = false;
+	}
+	is 9 then				// off 3 units
+	{   msec = UNIT*3;
+	    on = false;
+	}
+	is 19 then				// off 7 units
+	{   msec = UNIT*7;
+	    on = false;
+	}
+	ab.state += 1;
+	if ab.state >= 20 then ab.state = 0;
+
+    	if on then sys.ledon(0); else sys.ledoff(0);
+	
+	te.code = TSTART;
+	te.tag  = ab.id;
+	te.ticks = timer.MilliSecondsToTicks(msec);
+	TimerID.Send(te);
+    }
+
+    proc Run(b: pBlock, e: pEvent)
+    {   var ab: pAppBlock;
+
+	ab = pAppBlock(b);    
+	if e.code
+	is TSTOPPED then
+	{   debug.str("cancelled");
+	}
+	is TDONE then ab.Timeout(pTimerEvent(e));
+	else
+	    debug.str("unknown event");
+    }
+
+    proc (ab: pAppBlock) Init()
+    {   var te: pTimerEvent;
+
+debug.str("app.Init\n");
+	ab.state = 0;
+	te = _new(TimerEvent);
+	te.code = TSTART;
+	te.tag  = ab.id;
+	te.ticks = timer.SecondsToTicks(2);
+	TimerID.Send(te);
+    }
+
+    proc NewBlock(id: block.BlockID): pBlock
+    {   var ab: pAppBlock;
+
+	ab = _new(AppBlock);
+if db > 0 then { debug.str("app.NewBlock ");
+debug.uint8(id); debug.chr(' ');
+debug.hex(_uint(ab)); debug.nl(); }
+	ab.BlockInit(id, Run);
+	return ab;
+    }
+}
+
+var HeapStart: _memory: external("_end");
+proc meminit(addr: _address, size: _uint, pool: _uint): : external;
+
+proc main(): _int
+{
+    var ab: app.pAppBlock;
+
+    sys.Init();
+    rcc.Init();
+    meminit(HeapStart, 0x8000, 0);
+    timer.NewBlock(TimerID);
+    ab = app.pAppBlock(app.NewBlock(AppID));
+
+    ab.Init();
+{ var primask: _uint32;
+  asm "mrs\t$0,primask", "=r", primask;
+  debug.str("primask="); debug.uint(primask); debug.nl();
+}
+    loop
+    {   while block.Sched() do {}
+/*
+{ var icsr: _uint32;
+  icsr = _uint32(syscb.scb.icsr);
+  if icsr != 0 then
+  {  debug.str("icsr="); debug.hex32(icsr); debug.nl();
+  }
+}
+*/
+//        wait.Wait();
+    }
+
+    return 0;
+}
+

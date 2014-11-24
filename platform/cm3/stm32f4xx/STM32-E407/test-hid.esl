@@ -1,0 +1,57 @@
+/*
+ * Custom HID demo USB device
+ *
+ * main routine for STM-E407 platform
+ */
+
+// Board specific stuff
+import sys;
+//import trace;
+import uart;
+import debug;
+package debug
+{
+    const db_usbdev = 0xFFFF;
+}
+
+// Cortex M3 stuff
+import fault;
+import systick;
+import nvic;
+
+// STM32F10x stuff
+import rcc;
+import exti;
+
+import usbdev;
+import usb_ledbut;
+
+var button1, button2: boolean: in, out;
+
+proc EINT0_IRQ()
+{
+    button1 = true;
+    exti.ClearIntr(sys.BUT1);
+}
+
+
+proc meminit(addr: _address, size: _uint, pool: _uint): : external;
+
+proc main()
+{
+    rcc.Init();
+    sys.Init();
+    debug.Init();
+debug.str("Starting test-hid...\n");
+    meminit(0x2000_0000, 0x1_0000, 0);	// FIXME
+    exti.EnableIntr(sys.BUT1, RISING);	// WAKEUP 
+    usbdev.HIDInit();
+    loop
+    {   if button1 then
+    	{   button1 = false;
+    	    usbdev.Button(1);
+    	}
+    }
+}
+// vim: ts=8 sw=4 noet nowrap
+

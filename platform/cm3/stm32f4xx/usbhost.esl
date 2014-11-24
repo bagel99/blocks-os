@@ -1,0 +1,433 @@
+/*
+ * USB Host Driver for OTG_FS on STM32F107 and STM32F407
+ *
+ * Reference: ST RM0008, doc id 13902 rev 13
+ *
+ * Copyright (c) 2012, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+import rcc;
+import nvic;
+import usb;
+import otgfs;
+import mbuf;	// URBs are MBufs
+
+package usbhost
+{
+    if _defined(debug.db_usbhost) then
+	alias debug.db_usbhost as db;
+    else
+	const db = 0;
+    const db_chan =   0x0020;
+    const db_port =   0x0010;
+    const db_run =    0x0004;
+    const db_start =  0x0002;
+    const db_init =   0x0001;
+
+    // configuration of the 1270 bytes/320 word fifo memory
+    const HostRxFsiz = 128;     // in words = 512 bytes
+    const HostNPFsiz = 96;
+    const HostPFsiz  = 96;
+    
+    alias event.Event as Event;
+    alias event.pEvent as pEvent;
+    alias block.BlockID as BlockID;
+    alias block.Block as Block;
+    alias block.pBlock as pBlock;
+    alias mbuf.MBuf as MBuf;
+    alias mbuf.pMBuf as pMBuf;
+    alias usbevent.Pipe as Pipe;
+
+    alias otgfs.NHEP as NHEP;
+    alias otgfs.usbg as usbg;
+
+    type ChanChar:	// Host channel characteristics
+    {   mpsiz:  0..2047;	// .00-10 - maximum packet size
+	epnum:  0..15;		// .11-14 - end point number
+	epdir:  usb.EPDir;	// .15 - end point direction
+	_:      0..1;
+	lsdev:  boolean;	// .17 - is low speed device
+	eptyp:  usb.EPType;	// .18-19 - end point type
+	mcnt:   0..3;		// .20-21 - multicount (!=0)
+	dad:    0..127;		// .22-28 - device address
+	oddfrm: boolean;	// .29 - odd frame
+	chdis:  boolean;	// .30 - channel disable
+	chenb:  boolean;	// .32 - channel enable
+    }: packed, lsb, bits(32);
+    type ChanInts:	// Host channel interrupts
+    {   xfc:    boolean;	// .00 - transfer complete
+	chh:    boolean;	// .01 - channel halted
+	_:      boolean;	// .02 - reserved
+	stall:  boolean;	// .03 - stall response
+	nak:    boolean;	// .04 - NAK received
+	ack:    boolean;	// .05 - ACK received
+	nyet:   boolean;	// .06 - (mask only)
+	txerr:  boolean;	// .07 - transaction error
+	bberr:  boolean;	// .08 - babble error
+	frmor:  boolean;	// .09 - frame overrun
+	dterr:  boolean;	// .10 - data toggle error
+    }: packed, lsb, bits(32);
+    type TranSize:	// Host channel tranfer sizes
+    {   xfrsiz: 0..0x7FFF;	// .00-18 - transfer size
+	pktcnt: 0..0x3FF;	// .19-28 - packet count
+	dpid:   (DATA0,DATA2,DATA1,MDATA); // .29-30
+	_:      0..1;
+    }: packed, lsb, bits(32);
+    type HostChan:
+    {
+	char:   ChanChar: out;	// 00
+	_:      _uint32;	// 04
+	int:    ChanInts: in;	// 08 w1c
+	intmsk: ChanInts: out;	// 0C
+	tsiz:   TranSize: out;	// 10
+	_:      _uint32;	// 14
+	_:      _uint32;	// 18
+	_:      _uint32;	// 1C
+    };
+
+    type ChanMask: [16]boolean: packed, lsb, bits(32);
+    type PortTestControl: 0..0b1111;	// FIXME
+    type PortSpeed: (_, FS, LS, _);
+    type PortStatus:
+    {   pcsts:    boolean: ro;	// .00
+	pcdet:    boolean;	// .01 w1c
+	penb:     boolean;	// .02 w1c (WARNING: RM says w0c)
+	pechg:    boolean;	// .03 w1c
+	poca:     boolean: ro;	// .04
+	pochg:    boolean;	// .05 w1c
+	pres:     boolean;	// .06
+	psus:     boolean;	// .07
+	prst:     boolean;	// .08
+	_:        0..1;		// .09
+	plsts:    [2]0..1:ro;	// .10-11 status of DP, DM
+	ppwr:     (OFF,ON);	// .12
+	pctl:     PortTestControl; // .13-16
+	pspd:     PortSpeed;	// .17-18
+    }: packed, lsb, bits(32);
+    
+    type OTGHostRegs:
+    {
+	hcfg:								// 400
+	{   PhyClk:  (_, S48, S6 /*LS only*/, _);
+	    FSLS:    boolean: ro;
+	}: packed, lsb, bits(32), out;
+	hfir:	  _uint16: bits(32), out;				// 404
+	hfnum:								// 408
+	{   frnum:    _uint16: ro;
+	    ftrem:    _uint16: ro;
+	}: packed, lsb, bits(32), in;
+	_:        _uint32;						// 40C
+	hptxsts:							// 410
+	{   ptxfsavl: _uint16;
+	    ptxqsav:  _uint8: ro;
+	    ptxqtop:  _uint8: ro;
+	}: packed, lsb, bits(32), in;
+	haint:    ChanMask: in;						// 414
+	haintmsk: ChanMask: out;					// 418
+	// following is an array if more than one port
+	hport0:   PortStatus: in, out, at(0x040);			// 440
+	hc:      [NHEP] HostChan: at(0x100);				// 500
+    };
+    type host: @OTGHostRegs;
+    const usbh: host = 0x5000_0400;
+
+    type EPInfo:
+    {   pipe:    Pipe;
+	type:    usb.EPType;
+	active:  boolean;
+	chan:    0..NHEP-1;
+	urbh:    pMBuf;			// head of list of URBs
+    };
+    type State:
+    {	//uh:      HC;		// hardware registers
+	ep:     [NHEP]EPInfo;
+    };
+    type UHS: @State;
+
+    type UHBlock(Block):
+    {   bid:    BlockID;	// block ID of usb enumerator
+	state:  State;
+    };
+    type pUHBlock: @UHBlock;
+
+    var gub: pUHBlock;	// FIXME - a way for interrupt to get the state
+
+
+    proc ChanConfig(chnum: _uint, pipe: Pipe,
+			      type: usb.EPType, dir: usb.EPDir, lowspd: boolean,
+			      maxpkt: _uint)
+    {   var ints: ChanInts;
+	var chcfg: ChanChar;
+
+	usbh.hc[chnum].int = ChanInts(0xFFFF_FFFF); // clear any pending interrupts
+	if type
+	is CNTL, BULK then
+	{   if dir == OUT then
+		ints = {.xfc=true, .stall=true, .nak=true, .txerr=true, .dterr=true,
+			.nyet=true};
+	    else
+		ints = {.xfc=true, .stall=true, .nak=true, .txerr=true, .dterr=true,
+			.bberr=true};
+	}
+	is INTR then
+	{   if dir == OUT then
+		ints = {.xfc=true, .stall=true, .nak=true, .txerr=true, .dterr=true,
+			.frmor=true};
+	    else
+		ints = {.xfc=true, .stall=true, .nak=true, .txerr=true, .dterr=true,
+			.frmor=true, .bberr=true};
+	}
+	is ISOC then
+	{   if dir == OUT then
+		ints = {.xfc=true, .ack=true, .frmor=true};
+	    else
+		ints = {.xfc=true, .ack=true, .frmor=true, .txerr=true, .bberr=true};
+	}
+	usbh.hc[chnum].intmsk = ints;
+	usbh.haintmsk[chnum] = true;
+	usbg.intmsk.hchan = true;
+
+	chcfg = { .mpsiz = maxpkt,
+		  .epnum = pipe.epn,
+		  .epdir = dir,
+		  .eptyp = type,
+		  .oddfrm= type == INTR,
+		  .lsdev = lowspd,
+		  .dad   = pipe.dev };
+	usbh.hc[chnum].char = chcfg;    
+    }
+
+
+    proc (hs: UHS) SubmitURB(dir: usb.EPDir, mb: pMBuf): boolean
+    {
+    }
+
+    proc (hs: UHS) ActivateEP(pipe: Pipe, type: usb.EPType, speed: usb.Speeds, 
+			      maxpkt: _uint, interval: _uint8): boolean
+    {
+    }
+
+    proc (hs: UHS) Init()
+    {
+
+if db & db_init != 0 then debug.str("HostInit\n");
+	usbg.CoreInit();
+	usbg.SetHostMode();
+    }
+
+    proc (hs: UHS) Start()
+    {
+if db & db_init != 0 then debug.str("HostStart\n");
+	// Initialize core host-mode registers
+	usbg.intmsk.hport = true;	// enable port interrupt
+	usbh.hcfg.FSLS = true;		// is this bit ro?
+	// power the bus
+	sys.usbpower(0, true);
+	usbh.hport0.ppwr = ON;		// turn on port power
+	// Allocate memory to Rx/Tx FIFOs
+	usbg.rxfsiz   = {.depth=HostRxFsiz};    // receive
+	usbg.tx0fsiz  = {.start=HostRxFsiz,
+			 .depth=HostNPFsiz};    // transmit none-periodic
+	usbg.ptxfsiz  = {.start=HostRxFsiz+HostNPFsiz,
+			 .depth=HostPFsiz};     // transmit periodic
+	// Flush FIFOs
+	usbg.FlushTxFIFO(16);
+	usbg.FlushRxFIFO();
+	// assume FS rates
+	usbh.hcfg.PhyClk = S48;
+//	usbh.hfir = 48000;
+
+	usbg.SetGlobalIntr(true);
+    }
+
+    proc ChanInit()
+    {
+    }
+
+    proc PortReset()
+    {   var sts: PortStatus;
+
+if db & db_port != 0 then debug.str("PRst\n");
+	sts = usbh.hport0;
+	sts.prst = true;	// bus reset on
+	usbh.hport0 = sts;
+	sys.Delay_mS(20);
+	sts.prst = false;       // bus reset off
+	usbh.hport0 = sts;
+	sys.Delay_mS(20);	// FIXME - Delay?
+    }
+
+    proc Enable(psts: PortStatus): boolean
+    {   var mps: _uint;
+	var speed: usb.Speeds;
+if db & db_port != 0 then { debug.str("PEnbl ");
+debug.uint32(_uint32(usbh.hfir)); debug.chr(' ');
+debug.hex32(_uint32(usbh.hcfg)); debug.nl(); }
+	if psts.pspd
+	is LS then
+	{   usbh.hfir = 6000;
+	    if usbh.hcfg.PhyClk != S6 then
+	    {   usbh.hcfg.PhyClk = S6;
+		return true;
+	    }
+	    speed = LOW;
+	    mps = 8;
+	}
+	is FS then
+	{   usbh.hfir = 48000;
+	    if usbh.hcfg.PhyClk != S48 then
+	    {   usbh.hcfg.PhyClk = S48;
+		return true;
+	    }
+	    speed = LOW;
+	    mps = 64;
+	}
+	else
+	    return true;
+	// Activate a control endpoint, both IN and OUT
+	ChanConfig(0, {.dev=0, .epn=0}, CNTL, OUT, speed==LOW, mps);
+	ChanConfig(1, {.dev=0, .epn=0}, CNTL, IN,  speed==LOW, mps);
+	
+	// FIXME: Are we ready to go?
+	var ie: usbevent.pInformEvent;
+	ie = usbevent.AllocInformEvent();	// FIXME - alloc in interrupt
+	ie.tag = gub.id;
+	ie.mtu = mps;
+	ie.speed = speed;
+	gub.bid.Send(ie);	
+	
+	return false;
+    }
+
+    proc Disable(psts: PortStatus)
+    {
+if db & db_port != 0 then debug.str("PDisa\n");
+    }
+
+    proc Connect()
+    {
+if db & db_port != 0 then debug.str("PConn\n");
+    }
+
+    proc Disconnect()
+    {
+if db & db_port != 0 then debug.str("PDisc\n");
+    }
+
+    proc PortIntr()
+    {   var oldsts, newsts: PortStatus;
+	var doreset: boolean;
+
+	doreset = false;
+	oldsts = usbh.hport0;
+	newsts = oldsts;
+	newsts.penb = false;    // write 1 clears, forget what the RM says
+	newsts.pcdet = false;
+	newsts.pechg = false;
+	newsts.pochg = false;
+if db & db_port != 0 then
+{ debug.str("PI "); debug.hex32(_uint32(oldsts)); debug.nl(); }
+	if oldsts.pcdet then
+	{   newsts.pcdet = true;   // clear condition
+	    if oldsts.pcsts then
+	    {   Connect();
+		doreset = true;
+	    }
+	    else
+		Disconnect();
+	}
+	if oldsts.pechg then
+	{   newsts.pechg = true;   // clear condition
+	    if oldsts.penb then
+	    {
+		doreset = Enable(oldsts);
+	    }
+	    else
+	    {
+		Disable(oldsts);
+		doreset = true;     // connected but not enabled?
+	    }
+	}
+	if oldsts.pochg then
+	{   newsts.pochg = true;   // clear condition
+	}
+	usbh.hport0 = newsts;   // clear all conditions
+	if doreset then PortReset();    
+if db & db_port != 0 then
+{ debug.str("Pi "); debug.hex32(_uint32(newsts)); debug.chr(' ');
+debug.hex32(_uint32(usbh.hport0)); debug.nl(); }
+    }
+
+    proc ChanIntr()
+    {
+if db & db_port != 0 then { debug.str("CI "); debug.nl(); }
+    }
+
+    proc (sts: otgfs.IntSts) HostIntr()
+    {
+	if sts.hport then
+	{   //usbg.intsts.hport = true;	// clear interrupt
+	    PortIntr();
+	}
+	if sts.hchan then
+	{   usbg.intsts.hchan = true;	// clear interrupt
+	    ChanIntr();
+	}
+    }
+
+    proc (sts: otgfs.IntSts) DevIntr(): : weak
+    {
+    }
+
+    proc Run(b: pBlock, e: pEvent)
+    {   var ub: pUHBlock;
+
+	ub = pUHBlock(b);
+	if e == 0 then
+	{
+//if db > 4 then { debug.str("usbh.Run I\n"); }
+//	    ub.Intr();
+	}
+	else
+	{
+if db & db_run != 0 then { debug.str("usbh.Run ");  debug.uint8(_uint8(e.code));
+debug.chr(','); debug.uint8(e.tag); debug.nl(); }
+	    if e.code
+	    is SEND then
+	    	ub.state.SubmitURB(OUT, pMBuf(e));
+	    is RCVD then
+	    	ub.state.SubmitURB(IN, pMBuf(e));
+	    is ACTIVATE then
+	    {   var ae: usbevent.pActivateEvent;
+	    	ae = usbevent.pActivateEvent(e);
+	    	ub.state.ActivateEP(ae.pipe, ae.type, ae.speed, ae.mtu, ae.inter);
+	    	event.Free(ae);
+	    }
+	    is START then
+	    {   ub.bid = e.tag;
+		ub.state.Start();
+		event.Free(e);
+	    }
+	    else
+		event.Free(e);
+	}
+    }
+
+    proc NewBlock(id: BlockID): pBlock
+    {   var ub: pUHBlock;
+
+        ub = _new(UHBlock);
+        _zero(ub);
+if db != 0 then { debug.str("usbhost.NewBlock ");
+debug.uint8(id); debug.chr(' ');
+debug.hex(_uint(ub)); debug.nl(); }
+	ub.BlockInit(id, Run);
+//	ub.SetIntr(vector);
+        gub = ub;      		// FIXME
+	ub.state.Init();	// FIXME
+	return ub;
+    }
+}
+// vim: ts=8 sw=4 noet nowrap
+

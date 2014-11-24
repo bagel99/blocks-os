@@ -1,0 +1,971 @@
+/*
+ * USB Device Driver for OTG_FS on STM32F107 and STM32F407
+ *
+ * Reference: ST RM0008, doc id 13902 rev 13
+ *
+ * Copyright (c) 2012, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+import rcc;
+import nvic;
+import usb;
+import otgfs;
+
+package usbdev
+{
+    if _defined(debug.db_usbdev) then
+	alias debug.db_usbdev as db;
+    else
+	const db = 0;
+    const db_int =    0x8000;
+    const db_iepd =   0x2000;
+    const db_oepd =   0x1000;
+    const db_tx =     0x0200;
+    const db_strt =   0x0100;
+    const db_sof =    0x0080;
+    const db_other =  0x0040;
+    const db_sudump = 0x0020;
+    const db_setup =  0x0010;
+    const db_sa =     0x0008;
+    const db_act  =   0x0004;
+    const db_start =  0x0002;
+    const db_init =   0x0001;
+
+    alias otgfs.NumTxFIFO as NumTxFIFO;
+    alias otgfs.usbg as usbg;
+
+    /*
+     * HARDWARE REGISTERS - Device Mode Registers
+     */
+    const NumEP = 3;
+    type EPnum: 0..NumEP-1;
+    type EPType: (CTRL, ISOC, BULK, INTR);
+    type EPSpeed: (LOW, FULL, HIGH);
+    type EPDescriptor:
+    {   num:   _uint8;  // ored with 0x80 if IN
+        type:  EPType: bits(8);
+        maxpkt:_uint16;
+    }: packed;
+
+    // Endpoint 0 size field is different
+    const EP0SIZE64 = 0;
+    const EP0SIZE32 = 1;
+    const EP0SIZE16 = 2;
+    const EP0SIZE8  = 3;
+    type IEPCTL0:
+    {   mpsiz:       (byte64, byte32, byte16, byte8);   // .00-01
+	_:           0..0x1FFF;		// .02-14
+	usbaep:      boolean: ro;	// .15
+	_:           0..1;		// .16
+	naksts:      boolean: ro;	// .17
+	eptype:      EPType: ro;	// .18-19
+	_:           0..1;		// .20
+	stall:       boolean;		// .21: wc
+	txfnum:      0..15;		// .22-25
+	cnak:        boolean: wo;	// .26
+        snak:        boolean: wo;	// .27
+	_:           0..0b11;		// .28-29
+	epdis:       boolean: ro;	// .30
+	epena:       boolean: ro;	// .31
+    }: packed, lsb;
+    type IEPCTLx:
+    {   mpsiz:       0..2047;		// .00-10
+	_:           0..0b1111;		// .11-14
+	usbaep:      boolean;		// .15
+	dpid:        0..1: ro;		// .16 eonum (isoc)
+	naksts:      boolean: ro;	// .17
+	eptype:      EPType;		// .18-19
+	_:           0..1;		// .20
+	stall:       boolean;		// .21: wc
+	txfnum:      0..15;		// .22-25
+	cnak:        boolean: wo;	// .26
+	snak:        boolean: wo;	// .27
+	sp0pid:      boolean: wo;	// .28
+	soddfrm:     boolean: wo;	// .29
+	epdis:       boolean;		// .30
+	epena:       boolean;		// .31
+    }: packed, lsb;
+    type OEPCTL0:
+    {   mpsiz:       (byte64, byte32, byte16, byte8);	// .00-01
+	_:           0..0x1FFF;		// .02-14
+	usbaep:      boolean: ro;	// .15
+	_:           0..1;		// .16
+	naksts:      boolean: ro;	// .17
+	eptype:      EPType: ro;	// .18-19
+	_:           0..1;		// .20
+	stall:       boolean;		// .21: wc
+	_:           0..0b1111;		// .22-25
+	cnak:        boolean: wo;	// .26
+        snak:        boolean: wo;	// .27
+	_:           0..0b11;		// .28-29
+	epdis:       boolean;		// .30
+	epena:       boolean;		// .31
+    }: packed, lsb;
+    type OEPCTLx:
+    {   mpsiz:       0..2047;		// .00-10
+	_:           0..0b1111;		// .11-14
+	usbaep:      boolean;		// .15
+	dpid:        0..1: ro;		// .16 eonum (isoc)
+	naksts:      boolean: ro;	// .17
+	eptype:      EPType: ro;	// .18-19
+	_:           0..1;		// .20
+	stall:       boolean;		// .21: wc
+	_:           0..0b1111;		// .22-25
+	cnak:        boolean: wo;	// .26
+        snak:        boolean: wo;	// .27
+	sp0pid:      boolean: wo;	// .28
+	soddfrm:     boolean: wo;	// .29
+	epdis:       boolean;		// .30
+	epena:       boolean;		// .31
+    }: packed, lsb;
+    type IEPINTx:
+    {   xfrc:        boolean;		// .00
+	epdis:       boolean;		// .01
+	_:           0..1;		// .02
+	timeout:     boolean;		// .03
+	ittxfe:      boolean;		// .04
+	_:           0..1;		// .05
+	inepne:      boolean;		// .06
+	txfempty:    boolean;		// .07
+	_:           0..0xFF_FFFF;      // .08-31   
+    }: packed, lsb;
+    type OEPINTx:
+    {   xfrc:        boolean;		// .00
+	epdis:       boolean;		// .01
+	_:           0..1;		// .02
+	setup:       boolean;		// .03
+	oteodis:     boolean;		// .04
+	_:           0..1;		// .05
+	b2bsetup:    boolean;		// .06
+	_:           0..0x1FF_FFFF;     // .07-31   
+    }: packed, lsb;
+    type EPTSIZx:
+    {   xfrsiz:      0..0x7FFFF;	// .00-18 EP0 has only 0x7F
+	pktcnt:      0..0x3FF;		// .19-28 EP0 has 1 (OUT) or 2 (IN) bits
+	mcnt:        0..3;		// .29-30 also used as setupcnt/rxdpid
+	_:           0..1;		// .31
+    }: packed, lsb;
+    type TXFSTSx:
+    {   avail:       0..65535;		// .00-15 avail FIFO space in words
+	_:           0..0xFFFF;		// .16-31
+    }: packed, lsb;
+
+
+    type OTGDeviceRegs:
+    {
+	cfg:								// 800
+	{   dspd:    (_,_,_,FULL);      // .00-01
+	    nzlsohsk:boolean;		// .02
+	    _:       0..1;		// .03
+	    dad:     0..0x7F;		// .04-10 device address
+	    pvifl:   (PC80, PC85, PC90, PC95); // .11-12
+	    _:       0..0x7_FFFF;       // .13-31
+	}: packed, lsb, out;
+	ctl:								// 804
+	{   rwusig:  boolean;		// .00
+	    softdis: boolean;		// .01
+	    ginsts:  boolean: ro;	// .02
+	    gonsts:  boolean: ro;	// .03
+	    tctl:    (DISABLED, J, K, SEQNAK, PACKET, FORCE, _, _);
+	    sginak:  boolean: wo;	// .07
+	    cginak:  boolean: wo;	// .08
+	    sgonak:  boolean: wo;	// .09
+	    cgonak:  boolean: wo;	// .10
+	    poprgdne:boolean;		// .11
+	    _:       0..0xF_FFFF;       // .12-31
+	}: packed, lsb, in, out;
+	sts:								// 808
+	{   suspsts: boolean: ro;	// .00
+	    enumspd: (_,_,_,FULL): ro;	// .01-02
+	    eerr:    boolean: ro;	// .03
+	    _:       0..0b1111: ro;     // .04-07
+	    sofn:    0..0x3FFF: ro;     // .08-21
+	    _:       0..0x3FF: ro;      // .22-31
+	}: packed, lsb, in;
+	_: _uint32;							// 80C
+	iepmsk:								// 810
+	{   xfrc:    boolean;		// .00
+	    epdis:   boolean;		// .01
+	    _:       0..1;		// .02
+	    timeout: boolean;		// .03
+	    ittxfe:  boolean;		// .04
+	    inepnmm: boolean;		// .05
+	    inepnem: boolean;		// .06
+	    _:       0..0x1FF_FFFF;     // .07-31
+	}: packed, lsb, out;
+	oepmsk:								// 814
+	{   xfrc:    boolean;		// .00
+	    epdis:   boolean;		// .01
+	    _:       0..1;		// .02
+	    setup:   boolean;		// .03
+	    oteodis: boolean;		// .04
+	    _:       0..1;		// .05
+	    b2bsetup:boolean;		// .06
+	    _:       0..0x1FF_FFFF;     // .07-31
+	}: packed, lsb, out;
+	aint:								// 818
+	{   iep:     [16]boolean: packed, lsb;
+	    oep:     [16]boolean: packed, lsb;
+	}: packed, lsb, in;
+	aintmsk:							// 81C
+	{   iep:     [16]boolean: packed, lsb;
+	    oep:     [16]boolean: packed, lsb;
+	}: packed, lsb, out;
+	_: [2]_uint32;							// 820
+	vbusdis:						        // 828
+	    _uint32;    // FIXME
+	vbuspulse:							// 82C
+	    _uint32;    // FIXME
+	_: _uint32;							// 830
+	iepempmsk:							// 834
+	{   iep:     [16]boolean: packed, lsb;
+	    _:       _uint16;
+	}: packed, lsb, out;
+	_: [50]_uint32;							// 838
+	iep: [NumTxFIFO]						// 900
+	{   ctl:    IEPCTLx: in, out;    // End Point 0 is different
+	    _:  _uint32;
+	    int:    IEPINTx: in, out;
+	    _:  _uint32;
+	    tsiz:   EPTSIZx: in, out;    // End Point 0 is different
+	    _:  _uint32;
+	    txfsts: TXFSTSx: in;
+	    _:  _uint32;
+	};
+	_:      [96]_uint32;
+	oep: [NumTxFIFO]				                // B00
+	{   ctl:    OEPCTLx: in, out;    // End Point 0 is different
+	    _:  _uint32;
+	    int:    OEPINTx: in, out;
+	    _:  _uint32;
+	    tsiz:   EPTSIZx: in, out;    // End Point 0 is different
+	    _:  [3]_uint32;
+	};
+	_:      [96]_uint32;
+	_:      [64]_uint32;
+	_:      [512]_uint32;
+	pcgcttl:							// E00
+	{   stoppclk:boolean;		// .00
+	    gatehclk:boolean;		// .01
+	    _:       0..0b11;
+	    physusp: boolean;		// .04
+	    _:       0..0x7FF_FFFF;
+	}: packed, lsb, in, out;
+
+    };
+    type dev: @OTGDeviceRegs;
+    const usbd: dev = 0x5000_0800;
+    
+    const MaxPktSize = 1024;
+    const MaxPktSize0 = 64;     // Endpoint 0 is special
+
+    proc (ud: dev) SetAddress(addr: _uint8)
+    {
+if db & db_sa != 0 then { debug.str("SA "); debug.hex8(addr); debug.nl();}
+	ud.cfg.dad = addr;
+    }
+
+    proc (ud: dev) SetDisconnect(disc: boolean)
+    {
+	ud.ctl.softdis = disc;
+	// Delay_mS(25);
+    }
+
+    proc (ud: dev) SetRemoteWakeup(enable: boolean)
+    {
+	ud.ctl.rwusig = enable;
+	// Delay_mS(25);
+    }
+
+    proc (ud: dev) FlushTxFIFO(epn: _uint)
+    {
+    }
+
+    proc (ud: dev) DumpEPInRegs(epnum: _uint)
+    {
+	var ctl: IEPCTLx;
+	var siz: EPTSIZx;
+	var int: IEPINTx;
+	var fst: TXFSTSx;
+
+	ctl = ud.iep[epnum].ctl;
+	int = ud.iep[epnum].int;
+	siz = ud.iep[epnum].tsiz;
+	fst = ud.iep[epnum].txfsts;
+	debug.str("IEP "); debug.uint(epnum); debug.chr(' ');
+	debug.hex32(_uint32(ctl));
+	debug.chr(' '); debug.hex32(_uint32(int));
+	debug.chr(' '); debug.uint(siz.xfrsiz);
+	debug.chr(','); debug.uint(siz.pktcnt);
+	debug.chr(','); debug.uint(siz.mcnt);
+	debug.chr(' '); debug.uint(fst.avail); debug.nl();
+    }
+
+    type EPState:
+    {   num:     _uint8;
+	t:
+	{   isconfig:boolean;
+	    isin:    boolean;
+	    islast:  boolean;
+	    type:    EPType;
+	    txfifo:  0..3;
+	}: packed;
+	maxpkt:  _uint16;
+	xferlen: _uint16;
+	xfercnt: _uint16;
+	xferbuf: _address;
+    };
+    type eps: @EPState;
+
+    type ControlState:      // state of control pipe
+    (   DISC, IDLE, DATAIN, DATAOUT, STATUSIN, STATUSOUT, STALL);
+    type DeviceState:       // generic device state
+    {   ep0:     EPState;
+	inx:     [NumTxFIFO-1]EPState;
+	outx:    [NumTxFIFO-1]EPState;
+	state:   ControlState;		// state of control pipe
+	buf:     [8]_byte: align(4);    // for receiving setup
+    };
+    type udevst: @DeviceState;
+
+    var usbds: DeviceState;		// FIXME - allocate
+
+    /*
+     * The following are callbacks into the device "gadget" code
+     */
+    proc SetupOut(rqst: @usb.SetupPkt): _address, _uint;
+    proc SetupIn(rqst: @usb.SetupPkt): _address, _uint;
+    proc DataSent(ep: eps);
+    proc DataRcvd(ep: eps);
+
+    proc (ep: eps) EPTxFill(): boolean
+    {   var len, avail: _uint;
+
+	len = ep.xferlen - ep.xfercnt;
+	if len > ep.maxpkt then len = ep.maxpkt;
+	avail = usbd.iep[ep.num].txfsts.avail * 4;
+	if len > avail then len = avail;
+if db & db_tx != 0 then {debug.str("TxF "); debug.uint(ep.num);
+debug.str(" a="); debug.uint(avail);
+debug.str(" l="); debug.uint(len);
+debug.str(" c="); debug.uint(ep.xfercnt); debug.nl();}
+	usbg.WritePacket(ep.num, ep.xferbuf[ep.xfercnt: len], len);
+	ep.xfercnt += len;
+	return ep.xfercnt == ep.xferlen;    // nothing remaining
+    }
+
+    proc (ep: eps) StartIn(buf: _address, len: _uint)
+    {   var ctl: IEPCTLx;
+	var tsiz: EPTSIZx;
+	var ud: dev = usbd;
+
+if db & db_strt != 0 then {debug.str("Si\n");}
+	ep.xferbuf = buf;
+	ep.xferlen = len;
+	ep.xfercnt = 0;
+	ctl = ud.iep[ep.num].ctl;
+	tsiz = ud.iep[ep.num].tsiz;
+	if len == 0 then
+	{   tsiz.xfrsiz = 0;
+	    tsiz.pktcnt = 1;
+	}
+	else
+	{   tsiz.xfrsiz = ep.xferlen;
+	    tsiz.pktcnt = (ep.xferlen + (ep.maxpkt-1)) / ep.maxpkt;
+	    if ep.t.type == ISOC then
+		tsiz.mcnt = 1;
+	}
+	ud.iep[ep.num].tsiz = tsiz;
+	if ep.t.type == ISOC then
+	{   if (ud.sts.sofn & 1) == 0 then
+		ctl.soddfrm = 1;
+	    else
+		ctl.sp0pid = 1;
+	}
+	else
+	    ud.iepempmsk.iep[ep.num] = true;    // enable TxFIFO empty interrupt
+	ctl.cnak = true;
+	ctl.epena = true;
+	ud.iep[ep.num].ctl = ctl;
+    }
+
+    proc (ep: eps) StartOut(buf: _address, len: _uint)
+    {   var ud: dev = usbd;
+	var ctl: OEPCTLx;
+	var siz: EPTSIZx;
+
+if db & db_strt != 0 then {debug.str("So\n");}
+	ep.xferbuf = buf;
+	ep.xferlen = len;
+	ep.xfercnt = 0;
+	ctl = ud.oep[ep.num].ctl;
+	siz = ud.oep[ep.num].tsiz;
+	if len == 0 then
+	{   siz.xfrsiz = ep.maxpkt;
+	    siz.pktcnt = 1;
+	}
+	else
+	{   siz.pktcnt = (ep.xferlen + (ep.maxpkt-1)) / ep.maxpkt;
+	    siz.xfrsiz = siz.pktcnt * ep.maxpkt;
+	}
+	ud.oep[ep.num].tsiz = siz;
+	if ep.t.type == ISOC then
+	{   if ep.t.islast then
+		ctl.soddfrm = 1;
+	    else
+		ctl.sp0pid = 1;
+	}
+	ctl.cnak = true;
+	ctl.epena = true;
+	ud.oep[ep.num].ctl = ctl;
+    }
+
+    proc (ep: eps) EP0StartOutForSetup()
+    {   var ud: dev = usbd;
+
+if db & db_setup != 0 then debug.str("EP0S\n");
+	// mcnt below is really setup count
+	ud.oep[0].tsiz = { .xfrsiz = 8*3, .pktcnt=1, .mcnt=3 };
+    }
+
+    proc (ep: eps) EP0StartOut(buf: _address, len: _uint)
+    {   var ud: dev = usbd;
+	var ctl: OEPCTLx;
+	var siz: EPTSIZx;
+
+if db & db_setup != 0 then {debug.str("EP0SO "); debug.uint(len); debug.nl();}
+	ep.t.isin = false;
+	ep.xferbuf = buf;
+	ep.xferlen = len;
+	ep.xfercnt = 0;
+	ctl = ud.oep[0].ctl;
+	siz = ud.oep[0].tsiz;
+	siz.xfrsiz = ep.maxpkt;    // WHY?
+	siz.pktcnt = 1;
+	ud.oep[0].tsiz = siz;
+	ctl.cnak = true;    // stop NAKing
+	ctl.epena = true;   // ro for EP0?
+	ud.oep[0].ctl = ctl;
+    }
+
+    proc (ep: eps) EP0StartIn(buf: _address, len: _uint)
+    {   var ud: dev = usbd;
+	var ctl: IEPCTLx;
+	var tsiz: EPTSIZx;
+
+if db & db_setup != 0 then {debug.str("EP0SI "); debug.uint(len); debug.nl();}
+	ep.t.isin = true;
+	ep.xferbuf = buf;
+	ep.xferlen = len;
+	ep.xfercnt = 0;
+	ctl = ud.iep[0].ctl;
+	tsiz = ud.iep[0].tsiz;
+	if ep.xferlen == 0 then
+	    tsiz.pktcnt = 1;
+	else
+	    tsiz.pktcnt = (ep.xferlen + (ep.maxpkt-1)) / ep.maxpkt;
+	tsiz.xfrsiz = ep.xferlen;
+	ud.iep[0].tsiz = tsiz;
+	ctl.cnak = true;    // stop NAKing
+	ctl.epena = true;   // ro for EP0?
+	ud.iep[0].ctl = ctl;
+//if db & db_setup != 0 then ud.DumpEPInRegs(0); 
+	if ep.xferlen > 0 then
+	    ud.iepempmsk.iep[0] = true;     // enable fifo empty interrupt
+    }
+
+    proc (ep: eps) EP0Activate()
+    {   var ud: dev = usbd;
+
+if db & db_setup != 0 then debug.str("EP0Activate\n");
+	ud.iep[0].ctl.mpsiz = EP0SIZE64;
+//	ud.ctl.sginak = true;
+    }
+
+    proc (uds: udevst) GetOutEP(epnum: _uint): eps
+    {
+	if epnum == 0 then
+	    return uds.ep0;
+	else
+	    return uds.outx[epnum-1];
+    }
+
+    proc (uds: udevst) GetInEP(epnum: _uint): eps
+    {
+	if epnum == 0 then
+	    return uds.ep0;
+	else
+	    return uds.inx[epnum-1];
+    }
+
+
+    // First part of a setup transaction is in buf
+    proc (uds: udevst) EP0Setup()
+    {   var rqst: usb.pSetupPkt;
+	var adr: _address;
+	var len: _uint;
+
+if db & db_sudump != 0 then debug.dumpb("setup", uds.buf, 8);
+        rqst = usb.pSetupPkt(uds.buf[0:8]);
+        if rqst.type.dir == IN then
+        {   adr, len = SetupIn(rqst);
+	    uds.state = DATAIN;
+	    uds.ep0.EP0StartIn(adr, _min(len, rqst.length));
+	}
+	else    // dir == OUT
+	{   // handle SetAddress here
+	    if rqst.type == {.dir=OUT,.stype=Standard, .recip=Device} &&
+	       usb.StandardRequests(rqst.request) == SetAddress then
+		usbd.SetAddress(rqst.value&0xFF);        
+	    else 
+		adr, len = SetupOut(rqst);
+            if rqst.length != 0 then
+	    {   uds.state = DATAOUT;
+		uds.ep0.EP0StartOut(adr, _min(len, rqst.length));
+	    }
+	    else
+	    {   uds.ep0.t.isin = true;
+		uds.state = STATUSIN;
+		uds.ep0.EP0StartIn(0,0);
+	    }
+	}
+    }
+
+    const StateName:[ControlState]@[]_byte =
+    { "DC", "ID", "DI", "DO", "SI", "SO", "ST" };
+
+    proc (uds: udevst) EP0Process()
+    {
+if db & db_setup != 0 then {debug.str("EP0P ");
+debug.str(StateName[uds.state]); debug.nl();}
+	if uds.state
+	is DISC then {}
+	is IDLE then
+	    uds.EP0Setup();
+	is DATAIN then
+	{   if uds.ep0.xfercnt < uds.ep0.xferlen then
+	    {   // continue the transfer
+if db & db_setup != 0 then debug.str("DIn\n");
+	    }
+	    // FIXME: handle zero length packet
+	    else
+	    {   // complete transfer
+		uds.state = STATUSOUT;
+		uds.ep0.EP0StartOut(0,0);
+	    }
+	}
+	is DATAOUT then
+	{   if uds.ep0.xfercnt < uds.ep0.xferlen then
+	    {   // continue the transfer
+if db & db_setup != 0 then debug.str("DOn\n");
+	    }
+	    // FIXME: handle zero length packet
+	    else
+	    {   // complete transfer
+		uds.state = STATUSIN;
+		uds.ep0.EP0StartIn(0,0);
+	    }
+	}
+	is STATUSIN, STATUSOUT then
+	{
+	    // set ep0.xfercnt, etc to zero
+	    uds.state = IDLE;
+	}
+	is STALL then {}
+    }
+
+    proc (uds: udevst) EPInit0()
+    {   var i: _uint;
+
+	// Endpoint 0 is different
+	uds.ep0.num = 0;
+	uds.ep0.t.isin = false;       // start in output mode?
+	uds.ep0.t.type = CTRL;
+	uds.ep0.t.txfifo = 0;
+	uds.ep0.maxpkt = MaxPktSize0;
+	uds.ep0.xferbuf = 0;
+	uds.ep0.xferlen = 0;
+	for i from 0 to NumEP-1 do
+	{   uds.inx[i].t =  { .isconfig=false };
+	    uds.outx[i].t = { .isconfig=false };
+	}
+    }
+
+    proc (ep: eps) Activate()
+    {   var ud: dev = usbd;
+
+	if ep.t.isin then
+	{
+if db & db_act != 0 then { debug.str("Ai "); debug.uint(ep.num); debug.nl();}
+	    // only write control register if not already active
+	    if !ud.iep[ep.num].ctl.usbaep then
+		ud.iep[ep.num].ctl = { .mpsiz = ep.maxpkt,
+				       .eptype = ep.t.type,
+				       .txfnum = ep.t.txfifo,
+				       .sp0pid = true,
+				       .usbaep = true };
+	    ud.aintmsk.iep[ep.num] = true;
+	}
+	else
+	{
+if db & db_act != 0 then { debug.str("Ao "); debug.uint(ep.num); debug.nl();}
+	    // only write control register if not already active
+	    if !ud.oep[ep.num].ctl.usbaep then
+		ud.oep[ep.num].ctl = { .mpsiz = ep.maxpkt,
+				       .eptype = ep.t.type,
+				       .sp0pid = true,
+				       .usbaep = true };
+	    ud.aintmsk.oep[ep.num] = true;
+	}
+    }
+
+    proc EPAllocate(epd: EPDescriptor): eps
+    {   var ep: eps;
+	var epn: EPnum;
+	var isin: boolean;
+
+	isin = (epd.num & 0x80) != 0;
+	epn =   epd.num & 0x7F;
+	if epn == 0 || epn > NumEP then return 0;
+	if isin then
+	{   ep = usbds.inx[epn-1];
+	}
+	else
+	{   ep = usbds.outx[epn-1];
+	}
+	ep.num = epn;
+	ep.maxpkt = epd.maxpkt;
+	ep.t = { .isconfig=true, .type=epd.type, .isin=isin, .txfifo=epn };
+	return ep;	
+    }
+
+proc (ep: eps) EPDump()
+{
+debug.str("EP"); debug.uint8(ep.num);
+if ep.t.isconfig then
+{   debug.str(" config type=");
+    debug.uint8(ep.t.type);
+    if ep.t.isin then
+    {   debug.str(" IN txfifo="); debug.uint8(ep.t.txfifo);
+    }
+    else debug.str(" OUT");
+    debug.str(" maxpkt=");
+    debug.uint16(ep.maxpkt);
+}
+debug.nl();
+}
+
+const TEST: boolean = true;
+
+    proc DeviceStart()
+    {
+	var ud: dev = usbd;
+	var i: _uint;
+	var offs, size: _uint;
+
+	/*
+	 * Now that all endpoints have been allocated, we can
+	 * set all FIFO offsets and sizes (units are words not bytes).
+	 */
+	// Set global rx fifo size as sum of rx sizes
+if TEST then {
+    size = 128;
+} else {
+	size = usbds.ep0.maxpkt/4 + 2;  // 2 overhead words
+	for i from 0 to NumEP-1 do
+	{   if usbds.outx[i].t.isconfig then
+		size += usbds.outx[i].maxpkt/4 + 2;
+//usbds.outx[i].EPDump();
+	}
+}
+if db & db_start != 0 then {debug.str("rxfsiz="); debug.uint(size); debug.nl();}
+	usbg.rxfsiz = { .depth=size };
+	// Now do the transmit fifo sizes
+	offs = size;
+if TEST then {
+    size = 16;
+} else {
+	size = usbds.ep0.maxpkt/4;
+}
+if db & db_start != 0 then {debug.str("txfsiz0="); debug.uint(size);
+debug.str(" start="); debug.uint(offs); debug.nl();}
+	usbg.tx0fsiz = { .start=offs, .depth=size };
+	for i from 0 to NumEP-1 do
+	{   if usbds.inx[i].t.isconfig then
+	    {   offs += size;
+		size = usbds.inx[i].maxpkt/4;
+		size = _max(size, 16);
+if db & db_start != 0then {debug.str("txfsiz"); debug.uint(i+1);
+debug.chr('='); debug.uint(size);
+debug.str(" start="); debug.uint(offs); debug.nl();}
+		usbg.txfsiz[i] = { .start=offs, .depth=size };
+	    }
+//usbds.inx[i].EPDump();
+	}
+
+	// Flush the FIFOs
+	usbg.FlushTxFIFO(16);	// 16 means flush all
+	usbg.FlushRxFIFO();
+	// Clear any pending interrupts
+	ud.oepmsk = { .xfrc=false };	// disable all
+	ud.iepmsk = { .xfrc=false };	// disable all
+	ud.aint = { {[0..15]=true}, {[0..15]=true} };	// clear all
+	ud.aintmsk = { {[0]=false}, {[0]=false} };    // disable all
+	ud.aintmsk = { {[0]=true}, {[0]=true} };    // enable EP0 interrupts
+	// Enable device interrupts and global interrupt
+	usbg.intmsk = { .usbrst=true, .usbsusp=true, .wkupint=true,
+		      .enumdne=true, .rxflvl=true, .iepint=true, .oepint=true };
+	usbg.SetGlobalIntr(true);
+    }
+
+    proc DeviceInit()
+    {   var ud: dev = usbd;
+
+if db & db_init != 0 then debug.str("DeviceInit\n");
+	usbg.CoreInit();
+	// Initialize all EP software state
+	usbds.EPInit0();
+	usbg.SetDeviceMode();
+	/*
+	 * Initialize core device-mode registers
+	 */
+	ud.cfg.dspd = FULL;	// Set device speed
+	// Restart Phy clock
+	// FIXME missing
+	ud.cfg.pvifl = PC80;
+    }
+
+    /*
+     * Device Mode Interrupt Handlers
+     */
+
+    // Device reset by host interrupt handler
+    proc DeviceReset()
+    {   var ud: dev = usbd;
+	var i: _uint;
+
+if db & db_other != 0 then {debug.str("RST\n");}
+	ud.ctl.rwusig = 0;      // clear remote wakeup signalling
+	ud.FlushTxFIFO(0);
+	// clear any pending interrupts
+	i = 0;
+	while i < NumTxFIFO do
+	{   ud.iep[i].int = 0xFF;
+	    ud.oep[i].int = 0xFF;
+	    i += 1;
+	}
+	ud.aint = { {[0..15]=true}, {[0..15]=true} }; // clear all EP interrupts
+	ud.aintmsk = { {[0]=true}, {[0]=true} };    // enable EP0 interrupts
+	ud.oepmsk = { .xfrc=true, .epdis=true, .setup=true, .b2bsetup=true };
+	ud.iepmsk = { .xfrc=true, .epdis=true, .timeout=true };
+	ud.SetAddress(0);   // address set to 0 because we got reset
+	usbds.ep0.EP0StartOutForSetup();
+	// call any implementation specific routine
+    }
+
+    // Enumeration done interrupt handler
+    proc EnumerationDone()
+    {
+if db & db_other != 0 then {debug.str("END\n");}
+	usbg.usbcfg.trdt = 9;		// why?
+	usbds.ep0.EP0Activate();	// only call
+	usbds.state = IDLE;
+	// call any implementation specific routine
+    }
+
+    // RxStatusQueue interrupt handler
+    proc RxStatusQueue()
+    {   var sts: otgfs.RecvDStatus;
+	var ep: eps;
+
+	usbg.intmsk.rxflvl = false;     // disable interrupt
+	// read and pop receive status
+	sts = usbg.rxstsp;
+if db & db_other != 0 then {debug.str("RSQ "); debug.hex32(_uint32(sts)); debug.nl();}
+	// get endpoint state
+	ep = usbds.GetOutEP(sts.epnum);
+	if sts.pktsts
+	is GOUT_NAK, OUT_FIN, SETUP_FIN then {}
+	is OUT then
+	{   if sts.bcnt != 0 then
+	    {   if ep.t.type == ISOC then
+		{   // FIXME
+		}
+		else
+		    usbg.ReadPacket(ep.xferbuf, sts.bcnt);
+		ep.xfercnt += sts.bcnt;
+	    }
+	    ep.xferlen = sts.bcnt;
+	}
+	is SETUP then
+	{   ep.xferbuf = usbds.buf;
+	    usbg.ReadPacket(ep.xferbuf, 8);
+	    ep.xfercnt += sts.bcnt;
+	    ep.xferlen = sts.bcnt;
+	}
+	// call any implementation specific routine
+	usbg.intmsk.rxflvl = true;     // re-enable interrupt
+    }
+
+    // Suspend interrupt handler
+    proc Suspend()
+    {
+if db & db_other != 0 then {debug.str("SUS\n");}
+    }
+
+    // StartOfFrame interrupt handler
+    proc StartOfFrame()
+    {
+//if db & db_sof != 0 then {debug.str("SOF\n");}
+    }
+
+    // Output Endpoint transfer(s) complete interrupt handler
+    proc OEPDone()
+    {   var ud: dev = usbd;
+	var aepint: ?ud.aint;
+	var epint: OEPINTx;
+	var ep: eps;
+	var i: _uint;
+
+	aepint = ud.aint;		// get interrupt status for all EPs
+if db & db_other != 0 then {debug.str("OED "); debug.hex32(_uint32(aepint)); debug.nl();}
+	i = 0;
+	// FIXME - ffo could speed this up
+	while i < NumTxFIFO do
+	{   if aepint.oep[i] then
+	    {   epint = ud.oep[i].int;  // get interrupt status for this EP
+if db & db_oepd != 0 then {debug.chr('\t'); debug.uint(i);
+debug.chr(' '); debug.hex32(_uint(epint)); debug.nl();}
+		if i == 0 then
+		    ep = usbds.ep0;
+		else
+		    ep = usbds.outx[i-1];
+		if epint.xfrc then      // transfer complete
+		{   if i == 0 then
+			usbds.EP0Process();
+		    else
+			DataRcvd(ep);
+		    ud.oep[i].int = { .xfrc=true };	// clear interrupt
+		}
+		if epint.setup then     // setup phase done
+		{   if i == 0 then
+		    {   usbds.EP0Process();
+			// FIXME - set Tx status
+		    }
+		    else
+			{}  // FIXME (can't happen?)
+		    ud.oep[i].int = { .setup=true };	// clear interrupt
+		}
+		if epint.b2bsetup then  // back-to-back setup received
+		{   if i == 0 then
+		    {   usbds.EP0Process();
+			// FIXME - set Tx status
+		    }
+		    else
+			{}  // FIXME (can't happen?)
+		    ud.oep[i].int = { .b2bsetup=true };	// clear interrupt
+		}
+		if epint.epdis then     // EP disable
+		{   ud.oep[i].int = { .epdis=true };	// clear interrupt
+		}
+	    }
+	    i += 1;
+	}
+    }
+
+    // Input Endpoint transfer(s) complete interrupt handler
+    proc IEPDone()
+    {   var ud: dev = usbd;
+	var aepint: ?ud.aint;
+	var epint: IEPINTx;
+	var ep: eps;
+	var i: _uint;
+
+	aepint = ud.aint;		// get interrupt status for all EPs
+if db & db_iepd != 0 then {debug.str("IED "); debug.hex32(_uint(aepint)); debug.nl();}
+	i = 0;
+	while i < NumTxFIFO do
+	{   if aepint.iep[i] then
+	    {   epint = ud.iep[i].int;  // get interrupt status for this EP
+if db & db_iepd != 0 then {debug.chr('\t'); debug.uint(i);
+debug.chr(' '); debug.hex32(_uint(epint)); debug.nl();}
+		if i == 0 then
+		    ep = usbds.ep0;
+		else
+		    ep = usbds.inx[i-1];
+		if epint.xfrc then      // transfer complete
+		{   ud.iepempmsk.iep[i] = false;
+		    if i == 0 then
+			usbds.EP0Process();
+		    else
+			DataSent(ep);
+		    ud.iep[i].int = { .xfrc=true };	// clear interrupt
+		}
+		if epint.txfempty then  // TxFIFO empty
+		{   if ep.EPTxFill() then
+			ud.iepempmsk.iep[i] = false;
+		    ud.iep[i].int = { .txfempty=true };	// clear interrupt
+		}
+		if epint.epdis then     // EP disable
+		{   ud.iep[i].int = { .epdis=true };	// clear interrupt
+		    // FIXME reset EP frame ID to 0
+		}
+		if epint.timeout then
+		{   ud.iep[i].int = { .timeout=true };	// clear interrupt
+		}
+		if epint.ittxfe then
+		{   ud.iep[i].int = { .ittxfe=true };	// clear interrupt
+		}
+		if epint.inepne then
+		{   ud.iep[i].int = { .inepne=true };	// clear interrupt
+		}
+	    }
+	    i += 1;
+	}
+    }
+
+    /*
+     * Device specific interrupt handler
+     */
+    proc (sts: otgfs.IntSts) HostIntr(): : weak
+    {
+    }
+
+    proc (sts: otgfs.IntSts) DevIntr()
+    {
+	if sts.enumdne then
+	{   usbg.intsts = { .enumdne=true };	// clear interrupt
+	    EnumerationDone();
+	}
+	if sts.usbrst then
+	{   usbg.intsts = { .usbrst=true };	// clear interrupt
+	    DeviceReset();
+	}
+	if sts.oepint then
+	{   usbg.intsts = { .oepint=true };	// clear interrupt
+	    OEPDone();
+	}
+	if sts.iepint then
+	{   usbg.intsts = { .iepint=true };	// clear interrupt
+	    IEPDone();
+	}
+	if sts.usbsusp then
+	{   usbg.intsts = { .usbsusp=true };	// clear interrupt
+	    Suspend();
+	}
+	if sts.rxflvl then
+	{   // read-only bit, can't be cleared
+	    RxStatusQueue();
+	}
+	if sts.sof then // FIXME - ignore?
+	{   usbg.intsts = { .sof=true };	// clear interrupt
+//	    StartOfFrame();
+	}
+	// clear any unhandled interrupts
+	usbg.intsts = { .esusp=true, .eopf=true,
+		  .cidschg=true, .srqint=true, .wkupint=true }; 
+    }
+}
+// vim: ts=8 sw=4 noet nowrap
+

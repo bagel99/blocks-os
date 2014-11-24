@@ -1,0 +1,65 @@
+/*
+ * STM32F40x Flash Memory Control
+ *
+ * Copyright (c) 2014, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+package flash
+{
+    /*
+     * Flash Memory Control Registers
+     */
+    const keyval1: _uint32 = 0x45670123;
+    const keyval2: _uint32 = 0xCDEF89AB;
+    const okeyval1:_uint32 = 0x08192A3B;
+    const okeyval2:_uint32 = 0x4C5D6E7F;
+
+    type FlashRegs:
+    {   acr:    		// reset=0x0000_0030			// 00
+	{   ws:    0..7;		//.00-02 wait states
+	    _:     0..0b11111;		//.03-07
+	    pfen:  boolean;		//.08
+	    icen:  boolean;		//.09
+	    dcen:  boolean;		//.10
+	    icrst: boolean;		//.11
+	    dcrst: boolean;		//.12
+    	}: packed, lsb, bits(32), out;
+    	keyr:  _uint32: wo;						// 04
+    	okeyr: _uint32: wo;						// 08
+    	sr:								// 0C
+    		_uint32;	// FIXME
+    	cr:								// 10
+		_uint32;
+    	ocr:								// 14
+		_uint32;
+    };
+    var fcc: FlashRegs : external(0x4002_3C00);
+
+    proc Init(): : inline
+    {
+    	// FIXME - why not .pfen=true?
+	fcc.acr = {.icen=true,.dcen=true,.ws=5};
+    }
+
+    /*
+	if sys.Voltage >= 27 then
+	{   ws = (sys.CoreClock + 29_999_999)/30_000_000;
+	    pf = true;
+	}
+	elif sys.Voltage >= 24 then
+	{   ws = (sys.CoreClock + 23_999_999)/24_000_000;
+	    pf = true;
+	}
+	elif sys.Voltage >= 21 then
+	{   ws = (sys.CoreClock + 21_999_999)/22_000_000;
+	    pf = true;
+	}
+	else
+	{   ws = (sys.CoreClock + 19_999_999)/20_000_000;
+	    pf = false;
+	}
+	fcc.acr = {.icen=true,.dcen=true,.pfen=pf.ws=ws};
+     */
+}
+

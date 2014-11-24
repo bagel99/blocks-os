@@ -1,0 +1,38 @@
+/*
+ * System configuration controller for STM32-F4xx
+ *
+ * Copyright (c) 2014, Brian G. Lucas.  See LICENSE file.
+ * $Id$
+ */
+
+package syscfg
+{
+
+    type EnetMII: (MII, RMII);
+    type ExtiReg: [4]0..15: packed, lsb, bits(32);
+    type Regs:
+    {   memrmp:
+	{   mode:  (MainFlash, SysFlash, FSMC1, SRAM1);
+	}: packed, lsb, bits(32), in, out;
+	pmc:
+	{   _:     0..0x7F_FFFF;
+	    phy:   EnetMII;
+	}: packed, lsb, bits(32), in, out;
+	exticr: [4]ExtiReg;
+	cmpcr:
+	{   enb:   boolean;
+	    _:     0..0x7F;
+	    rdy:   boolean: ro;
+	}: packed, lsb, bits(32), in, out;
+    };
+    var cfg: Regs: external(0x4001_3800);
+
+
+    proc Enet(mii: EnetMII)
+    {
+	rcc.ClockEnable(SYSCFG);
+	cfg.pmc.phy = mii;
+    }
+	
+}	    
+
