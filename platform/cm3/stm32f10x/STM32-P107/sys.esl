@@ -3,13 +3,8 @@
  * if pin-outs need to be remapped, external clocks, etc.
  *
  * Copyright (c) 2011, Brian G. Lucas.  See LICENSE file.
- * $Id: sys.esl 326 2012-02-24 22:06:49Z bgl $
+ * $Id$
  */
-
-import rcc;
-import syscb;
-import gpio;
-import nvic;
 
 package sys
 {
@@ -20,10 +15,9 @@ package sys
     const P2Divider = 1;
     const P1Clock = HClock/P1Divider;
     const P2Clock = HClock/P2Divider;
+    const TicksPerSecond = 50;
 
     const TopOfStack = 0x20010000;
-
-    const TicksPerSecond = 50;
 
     // USART3 is the debug port via RS232 connector on board
     const DebugPort = 3;
@@ -34,21 +28,23 @@ package sys
     const PhyAddr = 21;
     const PhyId1 = 0x0006;	// high bits of PHY vendor code
     const PhyId2 = 0x1c50;	// low bits of PHY vendor, model
+}
 
+import rcc;
+import syscb;
+import gpio;
+import nvic;
 
-    alias nvic.EnableAll as IntrEnableAll;
-    alias nvic.DisableAll as IntrDisableAll;
-    alias nvic.Enable as IntrEnable;
-    alias nvic.Disable as IntrDisable;
-
-    const LED1:  gpio.PortDesc = { .bit=6,  .port=C };
-    const LED2:  gpio.PortDesc = { .bit=7,  .port=C };
-    const MDINT: gpio.PortDesc = { .bit=14, .port=E };
-    const BUT1:  gpio.PortDesc = { .bit=0,  .port=A };
-    const BUT2:  gpio.PortDesc = { .bit=13, .port=C };
-    const SDCARD:gpio.PortDesc = { .bit=4,  .port=A };
-    const USBPWR:gpio.PortDesc = { .bit=7,  .port=D };
-    const USBVBUS:gpio.PortDesc= { .bit=9,  .port=A };
+package sys
+{
+    const LED1:  gpio.PortDesc = {.port=C,.bit= 6 };
+    const LED2:  gpio.PortDesc = {.port=C,.bit= 7 };
+    const MDINT: gpio.PortDesc = {.port=E,.bit=14 };
+    const BUT1:  gpio.PortDesc = {.port=A,.bit= 0 };
+    const BUT2:  gpio.PortDesc = {.port=C,.bit=13 };
+    const SDCARD:gpio.PortDesc = {.port=A,.bit= 4 };
+    const USBPWR:gpio.PortDesc = {.port=D,.bit= 7 };
+    const USBVBUS:gpio.PortDesc= {.port=A,.bit= 9 };
 
     /*
      * Even if the pin is set to the reset default (IN_FLOAT)
@@ -56,39 +52,45 @@ package sys
      * so the clock to the port is enabled.
      */
     const PinOut: [] gpio.PortInit =
-    {   { LED1,			GP_PP_50 },	// LED green
+    {	// LEDs
+	{ LED1,			GP_PP_50 },	// LED green
     	{ LED2,			GP_PP_50 },	// LED yellow
+	// buttons
     	{ BUT1,			IN_FLOAT },	// WAKE button
     	{ BUT2,			IN_FLOAT },	// TAMPER button
-    	{{ .bit=8,  .port=D },	AF_PP_50 },	// USART3_Tx
-    	{{ .bit=9,  .port=D },	IN_FLOAT },	// USART3_Rx
-    	{{ .bit=11, .port=D },	IN_FLOAT },	// USART3_CTS
-    	{{ .bit=12, .port=D },	AF_PP_50 },	// USART3_RTS
+    	// debug UART
+    	{{.port=D,.bit= 8},	AF_PP_50 },	// USART3_Tx
+    	{{.port=D,.bit= 9},	IN_FLOAT },	// USART3_Rx
+    	{{.port=D,.bit=11},	IN_FLOAT },	// USART3_CTS
+    	{{.port=D,.bit=12},	AF_PP_50 },	// USART3_RTS
+	// ethernet
     	{ MDINT,		IN_FLOAT },	// ETH_MDINT - EXTI 14
-    	{{ .bit=1,  .port=C },	AF_PP_50 },	// ETH_MDC
-    	{{ .bit=2,  .port=A },	AF_PP_50 },	// ETH_MDIO
-//    	{{ .bit=1,  .port=A },	IN_FLOAT },	// ETH_REF_CLK
-//	{{ .bit=7,  .port=A },	IN_FLOAT },	// ETH_CRS_DV
-    	{{ .bit=4,  .port=C },	IN_FLOAT },	// ETH_RX0
-    	{{ .bit=5,  .port=C },	IN_FLOAT },	// ETH_RX1
-    	{{ .bit=11, .port=B },	AF_PP_50 },	// ETH_TX_EN
-    	{{ .bit=12, .port=B },	AF_PP_50 },	// ETH_TX0
-    	{{ .bit=13, .port=B },	AF_PP_50 },	// ETH_TX1
-    	{{ .bit=5,  .port=B },	AF_PP_50 },	// ETH_PPS_OUT
-    	{{ .bit=8,  .port=A },	AF_PP_50 },	// MCO output
+    	{{.port=C,.bit= 1},	AF_PP_50 },	// ETH_MDC
+    	{{.port=A,.bit= 2},	AF_PP_50 },	// ETH_MDIO
+//    	{{.port=A,.bit= 1},	IN_FLOAT },	// ETH_REF_CLK
+//	{{.port=A,.bit= 7},	IN_FLOAT },	// ETH_CRS_DV
+    	{{.port=C,.bit= 4},	IN_FLOAT },	// ETH_RX0
+    	{{.port=C,.bit= 5},	IN_FLOAT },	// ETH_RX1
+    	{{.port=B,.bit=11},	AF_PP_50 },	// ETH_TX_EN
+    	{{.port=B,.bit=12},	AF_PP_50 },	// ETH_TX0
+    	{{.port=B,.bit=13},	AF_PP_50 },	// ETH_TX1
+    	{{.port=B,.bit= 5},	AF_PP_50 },	// ETH_PPS_OUT
+    	{{.port=A,.bit= 8},	AF_PP_50 },	// MCO output
+    	// sd card
     	{ SDCARD,	        IN_FLOAT },	// MMC_CS
-    	{{ .bit=10, .port=C },	AF_PP_50 },	// MMC_SPI_CLK (SPI3)
-    	{{ .bit=11, .port=C },	AF_PP_50 },	// MMC_SPI_MISO (SPI3)
-    	{{ .bit=12, .port=C },	AF_PP_50 },	// MMC_SPI_MOSI (SPI3)
-    	{{ .bit=11, .port=A },	AF_PP_50 },	// USB_DM
-    	{{ .bit=12, .port=A },	AF_PP_50 },	// USB_DP
+    	{{.port=C,.bit=10},	AF_PP_50 },	// MMC_SPI_CLK (SPI3)
+    	{{.port=C,.bit=11},	AF_PP_50 },	// MMC_SPI_MISO (SPI3)
+    	{{.port=C,.bit=12},	AF_PP_50 },	// MMC_SPI_MOSI (SPI3)
+    	// usb otg fs
+    	{{.port=A,.bit=11},	AF_PP_50 },	// USB_DM
+    	{{.port=A,.bit=12},	AF_PP_50 },	// USB_DP
     	{ USBVBUS,	        IN_FLOAT },	// USB_OTG_VBUS
-    	{{ .bit=10, .port=A },	IN_PULLUP},	// USB_OTG_ID
+    	{{.port=A,.bit=10},	IN_PULLUP},	// USB_OTG_ID
     	{ USBPWR,	        GP_PP_50 },	// USB_VBUS_ON
-    	{{ .bit=15, .port=E },	IN_FLOAT }	// USB_FAULT - EXTI 15
+    	{{.port=E,.bit=15},	IN_FLOAT }	// USB_FAULT - EXTI 15
     };
 
-    const LEDPorts: [2]gpio.PortDesc = {LED1, LED2};
+    const LEDPorts: []gpio.PortDesc = {LED1, LED2};
 
     proc ledon(which: _uint)
     {
@@ -98,6 +100,14 @@ package sys
     proc ledoff(which: _uint)
     {
 	gpio.Clr(LEDPorts[which]);
+    }
+
+    proc ledtoggle(which: _uint)
+    {
+	if gpio.Tst(LEDPorts[which]) then
+	    gpio.Clr(LEDPorts[which]);
+	else
+	    gpio.Set(LEDPorts[which]);
     }
 
     proc usbpower(which: _uint, on: boolean)
@@ -130,11 +140,8 @@ package sys
     	// we need to remap pins, so turn on alternate function control clock
     	rcc.ClockEnable(AFIO);
 	// configure GPIO pins
-	i = 0;
-	while i < PinOut?len do
-	{   gpio.Init(PinOut[i]);
-	    i += 1;
-	}
+	for i from 0 to PinOut?len-1 do
+	    gpio.Init(PinOut[i]);
 	// remap GPIO pins
 	var af: gpio.AFIO;
 	af = gpio.afio;

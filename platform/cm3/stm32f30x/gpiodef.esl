@@ -10,8 +10,8 @@ package gpio
 {
     // There are 6 ports of 16-bits each.  Not all are pinned-out.
     const NumGPIO = 6;
-    // Ports
-    type Port: (A, B, C, D, E, F, _, _, _, _, _, _, _, _, _, X);
+    // Ports (X is a special case)
+    type Port: (A, B, C, D, E, F, X=15);
     type PortDesc:
     {   bit:  0..15;
 	port: Port;

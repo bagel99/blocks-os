@@ -58,5 +58,5 @@ mem.o:	../../../mem_ff.esl
 	$(AS) -o $@ mem_ff.s
 
 clean:
-	rm -f *.bin *.elf *.o *.s *.ll
+	rm -f *.bin *.elf *.o *.s *.ll *.map *.dis
 

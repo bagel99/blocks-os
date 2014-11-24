@@ -23,7 +23,7 @@ package ipv4
     type ICMPHeader:
     {   type:	ICMPProtocols;
 	code:	_uint8;
-	chksum:	Net16;
+	chksum:	_uint16;
     };
     type pICMPHeader: @ICMPHeader;
 
@@ -41,7 +41,7 @@ package ipv4
 
 	cp = pICMPHeader(mb.Data());
 	cp.type = EchoReply;
-	cp.chksum += 0x0800;		// incremental checksum
+	cp.chksum += 0x0008;		// incremental checksum
 	up = pULHeader(mb.GrowHead(ULHeader?size));
 	addr = up.srcaddr;		// swap source and dest address
 	up.srcaddr = up.dstaddr;

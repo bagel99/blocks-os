@@ -12,13 +12,14 @@ package gpio
 {
     // There are 7 ports of 16-bits each.  Not all are pinned-out.
     const NumGPIO = 7;
-    // Ports
-    type Port: (A, B, C, D, E, F, G, _, _, _, _, _, _, _, _, X);
+    // Ports (X is a special case)
+    type Port: (A, B, C, D, E, F, G, X=15);
     type PortDesc:
     {   bit:  0..15;
 	port: Port;
     }: packed;
-    // What follows is almost a direct mapping to cnf/mode bits
+    // PortConf is almost a direct mapping to cnf/mode bits,
+    // only IN_PULLUP is a special case
     type PortConf:		// CNF MODE
     (   IN_ANALOG,		//  00 00
 	GP_PP_10,		//  00 01      
@@ -28,7 +29,7 @@ package gpio
 	GP_OD_10,		//  01 01
 	GP_OD_2,		//  01 10
 	GP_OD_50,		//  01 11
-	IN_PULLDOWN,		//  10 00 ODR=0
+	IN_PULLDN,		//  10 00 ODR=0
 	AF_PP_10,		//  10 01
 	AF_PP_2,		//  10 10
 	AF_PP_50,		//  10 11
@@ -40,44 +41,27 @@ package gpio
     type PortInit:
     {   port: PortDesc;
         conf: PortConf;
-        _:    0..0b1111;
-    }: packed;
+    }: packed, bits(16);
 
     type Conf: (GPDRIVE, GPOPEN, AFDRIVE, AFOPEN);
     const ANALOG:  Conf = GPDRIVE;
     const INFLOAT: Conf = GPOPEN;
     const INPULL:  Conf = AFDRIVE;
     type Mode: (INPUT, OUT10, OUT2, OUT50);
-    type ConfigBits: 0..0b1111;
-//    {   mode: Mode;
-//	cnf:  Conf;
-//    }:packed, lsb;
+
     // GPIO Registers
     // must be accessed as 32-bit words
     type GPIORegs:
-    {   crl: [8] ConfigBits: packed, lsb, out;			// 0x00
-	crh: [8] ConfigBits: packed, lsb, out;			// 0x04
-	idr:							// 0x08
-	{   data: _uint16;
-	    _:    _uint16;
-	}: packed, lsb, ro, in;
-	odr:							// 0x0C
-	{   data: _uint16;
-	    _:    _uint16;
-	}: packed, lsb, out;
-	bsrr:							// 0x10
-	{   bs: _uint16;    // bits to be set
-	    br: _uint16;    // bits to be reset
-	}: packed, lsb, wo, out;
-	brr:							// 0x14
-	{   br: _uint16;    // bits to be reset
-	    _:  _uint16;
-	}: packed, lsb, wo, out;
-	lckr:							// 0x18
-	{   lck:_uint16;
+    {   crl:  [8] PortConf: packed, lsb, out;				// 00
+	crh:  [8] PortConf: packed, lsb, out;				// 04
+	idr:  _uint16: bits(32), ro, in;				// 08
+	odr:  _uint16: bits(32), out;					// 0C
+	bsrr: _uint16: bits(32), wo, out; // hi 16 bit must be 0	// 10
+	brr:  _uint16: bits(32), wo, out;				// 14
+	lckr:								// 18
+	{   lck:  _uint16;
 	    lckk: 0..1;     // magic lock sequence bit
-	    _:    0..0x7FFF;
-	}: packed, lsb, in, out;
+	}: packed, lsb, bits(32), in, out;
     };
     type GPIO: @GPIORegs;
 
@@ -100,20 +84,20 @@ package gpio
     {   var g: GPIO;
 
 	g = GPIO(chip.gpioaddr[which.port]);
-	return g.idr.data & (1 << which.bit) != 0;
+	return g.idr & (1 << which.bit) != 0;
     }
 
     proc Init(which: PortInit)
     {   var g: GPIO;
-	var c: ConfigBits;
+	var c: PortConf;
 	var b: _uint;
 
 	// First, make sure the clock is enabled to the GPIO port
 	rcc.ClockEnable(chip.gpios[_uint8(which.port.port)]);
 	// Then configure the pin
 	g = GPIO(chip.gpioaddr[which.port.port]);
-	c = ConfigBits(which.conf);
-	if which.conf == IN_PULLUP then c = 0b1000;
+	c = which.conf;
+	if c == IN_PULLUP then c = IN_PULLDN;   // special case
 	b = which.port.bit;
 	if b < 8 then
 	    g.crl[b] = c;
@@ -121,7 +105,7 @@ package gpio
 	    g.crh[b-8] = c;
 	if which.conf
 	is IN_PULLUP then g.bsrr = 1 << b;
-	is IN_PULLDOWN then g.brr = 1 << b;
+	is IN_PULLDN then g.brr  = 1 << b;
     }
 
     // Alternate function control
@@ -133,13 +117,12 @@ package gpio
     }: packed, lsb;	    
     
     type AFIORegs:  // 32-bit access only
-    {   evcr:							// 0x00
-	{   bit:  0..15;
-	    port: 0..7;     // not all may be available
-	    evoe: boolean;
-	    _:    0..0xFF_FFFF;
-	}: packed, lsb, out;
-	mapr:							// 0x04
+    {   evcr:								// 00
+	{   bit:  0..15;	// .00-03
+	    port: 0..7;		// .04-06 not all may be available
+	    evoe: boolean;      // .07
+	}: packed, lsb, bits(32), out;
+	mapr:								// 04
 	{   spi1:   Remap1;
 	    i2c1:   Remap1;
 	    usart1: Remap1;
@@ -163,21 +146,20 @@ package gpio
 	    ptp_pps:boolean;
 	    _:      0..1;
 	}: packed, lsb, out;
-	exticr0: ExtIReg: out;
-	exticr1: ExtIReg: out;
-	exticr2: ExtIReg: out;
-	exticr3: ExtIReg: out;
-	_: _uint32;
-	mapr2:							// 0x1C
-	{   _:      0..0b11111;
-	    tim9:   Remap1;
+	exticr0: ExtIReg: out;						// 08
+	exticr1: ExtIReg: out;						// 0C
+	exticr2: ExtIReg: out;						// 10
+	exticr3: ExtIReg: out;						// 14
+	_:  _uint32;							// 18
+	mapr2:								// 1C
+	{   _:      0..0b11111; // .00-04
+	    tim9:   Remap1;     // 
 	    tim10:  Remap1;
 	    tim11:  Remap1;
 	    tim13:  Remap1;
 	    tim14:  Remap1;
 	    nadv:   Remap1;
-	    _:     0..0x1F_FFFF;
-	}: packed, lsb, out;
+	}: packed, lsb, bits(32), out;
     };
     type AFIO: @AFIORegs;
     const afio: AFIO = chip.afioaddr;
@@ -186,13 +168,14 @@ package gpio
     {   var af: AFIO;
 	af = afio;
 
-	if which.bit < 4 then
+	if which.bit
+	is 0..3 then
 	    af.exticr0.exti[which.bit] = which.port;
-	else if which.bit < 8 then
+	is 4..7 then
 	    af.exticr1.exti[which.bit-4] = which.port;
-	else if which.bit < 12 then
+	is 8..11 then
 	    af.exticr2.exti[which.bit-8] = which.port;
-	else if which.bit < 16 then
+	is 12..15 then
 	    af.exticr3.exti[which.bit-12] = which.port;
     }
 }

@@ -1,10 +1,10 @@
 /*
- * USB Host Driver for OTG_FS on STM32F107
+ * USB Host Driver for OTG_FS on STM32F107 and STM32F407
  *
  * Reference: ST RM0008, doc id 13902 rev 13
  *
  * Copyright (c) 2012, Brian G. Lucas.  See LICENSE file.
- * $Id: otg_fs.esl 359 2012-05-11 21:23:36Z bgl $
+ * $Id$
  */
 
 import rcc;

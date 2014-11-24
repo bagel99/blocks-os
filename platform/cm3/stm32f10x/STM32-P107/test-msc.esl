@@ -26,7 +26,7 @@ import nvic;
 // STM32F10x stuff
 import rcc;
 
-import usbdevotg;
+import usbdev;
 import sdcard;
 
 var sd: sdcard.State;

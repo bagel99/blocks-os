@@ -11,19 +11,16 @@ import gpiodef;     // if not already imported
 
 package gpio
 {
-    // GPIO Registers can be accessed as bytes or halfwords.
-    // But we don't.
+    // GPIO Registers can be accessed as bytes, halfwords or words.
+    // We access as words.
     type GPIORegs:
     {   mode:  [16] Mode: packed, lsb, out;				// 00
 	otype: [16] OType: packed, lsb, bits(32), out;			// 04
 	ospeed:[16] OSpeed: packed, lsb, out;				// 08
 	pupdn: [16] Pull: packed, lsb, out;				// 0C
-	idr:   _uint16: bits(32), in, ro;				// 10
+	idr:   _uint16: bits(32), ro, in;				// 10
 	odr:   _uint16: bits(32), out;					// 14
-	bsrr:								// 18
-	{   bs: _uint16;    // bits to be set
-	    br: _uint16;    // bits to be reset
-	}: packed, lsb, wo, out;
+	bsrr:  _uint16: bits(32), wo, out; // hi 16 bit must be 0	// 18
 	lckr:								// 1C
 	{   lck:_uint16;
 	    lckk: 0..1;     // magic lock sequence bit

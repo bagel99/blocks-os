@@ -19,7 +19,7 @@ import exti;
 /*
  * Joystick demo USB device
  */
-import usbdevotg;
+import usbdev;
 import usb_keyboard;
 
 

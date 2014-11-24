@@ -18,7 +18,7 @@ import rcc;
 /*
  * Joystick demo USB device
  */
-import usbdevotg;
+import usbdev;
 import usb_joystick;
 
 

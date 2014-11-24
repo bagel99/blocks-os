@@ -1,5 +1,5 @@
 /*
- * STM32F107 Ethernet
+ * STM32 Ethernet, used in STM32107 and STM32407
  *
  * Copyright (c) 2011, Brian G. Lucas.  See LICENSE file.
  * $Id$
@@ -394,10 +394,10 @@ package eth
 	rcc.ClockEnable(ETHMAC);
 	rcc.ClockEnable(ETHTX);
 	rcc.ClockEnable(ETHRX);
-	// Configure PLL3
-	rcc.PLL3Init(MUL10);
-	// Output PLL3 clock on MCO pin
-	rcc.MCOInit(PLL3);
+	if _defined(rcc.PLL3Init) then
+	{   rcc.PLL3Init(MUL10);	// Configure PLL3
+	    rcc.MCOInit(PLL3);		// Output PLL3 clock on MCO pin
+	}
 	// Setup MAC clock
 	if sys.HClock < 35_000_000 then		// 20-35 MHz
 	    en.mac.iiar = {.cr=DIV16};

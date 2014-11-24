@@ -25,47 +25,60 @@ import nvic;
 
 package sys
 {
-    // FIXME - move all the GPIO inits into one table
-    // ST labeled the 8 user LEDs as LED3..LED10.  We will use 0..7.
-    const LEDConfig: [8]gpio.PortInit =
-    {   { { 9, E}, OUT, PP, S50, UP, 0 },
-	{ { 8, E}, OUT, PP, S50, UP, 0 },
-	{ {10, E}, OUT, PP, S50, UP, 0 },
-	{ {15, E}, OUT, PP, S50, UP, 0 },
-	{ {11, E}, OUT, PP, S50, UP, 0 },
-	{ {14, E}, OUT, PP, S50, UP, 0 },
-	{ {12, E}, OUT, PP, S50, UP, 0 },
-	{ {13, E}, OUT, PP, S50, UP, 0 }
-    };
+   // ST labeled the 8 user LEDs as LED3..LED10.
+    const LED3:   gpio.PortDesc = {.port=E,.bit= 9};
+    const LED4:   gpio.PortDesc = {.port=E,.bit= 8};
+    const LED5:   gpio.PortDesc = {.port=E,.bit=10};
+    const LED6:   gpio.PortDesc = {.port=E,.bit=15};
+    const LED7:   gpio.PortDesc = {.port=E,.bit=11};
+    const LED8:   gpio.PortDesc = {.port=E,.bit=14};
+    const LED9:   gpio.PortDesc = {.port=E,.bit=12};
+    const LED10:  gpio.PortDesc = {.port=E,.bit=13};
+    const BUT1:   gpio.PortDesc = {.port=A,.bit= 0};
     // The USER button controls an external interrupt.
-    const BTNConfig: gpio.PortInit = { {0, A}, .mode=IN, .pu=NONE };
     const BTNIntr: exti.Desc = { INT, .rise=true };
-    // USB uses alternate function 14
-    const USBConfig: [2]gpio.PortInit =
-    {	{ {11, A}, ALT, PP, S50, NONE, 14 },
-	{ {12, A}, ALT, PP, S50, NONE, 14 }
-    };
     // The ST Demo program configures port E14 as USB_DISCONNECT,
     // but it is already used for a LED.
     // const USBDiscon: gpio.PortInit = { {14, E} };
     const L18Intr: exti.Desc = { INT, .rise=true };
 
+    const PinOut: [] gpio.PortInit =
+    {	// LEDs
+	{ LED3,			OUT, PP, S50, UP, 0 },
+	{ LED4,			OUT, PP, S50, UP, 0 },
+	{ LED5,			OUT, PP, S50, UP, 0 },
+	{ LED6,			OUT, PP, S50, UP, 0 },
+	{ LED7,			OUT, PP, S50, UP, 0 },
+	{ LED8,			OUT, PP, S50, UP, 0 },
+	{ LED9,			OUT, PP, S50, UP, 0 },
+	{ LED10,		OUT, PP, S50, UP, 0 },
+	// buttons
+	{ BUT1,			 IN, .pu=NONE },
+	// usb
+	{{.port=A,.bit=11},	ALT, PP, S50, NONE, 14 }, // alt func 14
+	{{.port=A,.bit=12},	ALT, PP, S50, NONE, 14 }, // alt func 14
+    };
+
+    const LEDPorts: []gpio.PortDesc =
+    {	LED3, LED4, LED5, LED6, LED7, LED8, LED9, LED10
+    };
+
     proc ledon(which: _uint)
     {
-	gpio.Set(LEDConfig[which].port);
+	gpio.Set(LEDPorts[which]);
     }
 
     proc ledoff(which: _uint)
     {
-	gpio.Clr(LEDConfig[which].port);
+	gpio.Clr(LEDPorts[which]);
     }
 
     proc ledtoggle(which: _uint)
     {
-	if gpio.Tst(LEDConfig[which].port) then
-	    gpio.Clr(LEDConfig[which].port);
+	if gpio.Tst(LEDPorts[which]) then
+	    gpio.Clr(LEDPorts[which]);
 	else
-	    gpio.Set(LEDConfig[which].port);
+	    gpio.Set(LEDPorts[which]);
     }
 
     var delay: _uint: in, out;
@@ -89,12 +102,12 @@ package sys
 if _defined(UserButtonPressed) then {
     proc Button(): : global("EINT0_IRQ")
     {
-	if exti.Pending(BTNConfig.port.bit) then
+	if exti.Pending(BUT1.bit) then
 	{   if UserButtonPressed >= 2 then
 		UserButtonPressed = 0;
 	    else
 		UserButtonPressed += 1;
-            exti.ClearIntr(BTNConfig.port.bit);
+            exti.ClearIntr(BUT1.bit);
 	}		
     }
 }
@@ -108,15 +121,12 @@ if _defined(UserButtonPressed) then {
     	systick.Init(rcc.GetAHBFreq(), TicksPerSecond);
 //    	systick.EnableIntr(0xF0);
 //    	systick.EnableIntr(0);
-	// LED pin configuration
-	for i from 0 to LEDConfig?len-1 do gpio.Init(LEDConfig[i]);
-	// Button pin and interrupt configuration
-	gpio.Init(BTNConfig);
-	exti.GPIOEnable(BTNConfig.port, BTNIntr);
+	// configure GPIO pins
+	for i from 0 to PinOut?len-1 do
+	    gpio.Init(PinOut[i]);
+	exti.GPIOEnable(BUT1.port, BTNIntr);
 	nvic.SetPriority(6, 0b00_000000);
 	nvic.Enable(6);
-	// USB pin configuration
-	for i from 0 to USBConfig?len-1 do gpio.Init(USBConfig[i]);
 	exti.Enable(18, L18Intr);
     }
 }

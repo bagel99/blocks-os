@@ -44,7 +44,7 @@ LIBOBJ= memset.o memcpy.o memcmp.o mem.o
 %.dep: %.esl
 	$(ESLC) -M $(ARCH) $(DBG) $(INC) $(OPT) $<
 
-all:	demo.elf
+all:	demo.elf test-hid.elf
 
 startup.o: ../startup.S
 	$(AS) -o startup.o ../startup.S
@@ -63,5 +63,5 @@ mem.o:	../../../mem_ff.esl
 	$(AS) -o $@ mem_ff.s
 
 clean:
-	rm -f *.bin *.elf *.o *.s *.ll
+	rm -f *.bin *.elf *.o *.s *.ll *.map *.dis
 
