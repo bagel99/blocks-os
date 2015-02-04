@@ -1,0 +1,146 @@
+/*
+ * TI CC2538 Synchronous Serial Interface
+ *
+ * Reference: TI SWRU319C, Chapter 19.
+ *
+ * Copyright (c) 2014, Brian G. Lucas.  See LICENSE file.
+ */
+
+import gpio;	// needed for pin mapping
+
+package ssi
+{
+    type SPIMode:// ckpol ckpha
+    (   MODE0,	 //   0     0
+	MODE1,	 //   0     1
+	MODE2,	 //   1     0
+	MODE3	 //   1     1
+    );
+   type Intr:
+    {   ror:    boolean;	// .00 recv overrun
+	rto:    boolean;	// .01 recv timeout
+	rx:     boolean;	// .02 recv fifo half full
+	tx:     boolean;	// .03 xmit fifo half empty
+    }: packed, lsb, bits(32);
+    type SSIRegs:
+    {   cr0:								// 000
+	{   dss:    0..15;		// .00-03 - datasize-1
+	    frf:    (SPI,TIS,MWIRE,_);	// .04-05
+	    mode:   SPIMode;		// .06-07
+	    scr:    0..255;		// .08-15
+	}: packed, lsb, bits(32), out;
+	cr1:								// 004
+	{   lbm:    boolean;		// .00 loop back mode
+	    enb:    boolean;		// .01 SSI port enable
+	    ms:     boolean;		// .02 slave mode enabled
+	    sod:    boolean;		// .03 slave mode output disable
+	}: packed, lsb, bits(32), out;
+	dr:     _uint16: bits(32), in, out;				// 008
+	sr:								// 00C
+	{   tfe:    boolean;		// .00 xmit fifo empty
+	    tnf:    boolean;		// .01 xmit fifo not full
+	    rne:    boolean;		// .02 recv fifo empty
+	    rff:    boolean;		// .03 recv fifo full
+	    bsy:    boolean;		// .04 SSI active
+	}: packed, lsb, bits(32), in, ro;
+	cpsr:    _uint8: bits(32), out;	// must be even			// 010
+	ienb:    Intr: out;						// 014
+	rsts:    Intr: in, ro;						// 018
+	msts:    Intr: in, ro;						// 01C
+	iclr:    Intr: out, wo;		// clear doesn't include rx,tx	// 020
+	dmactl:								// 024
+	{   rxenb:  boolean;		// .00 recv dma enable
+	    txenb:  boolean;		// .01 xmit dma enable
+	}: packed, lsb, bits(32), out;
+	cc:								// FC8
+	{   piosc: (SYSDIV, IODIV);
+	    _:     0..1;
+	    dsen:  (SYSDIV, PIO);
+	}: packed, lsb, bits(32), out, at(0xFC8);
+    };
+    type SSI: @SSIRegs;
+
+    const ssiaddr: [2]_address = { 0x4000_8000, 0x4000_9000 };
+    const ssivect: [2]_uint8 =   { 7, 34 };
+
+    proc (ssi: SSI) SetSpiMaster(mode: SPIMode, speed:_uint, bits:_uint)
+    {   var scr, pre, clk: _uint;
+
+	ssi.cr1 = {};	// all false
+	clk = sysctl.GetIOClock();
+	speed = _min(speed, clk/2);
+	clk = clk / speed;
+	pre = 0;
+	do
+	{   pre += 2;
+	    scr = (clk/pre) - 1;
+	} while scr > 255;
+	ssi.cpsr = pre;
+	ssi.cr0 = {.dss=bits-1, .frf=SPI, .mode=mode, .scr=scr};
+    }
+
+    proc (ssi: SSI) Enable():: inline
+    {
+	ssi.cr1.enb = true;
+    }
+
+    proc (ssi: SSI) Disable():: inline
+    {
+	ssi.cr1.enb = false;
+    }
+
+    proc (ssi: SSI) Send(data: _uint16)
+    {
+	while !ssi.sr.tnf do {}
+	ssi.dr = data;
+    }
+
+    proc (ssi: SSI) SendWaitDone()
+    {
+	while !ssi.sr.tfe do {}
+    }
+
+    proc (ssi: SSI) RxFlush()
+    {
+	while ssi.sr.rne do
+	    _ = ssi.dr;
+    }
+
+    /*
+     * Pins: 0 - CLK, 1 - TxD(MOSI), 2 - RxD(MISO)
+     */
+    proc Init(n: _uint, pins: @[3]gpio.PortDesc): SSI
+    {   var ssi: SSI;
+
+	if n > ssiaddr?len-1 then return 0;
+	ssi = SSI(ssiaddr[n]);
+	sysctl.EnableSSI(n, {.run=true});	// power on
+	ssi.Disable();	// Disable SSI function before configuring module
+	// Set IO clock as SSI clock source
+	ssi.cc = {.piosc=IODIV};
+	// configure pins
+	gpio.PortOutSelect(pins[0], SSI0_CLK);
+	gpio.PortOutSelect(pins[1], SSI0_TxD);
+	gpio.PortInSelect( pins[2], SSI0_RxD); 
+	gpio.SetConf(pins[0], AF);
+	gpio.SetConf(pins[1], AF);
+	gpio.SetConf(pins[2], AF);
+/*
+	if n == 0 then
+	{
+	    gpio.PortOutSelect(sys.SSI0Ports[0], SSI0_CLK);
+	    gpio.PortOutSelect(sys.SSI0Ports[1], SSI0_TxD);
+	    gpio.PortInSelect( sys.SSI0Ports[2], SSI0_RxD); 
+	    gpio.SetConf(sys.SSI0Ports[0], AF);
+	    gpio.SetConf(sys.SSI0Ports[1], AF);
+	    gpio.SetConf(sys.SSI0Ports[2], AF);
+	}
+	else	// FIXME - only SSI0 implemented
+	    return 0;
+*/
+	ssi.Enable();			// Enable the SSI function
+	ssi.RxFlush();			// Flush the RX FIFO
+	return ssi;
+    }
+}
+

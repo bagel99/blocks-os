@@ -1,0 +1,39 @@
+
+import sys;
+import uart;	// for debug
+
+import ssi;
+import lcd;
+
+import font_helv12;     alias font_helv12 as myfont;
+
+var ds: lcd.State;	// FIXME - alloc
+
+proc main(): _int
+{
+    var u: uart.Uart;
+
+    sys.Init(true);
+//    u = uart.Init(sys.DebugPort);
+
+    sys.V3_3Enable();
+sys.ledon(0);
+    ds.Init(0, sys.SSI0Ports);
+sys.ledon(1); sys.ledoff(0);
+    ds.Clear();
+sys.ledon(2); sys.ledoff(1);
+var i, j: _uint;
+for i from 0 to 127 do ds.ShowPixel(i, 0, 1);
+for j from 0 to 63  do ds.ShowPixel(0, j, 1);
+for i from 0 to 127 do ds.ShowPixel(i, 63, 1);
+for j from 0 to 63  do ds.ShowPixel(127, j, 1);
+    ds.Refresh();
+sys.ledon(3); sys.ledoff(2);
+    ds.SetFont(myfont.fonttab);
+    ds.SetXY(1, 1);
+    ds.ShowString("Hello world!");
+    ds.Refresh();
+
+    return 0;
+}
+

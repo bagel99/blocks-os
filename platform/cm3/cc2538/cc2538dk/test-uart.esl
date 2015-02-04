@@ -1,0 +1,21 @@
+// SIMPLE TEST OF UART
+
+import sys;
+import uart;
+
+const text = "Hello world!\n";
+
+proc main(): _int
+{
+    var u: uart.Uart;
+    var i, j: _uint;
+
+    sys.Init(true);
+    u = uart.Init(sys.DebugPort, sys.UART0Ports);
+    for j from 0 to 9 do
+    {   for i from 0 to text?len-1 do
+    	    u.Send(text[i]); 
+    }
+    return 0;
+}
+

@@ -1,0 +1,316 @@
+/*
+ * TI CC2538 RF Core
+ *
+ * Reference: TI SWRU319C, Chapter 23.
+ *
+ * Copyright (c) 2014, Brian G. Lucas.  See LICENSE file.
+ */
+
+import dma;
+
+package radio
+{
+    const TxDMAChan = 2;	// FIXME - make configurable in sys
+    const RxDMAChan = 3;	// FIXME - make configurable in sys
+
+    const ChanMin = 11;
+    const ChanMax = 26;
+    const ChanDelta = 5;
+
+    type CSP:	// command strobe processor opcodes
+    (   RXON=0xE3,	TXON=0xE9,	TXONCCA=0xEA,
+	FLUSHRX=0xED,	FLUSHTX=0xEE,	RFOFF=0xEF
+    );
+    type AddrReg: _uint8: bits(32);
+    type Intr0:		// bits in irqenb0
+    {	actunused: boolean;	// .00
+	sfd:       boolean;	// .01
+	fifop:     boolean;	// .02
+	matchdone: boolean;	// .03
+	matchfound:boolean;	// .04
+	framegood: boolean;	// .05
+	rxpktdone: boolean;	// .06
+	rxmaskzero:boolean;	// .07
+    }: packed, lsb, bits(32);
+    type Intr1:		// bits in irqenb1
+    {   txackdone: boolean;	// .00
+	txdone:    boolean;	// .01
+	rfidle:    boolean;	// .02
+	cspmanint: boolean;	// .03
+	cspstop:   boolean;	// .04
+	cspwait:   boolean;	// .05
+    }: packed, lsb, bits(32);
+    type IntrE:		// bits in irqenbe
+    {   nlock:     boolean;	// .00
+	rxabo:     boolean;	// .01
+	rxovrfl:   boolean;	// .02
+	rxundfl:   boolean;	// .03
+	txovrfl:   boolean;	// .04
+	txundfl:   boolean;	// .05
+	strobe:    boolean;	// .06
+    }: packed, lsb, bits(32);
+
+    type RFRegs:
+    {   rxfifo:   [128]_uint8;						// 000
+	txfifo:   [128]_uint8;						// 200
+
+	// FFSM - these are in RAM and reset values are undefined
+	srcres0:  _uint8: bits(32), in, at(0x580);			// 580
+	srcres1:  _uint8: bits(32), in;					// 584
+	srcres2:  _uint8: bits(32), in;					// 588
+	srcresidx:_uint8: bits(32), in;					// 58C
+	srcxpend0:_uint8: bits(32), out;				// 590
+	srcxpend1:_uint8: bits(32), out;				// 594
+	srcxpend2:_uint8: bits(32), out;				// 598
+	srcspend0:_uint8: bits(32), out;				// 59C
+	srcspend1:_uint8: bits(32), out;				// 5A0
+	srcspend2:_uint8: bits(32), out;				// 5A4
+	xadr:     [8]AddrReg: out;					// 5A8
+	pan:      [2]AddrReg: out;					// 5C8
+	sadr:     [2]AddrReg: out;					// 5D0
+
+	// XREG
+	frmflt0:							// 600
+	{   enb:      boolean;	// .00
+	    pancoord: boolean;	// .01
+	    maxfrmver:0..3;	// .02-3
+	}: packed, lsb, bits(32), out, at(0x600);
+	frmflt1:							// 604
+		_uint32;	// FIXME
+	srcmatch:							// 608
+	{   enb:      boolean;	// .00
+	    autopend: boolean;	// .01
+	    datareq:  boolean;	// .02
+	}: packed, lsb, bits(32), out;
+	    	
+	frmctl0:							// 624
+	{   txmode: (NORM, _, LOOP, RAND);	// .00-01
+	    rxmode: (NORM, SER, LOOP, DISSS);	// .02-03
+	    engscan:(NORM, PEAK);		// .04
+	    autoack:boolean;			// .05
+	    autocrc:boolean;			// .06
+	    append: boolean;			// .07
+	}: packed, lsb, bits(32), out, at(0x624);
+	frmctl1:							// 628
+		_uint32;	// FIXME
+	rxenable: _uint8: bits(32), in, ro;				// 62C
+	rxmaskset: _uint8: bits(32), out;				// 630
+	rxmaskclr: _uint8: bits(32), out;				// 634
+	freqtune:  0..15: bits(32), out;				// 638
+	freqctl: 0..127: bits(32), out, at(0x63C);			// 63C
+	txpwr:								// 640
+	{   bias:   0..15;	// .00-03
+	    power:  0..15;	// .04-07
+	}: packed, lsb, bits(32), out;
+	txctl:								// 644
+		_uint32;	// FIXME
+	fsmsts0:							// 648
+		_uint32;	// FIXME
+	fsmsts1:							// 64C
+	{   rxact:  boolean;	// .00
+	    txact:  boolean;	// .01
+	    plllock:boolean;	// .02
+	    ccavld: boolean;	// .03
+	    cca:    boolean;	// .04
+	    sfd:    boolean;	// .05
+	    fifop:  boolean;	// .06
+	    fifo:   boolean;	// .07
+	}: packed, lsb, bits(32), in, ro;
+	fifopctl: 0..127: bits(32), out;				// 650
+	fsmctl:								// 654
+		_uint32;	// FIXME
+	ccactl0: 0..255: bits(32), out;					// 658
+	ccactl1:							// 65C
+		_uint32;	// FIXME
+	rssi:    -128..127: bits(32), in, ro;				// 660
+	rssists: boolean: bits(32), in, ro;				// 664
+	rxfirst:   _uint8: bits(32), in, ro;				// 668
+	rxfifocnt: _uint8: bits(32), in, ro;				// 66C
+	txfifocnt: _uint8: bits(32), in, ro;				// 670
+	rxbegadr:  _uint8: bits(32), in, ro;				// 674
+	rxendadr:  _uint8: bits(32), in, ro;				// 678
+	rxp1adr:   _uint8: bits(32), in, ro;				// 67C
+	_:         _uint32;						// 680
+	txbegadr:  _uint8: bits(32), in, ro;				// 684
+	txendadr:  _uint8: bits(32), in, ro;				// 688
+	irqenb0:   Intr0: out;						// 68C
+	irqenb1:   Intr1: out;						// 690
+	irqenbe:   IntrE: out;						// 694
+	_:         _uint32;						// 689
+	rfrnd:								// 69C
+	{   irnd:   0..1;
+	    qrnd:   0..1;
+	}: packed, lsb, bits(32), in, ro;
+
+	agcctl1:  0..63: bits(32), out, at(0x6C8);			// 6C8
+
+	txfltcfg: 0..15: bits(32), out, at(0x7E8);			// 7E8
+	// SFR
+	data:   _uint8: bits(32), in, out, at(0x828);			// 828
+	errf:								// 82C
+		_uint32;	// FIXME
+	irqf1:								// 830
+		_uint32;	// FIXME
+	irqf0:								// 834
+		_uint32;	// FIXME
+	inst:   CSP: bits(32), in, out;					// 838
+	
+    };
+    type RF: @RFRegs;
+
+    var rf: RFRegs: external(0x4008_8000);
+
+    const rfvectnorm = 141;
+    const rfvecterr  = 142;
+
+
+    var state:
+    {   rfon:     boolean;
+	rxactive: boolean;
+    }: packed;
+
+
+
+    proc SetPan(pan: @[2]_uint8)
+    {
+	rf.pan[0] = pan[0];
+	rf.pan[1] = pan[1];
+    }
+
+    proc GetPan(pan: @[2]_uint8)
+    {
+	pan[0] = rf.pan[0];
+	pan[1] = rf.pan[1];
+    }
+
+    proc SetShortAddr(adr: @[2]_uint8)
+    {
+	rf.sadr[0] = adr[0];
+	rf.sadr[1] = adr[1];
+    }
+
+    proc GetShortAddr(adr: @[2]_uint8)
+    {
+	adr[0] = rf.sadr[0];
+	adr[1] = rf.sadr[1];
+    }
+
+    proc SetLongAddr(adr: @[8]_uint8)
+    {   var i: _uint;
+
+	for i from 0 to 7 do
+	    rf.xadr[i] = adr[i];
+    }
+
+    proc GetLongAddr(adr: @[8]_uint8)
+    {   var i: _uint;
+
+	for i from 0 to 7 do
+	    adr[i] = rf.xadr[i];
+    }
+
+    proc FlushRx()
+    {
+	rf.inst = FLUSHRX;
+	rf.inst = FLUSHRX;
+    }
+
+    /*
+     * Copy received frame into bp.
+     * Two extra bytes follow the data: rssi and lqi.
+     */
+    proc ReadRecvFifo(bp: @[]_byte): _uint	// returns len
+    {   var len: _uint;
+    	var lqi: _uint8;
+	var i: _uint;
+
+	if !rf.fsmsts1.fifop then return 0;
+	len = rf.data;			// get length of data in fifo
+	if len > 127 || len <= 4 then	// perhaps lost fifo synchronization
+	{   FlushRx();
+	    return 0;
+	}
+	for i from 0 to len-1 do
+	    bp[i] = rf.data;
+	lqi = bp[len-1];
+	if lqi & 0x80 == 0 then		// FCS error
+	    return 0;
+	// If FIFOP==1 and FIFO==0 then there was a FIFO overflow
+	if rf.fsmsts1.fifop && !rf.fsmsts1.fifo then
+	    FlushRx();
+	return len;
+    }
+
+
+    proc Off()
+    {
+	// Wait for any transmission to end
+	while rf.fsmsts1.txact do {}
+	FlushRx();
+	if rf.rxenable != 0 then
+	    rf.inst = RFOFF;
+	state.rxactive = false;
+    }
+
+    proc On()
+    {
+	if !state.rxactive then
+	{   FlushRx();
+	    rf.inst = RXON;
+	    state.rxactive = true;
+	}
+    }
+
+    proc SetChannel(chan: _uint)
+    {
+	if chan < ChanMin || chan > ChanMax then return;
+	Off();
+	rf.freqctl = ChanMin + ChanDelta*(chan-ChanMin);
+	On();
+    }
+
+    proc GetChannel(): _uint
+    {   var freq: _uint;
+
+	freq = rf.freqctl;
+	return (freq - ChanMin)/ChanDelta + ChanMin;
+    }
+
+
+
+    proc Init(chan: _uint)
+    {
+    	if state.rfon then return;
+
+	sysctl.EnableRadio({.run=true,.slp=true,.pm0=true});
+	rf.ccactl0 = 0xF8;	// recommended in user guide?
+	// Changes from default settings, section 23.15
+	rf.txfltcfg = 0x09;
+	rf.agcctl1  = 0x15;
+	// analog trim
+
+	rf.frmctl0 = { .autocrc=true };
+	rf.frmctl0.autoack = true;
+	rf.srcmatch = { .enb=false };
+	rf.fifopctl = 127;
+	rf.txpwr = { .power=13, .bias=5 };		// why?
+	SetChannel(chan);
+
+	// Enable interrupts
+	rf.irqenb0.fifop = true;	// just FIFOP
+	nvic.Enable(rfvectnorm);
+	rf.irqenbe = {.nlock=true,.rxabo=true,.rxovrfl=true,.rxundfl=true,
+		      .txovrfl=true,.txundfl=true,.strobe=true};
+	nvic.Enable(rfvecterr);
+
+	// Setup DMA	
+	dma.ChanMaskSet(TxDMAChan);
+	dma.SetChanDst(TxDMAChan, rf.data);
+	dma.ChanMaskSet(RxDMAChan);
+	dma.SetChanSrc(RxDMAChan, rf.data); 
+
+	state.rfon = true;
+    }
+
+}
+

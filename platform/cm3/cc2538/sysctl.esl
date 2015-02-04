@@ -1,0 +1,162 @@
+/*
+ * TI CC2538 System Control
+ *
+ * Reference: TI SWRU319C, Chapter 7.
+ *
+ * Copyright (c) 2014, Brian G. Lucas.  See LICENSE file.
+ */
+
+package sysctl
+{
+
+    type Select: [32]boolean: packed, lsb;
+
+    type ClockRegs:
+    {   sysdiv:  0..7;		// .00-02
+	_:       0..0b11111;	// .03-07
+	iodiv:   0..7;		// .08-10
+	_:       0..0b11111;	// .11-15
+	osc:     boolean;	// .16    false=>XTAL, true=>RC
+	oscpd:   boolean;	// .17
+	hsstbl:  boolean;	// .18
+	xoscstbl:boolean;	// .19
+	srcchg:  boolean;	// .20
+	ampdet:  boolean;	// .21
+	_:       0..0b11;	// .22-23
+	osc32k:  boolean;	// .24    false=>XTAL, true=>RC
+	caldis:  boolean;	// .25
+	sync32k: boolean;	// .26		status only
+    }: packed, lsb, bits(32);
+    
+    type Regs:
+    {   clkctl: ClockRegs: out;						// 00
+    	clksts:	ClockRegs: in, ro;					// 04
+    	timer:
+    	{   run: Select: out;						// 08
+    	    slp: Select: out;						// 0C
+    	    pm0: Select: out;						// 10
+    	    rst: Select: out;						// 14
+    	};
+    	ssi:
+    	{   run: Select: out;						// 18
+    	    slp: Select: out;						// 1C
+    	    pm0: Select: out;						// 20
+    	    rst: Select: out;						// 34
+    	};
+    	uart:
+    	{   run: Select: out;						// 28
+    	    slp: Select: out;						// 2C
+    	    pm0: Select: out;						// 30
+    	    rst: Select: out;						// 34
+    	};
+    	i2c:
+    	{   run: Select: out;						// 38
+    	    slp: Select: out;						// 3C
+    	    pm0: Select: out;						// 40
+    	    rst: Select: out;						// 44
+    	};
+    	sec:
+    	{   run: Select: out;						// 48
+    	    slp: Select: out;						// 4C
+    	    pm0: Select: out;						// 50
+    	    rst: Select: out;						// 54
+    	};
+    	pm:  (NONE, PM1, PM2, PM3): bits(32), out;			// 58
+    	srcrc:								// 5C
+	    _uint32;
+    	pwrdbg:								// 74
+	    _uint32: at(0x74);
+    	// FIXME - more to come
+    	iwe:								// 94
+    	{   portA: boolean;
+	    portB: boolean;
+	    portC: boolean;
+	    portD: boolean;
+	    usb:   boolean;
+	    slptmr:boolean;
+	}: packed, lsb, bits(32), out, at(0x94);
+    	altmap:  boolean: out;						// 98
+	radio:								// A8
+    	{   run: Select: in, out;					// 48
+    	    slp: Select: out;						// 4C
+    	    pm0: Select: out;						// 50
+    	}: at(0xA8);
+    	// FIXME - more to come
+    };
+    var sc: Regs: external(0x400D_2000);
+
+    type EnableMask: { run: boolean; slp: boolean; pm0: boolean; }: packed;
+
+    proc EnableTimer(which: 0..31, when: EnableMask)
+    {
+	if when.run then sc.timer.run[which] = true;
+	if when.slp then sc.timer.slp[which] = true;
+	if when.pm0 then sc.timer.pm0[which] = true;
+    }
+
+    proc EnableUart(which: 0..31, when: EnableMask)
+    {
+	if when.run then sc.uart.run[which] = true;
+	if when.slp then sc.uart.slp[which] = true;
+	if when.pm0 then sc.uart.pm0[which] = true;
+    }
+
+    proc EnableSSI(which: 0..31, when: EnableMask)
+    {
+	if when.run then sc.ssi.run[which] = true;
+	if when.slp then sc.ssi.slp[which] = true;
+	if when.pm0 then sc.ssi.pm0[which] = true;
+    }
+
+    proc EnableRadio(when: EnableMask)
+    {
+	if when.run then sc.radio.run = {[0] = true};
+	if when.slp then sc.radio.slp = {[0] = true};
+	if when.pm0 then sc.radio.pm0 = {[0] = true};
+    }
+
+    proc WaitRadioEnabled(when: EnableMask)
+    {
+	if when.run then
+	{   while !sc.radio.run[0] do {}	// wait for bit to set
+	}
+    }
+
+    proc GetIOClock(): _uint
+    {
+	return 32_000_000 / (sc.clksts.iodiv+1);
+    }
+
+    proc DelayShort(n: _uint)
+    {
+	do
+	    n -= 1;
+	while n > 0;
+    }
+ 
+    proc Init(xtal: boolean)
+    {   var cr: ClockRegs;
+
+	cr = sc.clkctl;
+	if xtal then		// use external crystal
+	{   // enable AMP detect to make sure XOSC starts correctly
+	    cr.ampdet = true;
+	    sc.clkctl = cr;	// enable AMP detect
+	    cr.osc = false;	// use xtal osc
+	    cr.sysdiv = 0;
+	    cr.iodiv  = 0;
+	}
+	else			// use internal RC oscillator
+	{   cr.osc = true;	// use RC osc
+	    cr.oscpd = true;	// power down xtal
+	    cr.sysdiv = 1;
+	    cr.iodiv  = 1;
+	}
+	cr.osc32k=true;		// FIXME - make this configurable
+	sc.clkctl = cr;
+	// FIXME - possible infinite loop, but what to do on failure?
+	while sc.clksts.osc != cr.osc do
+	    DelayShort(16);
+    }
+}
+

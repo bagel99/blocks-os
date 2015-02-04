@@ -1,0 +1,49 @@
+/*
+ * TI CC2538 Analog-to-Digital Converter
+ *
+ * Reference: TI SWRU319C, Chapter 15.
+ *
+ * Copyright (c) 2014, Brian G. Lucas.  See LICENSE file.
+ */
+
+package adc
+{
+
+
+    type AdcRegs:
+    {   con1:								// 00
+	{   _:      0..3;	// .00-01
+	    rctrl:  (NORM, ONCE, _, STOP);	// .02-03
+	    stsel:  (_, FULL, TMR1, ST);	// .04-05
+	    st:     boolean;			// .06
+	    eoc:    boolean;			// .07
+	}: packed, lsb, bits(32), in, out;
+	con2:								// 04
+	    _uint32;	// FIXME
+	con3:								// 08
+	    _uint32;	// FIXME
+	adcl:								// 0C
+	    _uint32;	// FIXME
+	adch:								// 10
+	    _uint32;	// FIXME
+	rndl:	_uint8: bits(32), in, out;				// 14
+	rndh:	_uint8: bits(32), in, out;				// 18
+    };
+    type Adc: @AdcRegs;
+
+    var adc: AdcRegs: external(0x400D_7000);
+
+    proc Rand(): _uint16
+    {   var rand: _uint16;
+
+	adc.con1.rctrl = ONCE;
+	rand = adc.rndl | (adc.rndh << 8);
+	return rand;
+    }
+
+    proc Init()
+    {
+	adc.con1.stsel = ST;	// Manual control
+    }	
+}
+

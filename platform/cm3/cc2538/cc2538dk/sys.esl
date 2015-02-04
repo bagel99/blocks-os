@@ -1,0 +1,170 @@
+/*
+ * Board definitions for TI CC2538DK
+ *
+ * Copyright (c) 2015, Brian G. Lucas.  See LICENSE file.
+ */
+
+/*
+ * C0 - LED, red, shared with USB pullup, don't use if USB enabled
+ * C1 - LED, yellow
+ * C2 - LED, green
+ * C3 - LED, orange
+ * A0 - UART0 Rx
+ * A1 - UART0 Tx
+ * B0 - UART1 CTS
+ * D3 - UART1 RTS
+ * A3 - Button, select
+ * C4 - Button, left
+ * C5 - Button, right
+ * C6 - Button, up
+ * C7 - Button, down
+ * A7 - ALS, power control (ambient light sensor)
+ * A6 - ALS, power input
+ * A2 - SPI clk
+ * A4 - SPI mosi
+ * A5 - SPI miso
+ * B2 - LCD mode
+ * B3 - LCD reset
+ * B5 - LCD CS
+ * B4 - 3.3V domain enable
+ * D4 - ACC power control
+ * D2 - ACC INT1
+ * D1 - ACC INT2
+ * D5 - ACC CS (accelerometer)
+ * D0 - SD card CS
+ */
+
+import sysctl;
+import gpio;
+
+package sys
+{
+    const CoreClock = 32_000_000;	// must use external XTAL
+    const SPIClock  =  8_000_000;
+
+    const DebugPort = 0;
+
+    const V3_3EnablePin: gpio.PortDesc = {.port=B,.bit=4};
+    const LCDModePin:    gpio.PortDesc = {.port=B,.bit=2};
+    const LCDResetPin:   gpio.PortDesc = {.port=B,.bit=3};
+    const LCDSelectPin:  gpio.PortDesc = {.port=B,.bit=5};
+    const SDSelectPin:   gpio.PortDesc = {.port=D,.bit=0};
+    const ACCSelectPin:  gpio.PortDesc = {.port=D,.bit=5};
+    const ACCPowerPin:   gpio.PortDesc = {.port=D,.bit=4};
+    const ALSPowerPin:   gpio.PortDesc = {.port=A,.bit=7};
+    const UART0Ports: [2]gpio.PortDesc =
+    {   {.port=A,.bit=0},	// RxD
+	{.port=A,.bit=1}	// TxD
+    };
+    const SSI0Ports: [3]gpio.PortDesc =
+    {	{.port=A,.bit=2},	// SCLK
+	{.port=A,.bit=4},	// MOSI
+	{.port=A,.bit=5},	// MISO
+    };
+    const LEDPorts: [4]gpio.PortDesc =
+    {   {.port=C,.bit=0},	// red, shared with USB pullup
+	{.port=C,.bit=1},	// yellow
+	{.port=C,.bit=2},	// green
+	{.port=C,.bit=3},	// orange
+    };
+    const BTNPorts: [5]gpio.PortDesc =
+    {   {.port=A,.bit=3},	// select
+    	{.port=C,.bit=4},	// left
+    	{.port=C,.bit=5},	// right
+    	{.port=C,.bit=6},	// up
+    	{.port=C,.bit=7}	// down
+    };
+
+    proc Delay_uS(usec: _uint)
+    {   var k: _uint;
+	var n: _uint: in, out;
+
+	k = 120 * usec/7;	// FIXME - calibrate this
+	n = 0;
+	while n < k do
+	    n += 1;
+    }
+
+    proc Delay_mS(msec: _uint)
+    {
+	Delay_uS(msec * 1000);
+    }
+
+    proc ledon(which: _uint)
+    {
+	gpio.Set(LEDPorts[which]);
+    }
+
+    proc ledoff(which: _uint)
+    {
+	gpio.Clr(LEDPorts[which]);
+    }
+
+    proc ledtoggle(which: _uint)
+    {
+	if gpio.Tst(LEDPorts[which]) then
+	    gpio.Clr(LEDPorts[which]);
+	else
+	    gpio.Set(LEDPorts[which]);
+    }
+
+    proc V3_3Enable()
+    {
+	gpio.Set(V3_3EnablePin);
+    }
+
+    proc V3_3Disable()
+    {
+	gpio.Clr(V3_3EnablePin);
+    }
+
+    proc Init(xtal: boolean)
+    {   var i: _uint;
+
+	sysctl.Init(xtal);
+
+	// LEDs (off, output low)
+	for i from 0 to LEDPorts?len-1 do
+	    gpio.SetConf(LEDPorts[i], OUT0);
+
+
+	// Buttons (input pullup)
+	// FIXME - why is there also KeyInit()
+	for i from 0 to BTNPorts?len-1 do
+	{   gpio.SetConf(BTNPorts[i], IN);
+	    gpio.PortPadControl(BTNPorts[i], {.pullup=true});
+	    gpio.DisableIntr(BTNPorts[i]);
+	    gpio.SetIntr(BTNPorts[i], RISE);
+	}
+
+
+	// Turn off 3.3-V domain (lcd/sdcard power, output low)
+	gpio.SetConf(V3_3EnablePin, OUT0);
+
+	// LCD CSn (output high)
+	gpio.SetConf(LCDSelectPin, OUT1);
+
+	// SD Card reader CSn (output high)
+	gpio.SetConf(SDSelectPin, OUT1);
+
+	// Accelerometer (PWR output low, CSn output high)
+	gpio.SetConf(ACCPowerPin, OUT0);
+	gpio.SetConf(ACCSelectPin, OUT1);
+
+	// Ambient light sensor (off, output low)
+	gpio.SetConf(ALSPowerPin, OUT0);
+
+	// UART Backchannel (TXD/RXD/CTS/RTS input pullup)
+//	GPIOPinTypeGPIOInput(BSP_UART_BUS_BASE, (BSP_UART_TXD | BSP_UART_RXD));
+//	IOCPadConfigSet(BSP_UART_BUS_BASE, (BSP_UART_TXD | BSP_UART_RXD),
+//                    IOC_OVERRIDE_PUE);
+//	GPIOPinTypeGPIOInput(BSP_UART_CTS_BASE, BSP_UART_CTS);
+//	IOCPadConfigSet(BSP_UART_CTS_BASE, BSP_UART_CTS, IOC_OVERRIDE_PUE);
+//	GPIOPinTypeGPIOInput(BSP_UART_RTS_BASE, BSP_UART_RTS);
+//	IOCPadConfigSet(BSP_UART_RTS_BASE, BSP_UART_RTS, IOC_OVERRIDE_PUE);
+	// Re-enable interrupt if initially enabled.
+//	if(!bIntDisabled)
+//	    IntMasterEnable();
+    }
+
+}

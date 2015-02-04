@@ -1,0 +1,312 @@
+/*
+ * TI CC2538DK LCD
+ *
+ * Copyright (c) 2015, Brian G. Lucas.  See LICENSE file.
+ */
+
+import ssi;
+import fontdef;
+
+package lcd
+{
+    /*
+     * LCD controller: Sitronix ST7565R
+     * Reference: Sitronix ST7565R data sheet, version 1.5, 2006-03-10
+     *
+     * Commands (when A0 is low) some are two successive bytes
+     * --------
+     * 0000nnnn set lo RAM column address
+     * 0001nnnn set hi RAM column address
+     * 00100rrr set resistor ratio
+     * 00101mmm set power supply mode
+     * 01nnnnnn set RAM start line address
+     * 10000001 00vvvvvv "electronic volume"
+     * 1010000d set SEG direction 0=normal 1=reverse
+     * 1010001n set voltage bias 0=(1/9) 1=(1/7)
+     * 1010010d set display all points 0=normal 1=all-on
+     * 1010011d set display direction 0=normal 1=reverse
+     * 10101100 0000000n static indicator 1=flashing
+     * 10101110	off
+     * 10101111 on
+     * 1011nnnn set RAM page address
+     * 1100n--- set output scan direction 0=normal 1=reverse
+     * 11100010 reset
+     * 11100011 nop
+     * 11111000 000000nn booster ratio
+     */
+    const COLHI:_byte	=	0x00;	// 0b0000_HHHH
+    const COLLO:_byte	=	0x10;	// 0b0001_LLLL
+    const RESRAT:_byte	=	0x20;	// 0b0010_0RRR
+    const POWER:_byte	=	0x28;	// 0b0010_1ABC
+    const LINE:_byte	=       0x40;	// 0b0100_LLLL
+    const CONTRAST:_byte=	0x81;	// 2 byte command
+    const DIRECT:_byte	=	0xA0;	// 0b1010000D D=0:normal D=1:reverse
+    const BIAS:_byte	=	0xA2;	// 0b1010001X X=0:1/9 X=1:1/7
+    const VIDEO:_byte	=	0xA6;	// 0b1010011D D=0:normal D=1:reverse
+    const INDICATE:_byte=	0xAC;	// 2 byte command
+    const DISPOFF:_byte	=	0xAE;
+    const DISPON:_byte	=	0xAF;
+    const PAGE:_byte	=	0xB0;
+    const SCAN:_byte	=	0xC0;	// 0b1100N--- N=0:normal N=1:reverse
+    const SCANREV:_byte	=	0xC8;
+    const RESET:_byte	=	0xE2;
+    const ENDRMW:_byte	=	0xEE;
+    const BOOST:_byte	=	0xF8;	// 2 byte command
+
+    const initcmds: []_byte =
+    {
+	LINE+0,		// Start line 0
+	DIRECT+1,	// SEG direction reverse
+	SCAN+0x0,	// Scan direction normal
+	VIDEO+0,	// Display normal, not mirrored
+	BIAS+0,		// Set Bias 1/9
+	POWER+7,	// Booster, Regulator and Follower On
+	BOOST, 0x00,	// Set internal Booster to 4x
+	RESRAT+7,	// Resistor ratio 7
+	CONTRAST, 0x16,	// Contrast
+	INDICATE, 0x00,	// No indicator
+	DISPON,		// Display on
+	PAGE+0,		// Page 0
+	COLHI+0,	// Column address, hi
+	COLLO+0		// Column address, lo
+    };
+
+    type State:
+    {
+	spi:	ssi.SSI;
+	width:  _uint16;	// display width in pixels
+	height: _uint16;	// display height in pixels
+	col:    _uint16;	// current column in pixels
+	row:    _uint16;	// current row(line) in pixels
+	fp:     @font.Font;	// current font
+	buf:    [1024]_uint8;
+    };
+    type DS: @State;
+
+    proc (ds: DS) SpiBegin():: inline
+    {
+	gpio.Clr(sys.LCDSelectPin);
+    }
+
+    proc (ds: DS) SpiEnd():: inline
+    {
+    	ds.spi.SendWaitDone();
+	gpio.Set(sys.LCDSelectPin);
+    }
+
+    proc (ds: DS) ModeComd():: inline
+    {
+	gpio.Clr(sys.LCDModePin);
+    }
+
+    proc (ds: DS) ModeData():: inline
+    {
+	gpio.Set(sys.LCDModePin);
+    }
+
+    proc (ds: DS) Data(data: _uint8)
+    {
+	ds.SpiBegin();		// set CSn
+	ds.ModeData();		// indicate data to LCD (A0 high)
+	ds.spi.Send(data);
+	ds.SpiEnd();		// clear CSn
+    }
+
+    proc (ds: DS) Comd(cmd:  _uint8)
+    {
+	ds.SpiBegin();		// set CSn
+	ds.ModeComd();		// indicate command to LCD (A0 low)
+	ds.spi.Send(cmd);
+	ds.SpiEnd();		// clear CSn
+    }
+
+    proc (ds: DS) Comd2(cmd1:  _uint8, cmd2: _uint8)
+    {
+	ds.SpiBegin();		// set CSn
+	ds.ModeComd();		// indicate command to LCD (A0 low)
+	ds.spi.Send(cmd1);
+	ds.spi.Send(cmd2);
+	ds.SpiEnd();		// clear CSn
+    }
+
+    proc (ds: DS) Send(data:  @[]_byte, len: _uint)
+    {   var i: _uint;
+
+	for i from 0 to len-1 do
+	    ds.spi.Send(data[i]);
+    }
+
+    proc (ds: DS) SendComd(comd: @[]_byte, len: _uint)
+    {
+	// Wait for ongoing transfers to complete
+	ds.SpiBegin();		// set CSn
+	ds.ModeComd();		// indicate command to LCD (A0 low)
+	ds.Send(comd, len);
+	ds.SpiEnd();		// clear CSn
+    }
+
+    proc (ds: DS) SendData(data:  @[]_byte, len: _uint)
+    {
+	// Wait for ongoing transfers to complete
+	ds.SpiBegin();		// set CSn
+	ds.ModeData();		// indicate data to LCD (A0 high)
+	ds.Send(data, len);
+	ds.SpiEnd();		// clear CSn
+    }
+/*
+#define LCD_PIXELS              8192    // Number of pixels in LCD display
+#define LCD_BYTES               1024    // Number of bytes needed in LCD buffer
+#define LCD_COLS                128     // Number of pixel columns
+#define LCD_ROWS                64      // Number of pixel rows
+#define LCD_PAGES               8       // Number of pages
+#define LCD_PAGE_ROWS           8       // Number of pixel rows per LCD page
+*/
+    proc (ds: DS) ShowPixel(x: _uint, y: _uint, pix: boolean)
+    {   var pbyte: @_uint8;
+	var mask: _uint8;
+
+	if x > 128 || y > 64 then return;
+	pbyte = ds.buf[x + (y/8 * 128)];
+	mask = 1 << (y%8);
+	if pix != 0 then
+	    pbyte@ = pbyte@ | mask;
+	else
+	    pbyte@ = pbyte@ & ~mask;
+    }
+
+    proc (ds: DS) SetCol(col: _uint)
+    {
+	ds.Comd(COLLO + (col&0xF));
+	ds.Comd(COLHI + (col>>4)&0xF);
+    }
+
+    proc (ds: DS) SetPage(page: _uint)
+    {
+	ds.Comd(PAGE + (page&07));
+    }
+
+    proc (ds: DS) Refresh()
+    {   var page: 0..7;
+	var i, k: _uint;
+
+	k = 0;
+	for page from 0 to 7 do
+	{   ds.SetCol(0);
+	    ds.SetPage(page);
+	    ds.SendData(ds.buf[k:128], 128);
+	    k += 128;
+	}	    
+    }
+
+    proc (ds: DS) Clear()
+    {
+	_zero(ds.buf);
+	ds.Refresh();
+    }
+
+    proc (ds: DS) ShowChar(c: _uint16)
+    {   var g: @font.Glyph;
+	var k, n, h, w, x, y, b: _uint;
+	var bm: _uint8;
+
+//debug.str("PutChar ");  debug.hex16(c); debug.nl();
+	if ds.fp == 0 then return;
+	if c == 0x0020 then	// space
+	{   ds.col += ds.fp.space;
+	}
+	else
+	{   g = ds.fp.GetGlyph(c);
+//debug.str("g="); debug.hex32(_uint32(g)); debug.nl();
+	    if g == 0 then return;	// no glyph
+	    x = ds.col;
+	    y = ds.row;
+	    k = g.bitmap;	// bit map starting index
+//debug.str("x="); debug.uint(x);
+//debug.str(" y="); debug.uint(y);
+//debug.str(" k="); debug.uint(k); debug.nl();
+	    b = 0;
+	    for h from 0 to g.height-1 do
+	    {   if h < g.yoffs || h > g.yoffs + g.ysize -1 then
+	    	{   for w from 0 to g.width -1 do
+	    		ds.ShowPixel(x+w, y+h, 0);
+	    	}
+	    	else
+		{   for w from 0 to g.width-1 do
+		    {   if w < g.xoffs || w > g.xoffs + g.xsize -1 then
+	    		    ds.ShowPixel(x+w, y+h, 0);
+			else
+			{   if b == 0 then
+			    {   bm = ds.fp.bitmaps[k];
+				k += 1;
+				b = 8;
+			    }
+			    if (bm&0x80) != 0 then
+				ds.ShowPixel(x+w, y+h, 1);
+			    else
+				ds.ShowPixel(x+w, y+h, 0);
+			    bm = bm << 1;
+			    b -= 1;
+			}
+		    }
+		}
+	    }
+	    ds.col += g.xoffs + g.width;
+	}
+    }
+
+    proc (ds: DS) ShowString(s: @[]_byte)
+    {   var i: _uint;
+	var c: _uint16;
+
+	if ds.fp == 0 then return;
+	i = 0;
+	loop
+	{   c = _uint16(s[i]);	// FIXME - UTF8
+	  exit c == 0;
+	    ds.ShowChar(c);
+	    i += 1;
+	}
+    }
+
+    proc (ds: DS) SetXY(x: _uint, y: _uint)
+    {
+	ds.col = x;
+	ds.row = y;
+    }
+
+    proc (ds: DS) GetXY(): _uint, _uint
+    {
+	return ds.col, ds.row;
+    }
+
+    proc (ds: DS) SetFont(newfont: @font.Font)
+    {
+	ds.fp = newfont;
+    }
+
+    proc (ds: DS) Init(ssiunit: _uint, ssipins: @[3]gpio.PortDesc)
+    {   var spi: ssi.SSI;
+
+//	sys.V3_3Enable();	// should this be here?
+
+	spi = ssi.Init(ssiunit, ssipins);
+	if spi == 0 then return;
+	ds.spi = spi;
+	ds.width = 128;
+	ds.height = 64;
+	ds.row = 0;
+	ds.col = 0;
+	ds.fp = 0;	// must be set by SetFont() before use
+	spi.SetSpiMaster(MODE3, sys.SPIClock, 8);
+	spi.Enable();
+	gpio.SetConf(sys.LCDModePin, OUT1);	// output
+	gpio.SetConf(sys.LCDSelectPin, OUT1);	// output
+	gpio.SetConf(sys.LCDResetPin, OUT0);	// output, assert reset
+	// Delay ~100ms for LCD to be powered up
+	sys.Delay_mS(100);
+	gpio.Set(sys.LCDResetPin);		// de-assert reset
+	// Send LCD init commands
+	ds.SendComd(initcmds, initcmds?len);
+    }
+}
+

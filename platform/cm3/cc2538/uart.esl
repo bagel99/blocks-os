@@ -1,0 +1,197 @@
+/*
+ * TI CC2538 UARTs
+ *
+ * Reference: TI SWRU319C, Chapter 18.
+ *
+ * Copyright (c) 2014, Brian G. Lucas.  See LICENSE file.
+ */
+
+import sysctl;
+import gpio;
+import nvic;
+
+package uart
+{
+
+    type Intr:
+    {	_:     0..15;	// .00-03
+	rx:    boolean;	// .04
+	tx:    boolean;	// .05
+	rt:    boolean;	// .06
+	fe:    boolean;	// .07
+	pe:    boolean;	// .08
+	be:    boolean;	// .09
+	oe:    boolean;	// .10
+	_:     0..1;	// .11
+	bit9:  boolean;	// .12
+	linb:  boolean;	// .13
+	lin1:  boolean;	// .14
+	lin5:  boolean;	// .15	    
+    }: packed, lsb, bits(32);
+    type RxFIFO: ( F1_8, F1_4, F1_2, F3_4, F7_8, _, _, _);
+    type TxFIFO: ( E7_8, E3_4, E1_2, E1_4, E1_8, _, _, _);
+    type Width:  (B5,B6,B7,B8);
+    type Stop:   (S1,S2);
+    type Parity: (NONE,ODD,_,EVEN);
+    type Format:
+    {   width:  Width;
+	stop:   Stop;
+	parity: Parity;
+    }: packed;
+    const F8N1: Format = {B8, S1, NONE};	// most common format
+
+    type UartRegs:
+    {   dr:								//000
+	{   data: _uint8;	// .00-07
+	    fe:    boolean;	// .08
+	    pe:    boolean;	// .09
+	    be:    boolean;	// .10
+	    oe:    boolean;	// .11
+	}: packed, lsb, bits(32), in, out;
+	rsr:								//004
+	{   fe:    boolean;	// .00
+	    pe:    boolean;	// .01
+	    be:    boolean;	// .02
+	    oe:    boolean;	// .03
+	}: packed, lsb, bits(32), in, out; // any write clears all
+	_:  [4]_uint32;							//008-14
+       	fr:								//018
+       	{   cts:   boolean;	// .00
+	    _:     0..0b11;	// .01-02
+	    busy:  boolean;	// .03
+	    rxfe:  boolean;	// .04
+	    txff:  boolean;	// .05
+	    rxff:  boolean;	// .06
+	    txfe:  boolean;	// .07
+	}: packed, lsb, bits(32), in, ro;
+	_:   _uint32;							//01C
+	ilpr:  _uint8:  bits(32), out;					//020
+	ibrd:  _uint16: bits(32), out;					//024
+	fbrd:  _uint8:  bits(32), out;					//028
+	lcrh:								//02C
+	{   brk:   boolean;	// .00
+	    par:   Parity;	// .01-02
+	    stop:  Stop;	// .03
+	    fen:   boolean;	// .04
+	    wlen:  Width;	// .05-06
+	    sps:   boolean;	// .07
+	}: packed, lsb, bits(32), out;
+	ctl:								//030
+	{   enb:   boolean;	// .00
+	    sir:   boolean;	// .01
+	    sirlp: boolean;	// .02
+	    _:     0..1;	// .03
+	    eot:   boolean;	// .04
+	    hse:   boolean;	// .05
+	    lin:   boolean;	// .06
+	    lbe:   boolean;	// .07
+	    txe:   boolean;	// .08
+	    rxe:   boolean;	// .09
+	    _:     0..0b1111;	// .10-13
+	    rts:   boolean;	// .14
+	    cts:   boolean;	// .15
+	}: packed, lsb, bits(32), out;
+	ifls:								//034
+	{   tx:    TxFIFO;	// .00-02
+	    rx:    RxFIFO;	// .03-05
+	}: packed, lsb, bits(32), out;
+	ienb:  Intr: out;						//038
+	rsts:  Intr: in, ro;						//03C
+	msts:  Intr: in, ro;						//040
+	iclr:  Intr: out;						//044
+	dma:   _uint32;		// FIXME				//048
+	_:     [17]_uint32;
+	lctl:  _uint32;		// FIXME				//090
+	lss:   _uint32;		// FIXME				//094
+	ltim:  _uint32;		// FIXME				//098
+	_:     [2]_uint32;
+	b9adr: _uint32;		// FIXME				//0A4
+	b9ask: _uint32;		// FIXME				//0A8
+	_:     [965]_uint32;
+	pp:    _uint32;							//FC0
+	_:     _uint32;
+	cc:								//FC8
+	{   piosc: (SYSDIV, IODIV);
+	    _:     0..1;
+	    dsen:  (SYSDIV, PIO);
+	}: packed, lsb, bits(32), out;
+    };
+    type Uart:    @UartRegs;
+
+    const uartaddr: [2]_address = { 0x4000_C000, 0x4000_D000 };
+    const uartvect: [2]_uint8 =   { 5, 6 };
+
+    proc (u: Uart) Enable()
+    {	var ctl: ?u.ctl;
+
+	ctl = u.ctl;
+	ctl.enb = true;
+	ctl.txe = true;
+	ctl.rxe = true;
+	u.ctl = ctl;
+    }
+
+    proc (u: Uart) Disable()
+    {	var ctl: ?u.ctl;
+
+	ctl = u.ctl;
+	ctl.enb = false;
+	ctl.txe = false;
+	ctl.rxe = false;
+	u.ctl = ctl;
+    }
+
+    proc (u: Uart) Send(data: _byte)
+    {
+	while u.fr.txff do
+	    {}		// spin until xmit ready
+	u.dr = { .data=data };
+    }
+
+    proc (u: Uart) SetConfig(speed: _uint, format: Format)
+    {   var clk, div: _uint32;
+
+	u.Disable();
+	clk = sysctl.GetIOClock();
+	if speed * 16 > clk then
+	{   u.ctl.hse = true;
+	    speed = speed / 2;
+	}
+	else
+	    u.ctl.hse = false;
+	div = (((clk * 8)/speed)+1)/2;
+	u.ibrd = div/64;
+	u.fbrd = div%64;
+	// Baud rate doesn't take effect until lcrh is written
+	u.lcrh = { .wlen=format.width, .par=format.parity,
+		   .stop=format.stop, .fen=true }; // with fifos enabled
+	u.Enable();
+    }
+
+    /*
+     * Pins: 0 - RxD, 1 - TxD
+     */
+    proc Init(n: _uint, pins: @[2]gpio.PortDesc): Uart
+    {   var u: Uart;
+
+	if n > uartaddr?len-1 then return 0;
+	u = Uart(uartaddr[n]);
+	sysctl.EnableUart(n, {.run=true});
+	u.Disable();
+	u.cc = { .piosc=IODIV, .dsen=SYSDIV };
+	// configure pins
+	gpio.PortOutSelect(pins[1], UART0_TxD);
+	gpio.SetConf(pins[1], AF);
+	gpio.PortPadControl(pins[1], {.output=true});
+	gpio.PortInSelect( pins[0], UART0_RxD);
+	gpio.SetConf(pins[0], AF);
+	gpio.PortPadControl(pins[0], {});	
+	u.ienb = { .rx=true, .rt=true, .oe=true, .fe=true, .be=true };
+	u.ifls = { .rx=F1_8, .tx=E1_2 };
+	u.ctl  = { .rxe=true, .txe=true, .hse=false };
+	u.SetConfig(115200, F8N1);
+	nvic.Enable(uartvect[n]);	// FIXME - not always?
+	return u;
+    }
+}
+

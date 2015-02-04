@@ -1,0 +1,63 @@
+/*
+ * TI CC2538 Sleep Timer and Watchdog Timer
+ *
+ * Reference: TI SWRU319C, Chapter 13.
+ *
+ * Copyright (c) 2014, Brian G. Lucas.  See LICENSE file.
+ *
+ * Notes on wdct register:
+ * 1. Writes of 0 to enb bit have no effect, once enabled always enabled.
+ * 2. Writes to int field have not effect if enb=1.  Must be done first.
+ * 3. Thus once enb=1, writes to clr field ignores the other bits.
+ * 4. To clear watchdog, write 0xA followed by 0x5 to clr.
+ */
+
+package slptmr
+{
+
+    type Counter: _uint8: bits(32), in, out;
+    type SlpRegs:
+    {   wdct:								// 00
+    	{   int:   (I32768, I8192, I512, I64);	// .00-01
+    	    _:     0..1;			// .02
+    	    enb:   boolean;			// .03
+    	    clr:   0..0xF;			// .04-07 
+    	}: packed, lsb, bits(32), out;
+    	_:      [15] _uint32;
+    	st:     [4] Counter;						// 40
+	stload: boolean: bits(32), in, ro;				// 50
+	// FIXME - more to come
+    };
+    type Slp: @SlpRegs;
+
+    var st: SlpRegs: external(0x400D_5000);
+
+
+    proc WatchdogInit()
+    {
+	st.wdct = { .int=I32768 };	// max interval, don't enable
+    }
+
+    proc WatchdogEnable()
+    {
+	st.wdct = { .int=I32768, .enb=true };
+    }
+
+    proc WatchdogReset()
+    {
+	st.wdct = { .clr=0xA };
+	st.wdct = { .clr=0x5 };
+    }
+
+    proc GetTimer(): _uint32
+    {   var timer: _uint32;
+
+	// Must read st[0] first, as it latches the other bytes
+	timer = st.st[0];
+	timer = timer | (st.st[1] << 8);
+	timer = timer | (st.st[2] << 16);
+	timer = timer | (st.st[3] << 24);
+    }
+	
+}
+

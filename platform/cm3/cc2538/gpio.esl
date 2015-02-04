@@ -1,0 +1,226 @@
+/*
+ * TI CC2538 General Purpose I/O
+ *
+ * Reference: TI SWRU319C, Chapter 9.
+ *
+ * Copyright (c) 2014, Brian G. Lucas.  See LICENSE file.
+ */
+
+import nvic;
+
+package gpio
+{
+    type Bits: 0..7;
+    type Ports: (A, B, C, D);
+    // A compact way to describe a port/pin designation
+    type PortDesc:
+    {   port: Ports;
+	bit:  Bits;
+    }: packed;
+    type IoSrc:
+    (   UART0_TxD,	UART1_RTS,	UART1_TxD,	SSI0_TxD,
+    	SSI0_CLK,	SSI0_FSS,	SSI0_SER,	SSI1_TxD,
+    	SSI1_CLK,	SSI1_FSS,	SSI1_SER,	I2C_SDA,
+    	I2C_SCL,	TMR0_CMP1,	TMR0_CMP2,	TMR1_CMP1,
+    	TMR1_CMP2,	TMR2_CMP1,	TMR2_CMP2,	TMR3_CMP1,
+    	TMR3_CMP2
+    );
+    type IoDst:
+    (	UART0_RxD,	UART1_CTS,	UART1_RxD,	SSI0_CLK,
+	SSI0_RxD,	SSI0_FSSIN,	SSI0_SSIIN,	SSI1_CLK,
+	SSI1_RxD,	SSI1_FSSIN,	SSI1_SSIIN,	I2C_SDA,
+	I2C_SCL,	TMR0_CMP1,	TMR0_CMP2,	TMR1_CMP1,
+    	TMR3_CMP2
+    );
+
+    type PadCtl:
+    {	analog: boolean;
+	pulldn: boolean;
+	pullup: boolean;
+	output: boolean;
+    }: packed, lsb;
+
+    type PortConf: (IN, OUT0, OUT1, AF);
+    type PortInit:
+    {	port:   PortDesc;
+	conf:   PortConf;
+	src:    IoSrc;
+	pad:    PadCtl;
+    }: packed;
+    type Event: (NONE, FALL, RISE, BOTH, LO, HI);
+
+    type Group:   [8]boolean: packed, lsb;	
+    type BitMask: Group: bits(32);
+
+    type GPIORegs:
+    {
+	data:  [256] _uint32: in, out;	// only low 8 bits active	// 000
+	dir:   BitMask: out;	// false=>IN, true=>OUT			// 400
+	isens: BitMask: out;	// false=>EDGE, true=>LEVEL		// 404
+	iboth: BitMask: out;	// true=>BOTH EDGES			// 408
+	ievnt: BitMask: out;	// false=>FALL|LO, true=>RISE|HI	// 40C
+	ienb:  BitMask: out;	// interrupt enable			// 410
+	irsts: BitMask: in, ro;	// interrupt raw status			// 414
+	imsts: BitMask: in, ro;	// interrupt masked status		// 418
+	iclr:  BitMask: out;	// false=>ignored, true=>clears intr	// 41C
+	af:    BitMask: out;	// alternate function			// 420
+	lock:  _uint32: out, at(0x520);					// 520
+	allow: BitMask: out;						// 524
+	// FIXME - more	
+    };
+    type GPIO: @GPIORegs;
+
+    const gpioaddr: [Ports]_address =
+    {	0x400D_9000, 0x400D_A000, 0x400D_B000, 0x400DC000
+    };
+    const gpiovect: [Ports]_uint8 =  { 0, 1, 2, 3 };
+
+    const LockMagic = 0x4C4F434B;	// "LOCK"
+
+
+    proc Clr(which: PortDesc)
+    {   var g: GPIO;
+
+	g = GPIO(gpioaddr[which.port]);
+	g.data[1 << which.bit] = 0x00;
+    }
+
+    proc Set(which: PortDesc)
+    {   var g: GPIO;
+
+	g = GPIO(gpioaddr[which.port]);
+	g.data[1 << which.bit] = 0xFF;
+    }
+
+    proc SetGroup(port: Ports, bits: Group, mask: Group)
+    {   var g: GPIO;
+
+	g = GPIO(gpioaddr[port]);
+	g.data[_uint8(mask)] = _uint8(bits);
+    }
+
+    proc Tst(which: PortDesc): boolean
+    {   var g: GPIO;
+
+	g = GPIO(gpioaddr[which.port]);
+	return g.data[1 << which.bit] != 0;
+    }
+
+    proc SetDir(which: PortDesc, out: boolean)
+    {   var g: GPIO;
+
+	g = GPIO(gpioaddr[which.port]);
+	g.dir[which.bit] = out;
+    }
+
+    proc SetFunc(which: PortDesc, func: boolean)
+    {   var g: GPIO;
+
+	g = GPIO(gpioaddr[which.port]);
+	g.af[which.bit] = func;
+    }
+
+    proc SetConf(which: PortDesc, how: PortConf)
+    {   var g: GPIO;
+
+	g = GPIO(gpioaddr[which.port]);
+	if how
+	is IN then
+	{   g.dir[which.bit] = false;
+	    g.af[which.bit] = false;
+	}
+	is OUT0 then
+	{   Clr(which);	// do this before setting direction, avoid glitch
+	    g.dir[which.bit] = true;
+	    g.af[which.bit] = false;
+	}
+	is OUT1 then
+	{   Set(which);	// do this before setting direction, avoid glitch
+	    g.dir[which.bit] = true;
+	    g.af[which.bit] = false;
+	}
+	is AF then
+	{
+	    g.af[which.bit] = true;
+	}
+    }
+
+    proc SetIntr(which: PortDesc, how: Event)
+    {   var g: GPIO;
+
+	g = GPIO(gpioaddr[which.port]);
+	if how
+	is NONE then return;
+	is RISE then
+	{   g.isens[which.bit] = false;
+	    g.iboth[which.bit] = false;
+	    g.ievnt[which.bit] = true;
+	}
+	is FALL then
+	{   g.isens[which.bit] = false;
+	    g.iboth[which.bit] = false;
+	    g.ievnt[which.bit] = false;
+	}
+	is BOTH then
+	{   g.isens[which.bit] = false;
+	    g.iboth[which.bit] = true;
+	}
+	is LO   then
+	{   g.isens[which.bit] = true;
+	    g.ievnt[which.bit] = false;
+	}
+	is HI   then
+	{   g.isens[which.bit] = true;
+	    g.ievnt[which.bit] = true;
+	}
+	g.ienb[which.bit] = true;
+    }
+
+    proc DisableIntr(which: PortDesc)
+    {   var g: GPIO;
+
+	g = GPIO(gpioaddr[which.port]);
+	g.ienb[which.bit] = false;
+    }
+
+	
+    proc EnableGlobalIntr(which: PortDesc)
+    {
+ 	nvic.Enable(gpiovect[which.port]);
+    }
+       
+    /*
+     * IO Mux Control
+     */
+    type PadSelect: PadCtl: bits(32);
+    type SrcSelect: IoSrc: bits(32);
+    type InDesc:
+    {   bit:   Bits;
+        port:  Ports;
+    }: packed, lsb, bits(32);
+    type IOCRegs:
+    {   outsel:[Ports][Bits] SrcSelect: out;				// 000
+	over:  [Ports][Bits] PadSelect: out;				// 080
+	insel: [IoDst] InDesc: out;					// 100
+    };
+    type IOC: @IOCRegs;
+
+    var io: IOCRegs: external(0x400D_4000);
+
+    proc PortOutSelect(which: PortDesc, what: IoSrc)
+    {
+	io.outsel[which.port][which.bit] = what;
+    }
+
+    proc PortInSelect(which: PortDesc, what: IoDst)
+    {
+	io.insel[what] = { .port=which.port, .bit=which.bit };
+    }
+
+    proc PortPadControl(which: PortDesc, what: PadCtl)
+    {	
+	
+	io.over[which.port][which.bit] = what;
+    }
+}
+

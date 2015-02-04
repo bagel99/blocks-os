@@ -1,0 +1,108 @@
+/*
+ * TI CC2538 General Purpose Timers
+ *
+ * Reference: TI SWRU319C, Chapter 11.
+ *
+ * Copyright (c) 2014, Brian G. Lucas.  See LICENSE file.
+ */
+
+import sysctl;
+
+package timer
+{
+    const NTMR = 4;
+
+    type Edge: (POS, NEG, _, BOTH);
+    type Control:
+    {	enb:    boolean;	// .00
+    	stall:  boolean;	// .01
+    	event:  Edge;		// .02-03
+    	_:      0..1;		// .04
+    	trig:   boolean;	// .05
+    	invert: boolean;	// .06
+    	_:      0..1;		// .07
+    }: packed, lsb;
+    type Configure: (TMR32, RTC32, _, _, TMR16, _, _, _);
+    type Mode:
+    {   mode:   (_, ONE, PERIOD, CAPT); // .00-01
+    	cm:     (COUNT, TIME);	// .02
+    	am:     (CAPT, PWM);	// .03
+    	dir:    (DN, UP);	// .04
+    	mie:    boolean;	// .05
+    	wot:    boolean;	// .06
+    	snap:   boolean;	// .07
+    	ild:    boolean;	// .08
+    	pwmie:  boolean;	// .09
+    	mru:    boolean;	// .10
+    	plo:    boolean;	// .11
+    }: packed, lsb;
+        
+    type TmrRegs:
+    {   cfg:	Configure: bits(32), out;				// 000
+	tamr:   Mode: bits(32), out;					// 004
+	tbmr:   Mode: bits(32), out;					// 008
+	ctl:								// 00C
+	{   a:  Control;
+	    b:  Control;
+	}: packed, lsb, bits(32), out;
+	sync:								// 010
+    		_uint32;	// FIXME
+	_:	_uint32;						// 014
+	ienb:								// 018
+    		_uint32;	// FIXME
+	rsts:								// 01C
+    		_uint32;	// FIXME
+	msts:								// 020
+    		_uint32;	// FIXME
+	iclr:								// 024
+    		_uint32;	// FIXME
+	tailr:								// 028
+    		_uint32;	// FIXME
+	tbilr:								// 02C
+    		_uint32;	// FIXME
+	tama:								// 030
+    		_uint32;	// FIXME
+	tbma:								// 034
+    		_uint32;	// FIXME
+	tapr:   _uint32: out;	// only low 8 bits used			// 038
+	tbpr:   _uint32: out;	// only low 8 bits used			// 03C
+	tapmr:								// 040
+    		_uint32;	// FIXME
+	tbpmr:								// 044
+    		_uint32;	// FIXME
+	tar:								// 048
+    		_uint32;	// FIXME
+	tbr:								// 04C
+    		_uint32;	// FIXME
+	tav:								// 050
+    		_uint32;	// FIXME
+	tbv:								// 054
+    		_uint32;	// FIXME
+	_:	_uint32;						// 058
+	taps:								// 05C
+    		_uint32;	// FIXME
+	tbps:								// 060
+    		_uint32;	// FIXME
+	tapv:								// 064
+    		_uint32;	// FIXME
+	tbpv:								// 040
+    		_uint32;	// FIXME
+    };
+    type Tmr: @TmrRegs;
+
+    const tmraddr: [NTMR]_address =
+    	{ 0x4003_0000, 0x4003_1000, 0x4003_2000, 0x4003_3000 };
+
+    proc Init(n: _uint): Tmr
+    {   var t: Tmr;
+
+	if n >= NTMR then return 0;
+	sysctl.sc.timer.run[n] = true;
+	t = Tmr(tmraddr[n]);
+	t.ctl = {{.enb=false},{.enb=false}};
+	t.cfg = TMR16;
+	t.tamr = { .mode=ONE, .dir=DN, };
+	t.tapr = 16-1;
+    }
+}
+

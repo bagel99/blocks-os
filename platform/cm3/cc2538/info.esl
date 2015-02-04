@@ -1,0 +1,33 @@
+/*
+ * TI CC2538 Flash containing chip information
+ *
+ * Reference: TI SWRU319C
+ *
+ * Copyright (c) 2014, Brian G. Lucas.  See LICENSE file.
+ */
+
+package info
+{
+
+    type Mem:
+    {   magic:  _uint32;		// should be 0x55AA55AA 
+	ieee:   [2]_uint32: at(0x28);	// Unique IEEE address
+    };
+    var mem: Mem: external(0x0028_0000);
+
+    proc GetEUI64(eui64: @[8]_uint8)
+    {   var tmp: _uint32;
+
+	tmp = mem.ieee[0];			// bytes are little endian
+	eui64[3] = _uint8(tmp);
+	eui64[2] = _uint8(tmp>>8);
+	eui64[1] = _uint8(tmp>>16);
+	eui64[0] = _uint8(tmp>>24) | 0x02;	// globally unique bit
+	tmp = mem.ieee[1];
+	eui64[7] = _uint8(tmp);
+	eui64[6] = _uint8(tmp>>8);
+	eui64[5] = _uint8(tmp>>16);
+	eui64[4] = _uint8(tmp>>24);
+    }
+}
+

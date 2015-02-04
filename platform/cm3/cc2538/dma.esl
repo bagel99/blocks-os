@@ -1,0 +1,101 @@
+/*
+ * TI CC2538 DMA (TI calls it µDMA)
+ *
+ * Reference: TI SWRU319C, Chapter 10.
+ *
+ * Copyright (c) 2014, Brian G. Lucas.  See LICENSE file.
+ */
+
+import nvic;
+
+package dma
+{
+    const MaxDMA = 3;	// FIXME - make configurable in sys
+    
+    type Size: (B8, B16, B32, _);
+    type Incr: (I0, I8, I16, I32);	// in bits
+    type ControlWord:
+    {   mode:    (STOP, BASIC, AUTO, PINGP, MEMSG, MEMSGA, PERSG, PERSGA);
+	arbsiz:  0..11;	// arbitration size is 2^(arbsz-1)
+	srcsiz:  Size;
+	srcinc:  Incr;
+	dstsiz:  Size;
+	dstinc:  Incr;
+    }: packed, lsb, bits(32);
+    type ChanCtrl:
+    {   srcend:  _address;
+	dstend:  _address;
+	control: ControlWord;
+	_:       _uint32;
+    };
+
+    /*
+     * The device requires the channel control table to be aligned
+     * at a 1024 byte boundary.  We put it in its own section and
+     * let the linker script do the alignment.
+     */
+    var dmatable: [MaxDMA+1]ChanCtrl: global, section(".dmatable");
+
+    type ChanArray: [32]boolean: packed, lsb;
+    type DMARegs:
+    {   sts:								// 000
+	{   enb:   boolean;
+	    _:     0..0b111;
+	    state: 0..0xF;
+	    _:     0..0xF;
+	    nchan: 0..31;	// number of channels -1
+	}: packed, lsb, bits(32), in, ro;
+	cfg:								// 004
+	{   enb:   boolean;
+	}: packed, lsb, bits(32), out;
+	ctlbase:   @[]ChanCtrl: out;	// low 10 bits not implemented	// 008
+	altbase:   _address: in, ro;					// 00C
+	waitstat:  ChanArray: in, ro;					// 010
+	swreq:     ChanArray: out;					// 014
+	burstset:  ChanArray: out;					// 018
+	burstclr:  ChanArray: out;					// 01C
+	reqmaskset:ChanArray: out;	// w1s				// 020
+	reqmaskclr:ChanArray: out;	// w1c				// 024
+    };
+    type DMA: @DMARegs;
+
+    var dma: DMARegs: external(0x400F_F000);
+
+    const vectnorm = 46;
+    const vecterr  = 47;
+
+    proc ChanMaskSet(chan: _uint)
+    {
+	if chan <= MaxDMA then
+	    dma.reqmaskset[chan] = true;
+//	    dma.reqmaskset = { [chan]=true };
+    }
+
+    proc ChanMaskClr(chan: _uint)
+    {
+	if chan <= MaxDMA then
+	    dma.reqmaskclr = { [chan]=true };
+    }
+
+    proc SetChanSrc(chan: _uint, src: _address)
+    {
+	if chan <= MaxDMA then
+	    dmatable[chan].srcend = src;
+    }
+
+    proc SetChanDst(chan: _uint, dst: _address)
+    {
+	if chan <= MaxDMA then
+	    dmatable[chan].dstend = dst;
+    }
+
+    proc Init()
+    {
+	dma.cfg = { .enb=true };
+	dma.ctlbase = dmatable;
+	nvic.Enable(vectnorm);
+	nvic.Enable(vecterr);
+    }
+
+}
+
