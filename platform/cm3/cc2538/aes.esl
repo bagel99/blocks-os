@@ -1,0 +1,232 @@
+/*
+ * TI CC2538 AES Peripheral
+ *
+ * Reference: TI SWRU319C, Chapter 22
+ *
+ * Copyright (c) 2014, Brian G. Lucas.  See LICENSE file.
+ */
+
+import sysctl;
+
+package aes
+{
+    const db = 0;
+
+    type KeySize: (UNKNOWN, KEY128, KEY192, KEY256);
+
+    type Area: [8]boolean: packed, lsb, bits(32);
+    type Intr1:
+    {   result:  boolean;
+	dmadone: boolean;
+    }: packed, lsb, bits(32);
+    type Intr2:
+    {   result:  boolean;
+	dmadone: boolean;
+	keyrderr:boolean: at(29);
+	keywrerr:boolean;
+	dmaerr:  boolean;
+    }: packed, lsb, bits(32);
+    type AESCtl:
+    {	outrdy: boolean;		//.00 w0c
+	inrdy:  boolean;		//.01 w0c
+	dir:    (DEC,ENC);		//.02
+	keysz:  KeySize: ro;		//.03-4
+	cbc:    boolean;		//.05
+	ctr:    boolean;		//.06
+	ctrsz:  (W32,W64,W96,W128);	//.07-8
+	_:      0..0b111111;		//.09-14
+	cbcmac: boolean;		//.15
+	gcm:    (NO,_,_,YES);		//.16-17
+	ccm:    boolean;		//.18
+	ccmL:   0..7;			//.19-21
+	ccmM:   0..7;			//.22-24
+	_:      0..0b1111;		//.25-28
+	savctx: boolean;		//.29
+	sctxrdy:boolean;		//.30
+	ctxrdy: boolean: ro;		//.31
+    }: packed, lsb, bits(32);
+
+    type AESRegs:
+    {
+	dma0ctl:							//000
+	{   enb:    boolean;
+	    pri:    (LO, HI);
+	}: packed, lsb, bits(32), out;
+	dma0adr: _address: out, in;					//004
+	_: _uint32;							//008
+	dma0len: _int16: bits(32), out, in;				//00C
+	_: [2]_uint32;							//010-14
+	dmasts:								//018
+	{   ch0act: boolean;
+	    ch1act: boolean;
+	    porterr: boolean: at(17);
+	}: packed, lsb, bits(32), in, ro;
+	dmarst:  boolean: bits(32), out, in;	// self clearing	//01C
+	dma1ctl:							//020
+	{   enb:    boolean;
+	    pri:    (LO, HI);
+	}: packed, lsb, bits(32), out;
+	dma1adr: _address: out, in;					//024
+	_: _uint32;							//028
+	dma1len: _int16: bits(32), out, in;				//02C
+
+	dmaparams:							//078
+		_uint32: at(0x078);	// FIXME
+	dmaporterr:							//07C
+		_uint32;		// FIXME
+	dmavers:							//0FC
+		_uint32: at(0x0FC);	// FIXME
+	// -----
+	keywrite: Area: out, at(0x400);					//400		
+	keyvalid: Area: out;						//404
+	keysize:  KeySize: bits(32), out;				//408
+	keyread:							//40C		
+	{   keyno: 0..15;
+	    busy:  boolean: at(31);
+	}: packed, lsb, bits(32), out, in;
+	// -----
+	aeskey2:  [4]_uint32: out, wo, at(0x500);			//500
+	aeskey3:  [4]_uint32: out, wo;					//510
+	_:        [8]_uint32;						//520
+	aesiv:    [4][4]_uint8: out;					//540
+	aesctl:   AESCtl: out, in;					//550
+	aeslenlo: _uint32: out, wo;					//554
+	aeslenhi: _uint32: out, wo;					//558
+	authlen:  _uint32: out, wo;					//55C
+	aesdatin: [4][4]_uint8: wo, out;				//560
+	tagout:   [4][4]_uint8: ro, in;					//570
+	// -----
+	hashin:   [16]_uint32: out, wo, at(0x600);	//non-dma	//600
+	hashbctl:							//640
+	{   outrdy: boolean;
+	    inrdy:  boolean;
+	    rfdin:  boolean;
+	    _:      0..0b11;
+	    slvpad: boolean;
+	    digest: boolean;
+	    dmapad: boolean;
+	}: packed, lsb, bits(32), out, in;
+	hashmode:							//644
+	{   new:    boolean;
+	    _:      0..0b11;
+	    sha256: boolean;
+	}: packed, lsb, bits(32), out;
+	hashlenlo:  _uint32: out;	// in bits			//648
+	hashlenhi:  _uint32: out;	// in bits			//64C
+	digest:   [8][4]_uint8: out, in;				//650
+	// -----
+	aesalg:								//700
+	{   keys: boolean;
+	    aes:  boolean;
+	    hash: boolean;
+	    tag:  boolean: at(31);
+	}: packed, lsb, bits(32), out, at(0x700);
+	proenb:   boolean: bits(32), out;				//704
+	aesrst:   boolean: bits(32), out, in, at(0x740);// self clr	//740
+	intcfg:   (PULSE, LEVEL): bits(32), out, at(0x780);		//780
+	intenb:   Intr1: out;						//784
+	intclr:   Intr2: out, wo;					//788
+	intset:   Intr1: out, wo;					//78C
+	intsts:   Intr2: in, ro;					//790
+    };
+    var aes: AESRegs: external(0x4008_B000);
+
+
+    proc Init()
+    {
+	sysctl.Reset(sysctl.SEC, sysctl.AES);
+	sysctl.Enable(sysctl.SEC, sysctl.AES, {.run=true,.slp=true});
+    }
+
+
+    /*
+     * key must be 4-byte (32-bit) aligned
+     * len is 128, 192, or 256
+     * area is 0..7
+     * when len > 128, area must be even
+     */
+    proc LoadKey(ks: KeySize, key: @[]_byte, area: _uint)
+    {   var len: _uint;
+	var a: Area;
+	var sts: Intr2;
+	var keytmp: [32]_byte: align(4);	// word alignment required
+
+if db > 0 then debug.str("LoadKey:\n");
+	a = {};
+	a[area] = true;
+	if ks
+	is KEY128 then
+	{   keytmp[0:16] = key[0:16];
+	    len = 16;
+	}
+	is KEY192 then
+	{   keytmp[0:24] = key[0:24];
+	    _zero(keytmp[24:8]);
+	    a[area+1] = true;
+	    len = 32;
+	}
+	is KEY256 then
+	{   keytmp[0:32] = key[0:32];
+	    a[area+1] = true;
+	    len = 32;
+	}
+	else return;	// illegal
+if db > 1 then debug.dumpb("key=", keytmp, len);
+	// these registers don't survive PM2
+	aes.intcfg = LEVEL;
+	aes.intenb = {.result=true, .dmadone=true};
+	// clear previous events
+	aes.intclr = {.result=true, .dmadone=true};
+	// configure stuff
+	aes.aesalg = {.keys=true};
+	aes.keysize = ks;
+	aes.keyvalid = a;	// clr valid bits of keys we are about to write
+	aes.keywrite = a;
+if db > 2 then {
+debug.str("aesalg="); debug.hex32(_uint32(aes.aesalg));
+debug.str(" keysize="); debug.hex32(_uint32(aes.keysize));
+debug.str(" keywrite="); debug.hex32(_uint32(aes.keywrite));
+debug.nl();
+}
+	// configure DMA channel 0
+	aes.dma0ctl = {.enb = true};
+	aes.dma0adr = keytmp;
+	aes.dma0len = len;	// starts transfer
+if db > 2 then {
+debug.str("dma0ctl="); debug.hex32(_uint32(aes.dma0ctl));
+debug.str(" dma0adr="); debug.hex32(_uint32(aes.dma0adr));
+debug.str(" dma0len="); debug.hex32(_uint32(aes.dma0len));
+debug.nl();
+}
+	// poll for done
+	do
+	{   asm "nop";
+	    sts = aes.intsts;
+	} while !sts.result;
+if db > 0 then {
+debug.str("intsts="); debug.hex32(_uint32(sts));
+debug.str(" keyvalid="); debug.hex32(_uint32(aes.keyvalid));
+debug.nl();
+}
+	// check for errors
+	if sts.dmaerr then
+	{}
+	if sts.keywrerr then
+	{}
+	aes.intclr = sts;	// clear status
+	aes.aesalg = {};	// disable control		 
+    }
+
+
+    proc Check(): boolean
+    {
+	var sts: Intr2;
+
+	sts = aes.intsts;
+	return sts.result == true || sts.dmaerr == true ||
+	       sts.keyrderr == true || sts.keywrerr == true;
+    }
+
+}
+// vim: ts=8 sw=4 noet nowrap
+

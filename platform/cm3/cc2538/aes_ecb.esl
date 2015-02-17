@@ -1,0 +1,105 @@
+/*
+ * TI CC2538 AES Peripheral in Electronic Codebook Mode
+ *
+ * Reference: TI SWRU319C, Chapter 22
+ *
+ * Copyright (c) 2014, Brian G. Lucas.  See LICENSE file.
+ */
+
+import aes;
+
+package aes	// extends package
+{
+    package ecb	// with nested namespace
+    {
+
+	proc Start(in: @[]_byte, out: @[]_byte, len: _uint, 
+    		  keyno: _uint, keysz: KeySize, encrypt: boolean)
+	{
+	    var ctl: AESCtl;
+
+if db > 0 then debug.str("ECBStart:\n");
+	    // these registers don't survive PM2
+	    aes.intcfg = LEVEL;
+	    aes.intenb = {.result=true, .dmadone=true};
+	    // clear previous events
+	    aes.intclr = {.result=true, .dmadone=true};
+	    // configure stuff
+	    aes.aesalg = {.aes=true};
+	    aes.keyread = {.keyno=keyno, .busy=false};
+	    // wait until keyloaded
+	    do
+	    {   asm "nop";
+	    } while aes.keyread.busy;
+if db > 2 then
+{ debug.str("keyread="); debug.hex32(_uint32(aes.keyread));
+  debug.str(" intsts="); debug.hex32(_uint32(aes.intsts));
+}
+	    // check for errors
+	    if aes.intsts.keyrderr then
+	    {}
+	    // finish configuration
+	    if keysz == UNKNOWN then return;    // bad keysize
+	    if encrypt then
+		ctl = {.dir=ENC, .keysz=keysz};
+	    else
+		ctl = {.dir=DEC, .keysz=keysz};
+	    aes.aesctl = ctl;
+	    aes.aeslenlo = len;
+	    aes.aeslenhi = 0;
+if db > 2 then
+{ debug.str("\naesalg="); debug.hex32(_uint32(aes.aesalg));
+  debug.str(" aesctl="); debug.hex32(_uint32(aes.aesctl));
+  debug.str(" aeslen="); debug.hex32(_uint32(aes.aeslenlo));
+}
+	    // configure DMA channel 0
+	    aes.dma0ctl = {.enb = true};
+	    aes.dma0adr = in;
+	    aes.dma0len = len;	// length in bytes, starts transfer
+	    // configure DMA channel 1
+	    aes.dma1ctl = {.enb = true};
+	    aes.dma1adr = out;
+	    aes.dma1len = len;
+if db > 2 then {
+debug.str("\ndma0ctl="); debug.hex32(_uint32(aes.dma0ctl));
+debug.str(" dma0adr="); debug.hex32(_uint32(aes.dma0adr));
+debug.str(" dma0len="); debug.hex32(_uint32(aes.dma0len));
+debug.str("\ndma1ctl="); debug.hex32(_uint32(aes.dma1ctl));
+debug.str(" dma1adr="); debug.hex32(_uint32(aes.dma1adr));
+debug.str(" dma1len="); debug.hex32(_uint32(aes.dma1len));
+debug.nl();
+}
+	}
+
+
+	proc EncryptStart(in: @[]_byte, out: @[]_byte, len: _uint, 
+    		  keyno: _uint, keysz: _uint)
+	{
+	    Start(in, out, len, keyno, keysz, true);
+	}
+
+
+	proc DecryptStart(in: @[]_byte, out: @[]_byte, len: _uint, 
+    		  keyno: _uint, keysz: _uint)
+	{
+	    Start(in, out, len, keyno, keysz, false);
+	}
+
+
+	proc Finish()
+	{
+	    var sts: Intr2;
+
+if db > 0 then debug.str("ECBFinish:\n");
+	    sts = aes.intsts;
+	    // FIXME - check for specific errors
+if db > 2 then
+{ debug.str("intsts="); debug.hex32(_uint32(sts)); debug.nl(); }
+	    aes.aesalg = {};
+	    aes.aesctl = {};	
+	}
+
+    }
+}
+// vim: ts=8 sw=4 noet nowrap
+

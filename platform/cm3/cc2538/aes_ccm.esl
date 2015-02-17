@@ -1,0 +1,180 @@
+/*
+ * TI CC2538 AES Peripheral in SHA256 Mode
+ *
+ * Reference: TI SWRU319C, Chapter 22
+ *
+ * Copyright (c) 2014, Brian G. Lucas.  See LICENSE file.
+ */
+
+import aes;
+
+package aes	// extends package
+{
+    package ccm	// with nested namespace
+    {
+	proc AuthEncryptStart(keyno: _uint, L: _uint, M: _uint, nonce: @[]_byte,
+		       adata: @[]_byte, alen: _uint,
+		       pdata: @[]_byte, plen: _uint)
+	{
+	    var iv: [16]_byte: align(4);
+
+	    // these registers don't survive PM2
+	    aes.intcfg = LEVEL;
+	    aes.intenb = {.result=true, .dmadone=true};
+	    // clear previous events
+	    aes.intclr = {.result=true, .dmadone=true};
+	    // configure stuff
+	    aes.aesalg = {.aes=true};
+	    aes.keyread = {.keyno=keyno, .busy=false};
+	    // wait until keyloaded
+	    do
+	    {   asm "nop";
+	    } while aes.keyread.busy;
+	    // check for errors
+	    if aes.intsts.keyrderr then
+	    {}
+	    // prepare the intialization vector
+	    iv[0] = L - 1;
+	    iv[1:15-L] = nonce[0:15-L];
+	    _zero(iv[16-L:L]);
+	    aes.aesiv[0:4] = iv[0:4];	// FIXME - can this be done by 1 copy?
+	    aes.aesiv[4:4] = iv[4:4];
+	    aes.aesiv[8:4] = iv[8:4];
+	    aes.aesiv[12:4] = iv[12:4];
+	    // program AES-CCM encryption
+	    aes.aesctl = { .dir=ENC, .ctr=true, .ctrsz=W128, .ccm = true,
+			   .ccmL=L-1, .ccmM=(_max(M,2)-2)/2, .savctx=true };
+	    aes.aeslenlo = plen;
+	    aes.aeslenhi = 0;
+	    aes.authlen  = alen;    // must be last
+	    if alen != 0 then	// fetch AAD data
+	    {   aes.dma0ctl = {.enb=true};
+		aes.dma0adr = adata;
+		aes.dma0len = alen;
+		while !aes.intsts.dmadone do {}
+		if aes.intsts.dmaerr then
+		{	aes.intclr = {.dmaerr=true};
+			// FIXME - do something on error
+		}
+		aes.intclr = {.result=true, .dmadone=true};
+	    }
+	    if plen != 0 then
+	    {   aes.dma0ctl = {.enb=true};
+		aes.dma0adr = pdata;
+		aes.dma0len = plen;
+		aes.dma1ctl = {.enb=true};
+		aes.dma1adr = pdata;
+		aes.dma1len = plen;
+	    }	
+	}
+
+
+	proc AuthEncryptFinish(tag: @[]_byte, M: _uint)
+	{
+	    var sts: Intr2;
+	    var tmp: [16]_byte;
+
+	    sts = aes.intsts;
+	    // FIXME - check for individual errors
+if db > 2 then
+{ debug.str("intsts="); debug.hex32(_uint32(sts)); debug.nl(); }
+	    aes.aesalg = {};	// disable master control and DMA clock
+	    // wait for context ready indication
+	    do
+	    {   asm "nop";
+	    } while !aes.aesctl.sctxrdy;
+	    // unload tag from hardware
+	    tmp[0:4]  = aes.tagout[0];	
+	    tmp[4:4]  = aes.tagout[1];	
+	    tmp[8:4]  = aes.tagout[2];	
+	    tmp[12:4] = aes.tagout[3];
+	    // copy up just what is requested
+	    if M != 0 then
+		tag[0:M] = tmp[0:M];	
+	}
+
+
+	proc AuthDecryptStart(keyno: _uint, L: _uint, M: _uint, nonce: @[]_byte,
+		       adata: @[]_byte, alen: _uint,
+		       pdata: @[]_byte, plen: _uint)
+	{
+	    var iv: [16]_byte: align(4);
+
+	    // these registers don't survive PM2
+	    aes.intcfg = LEVEL;
+	    aes.intenb = {.result=true, .dmadone=true};
+	    // clear previous events
+	    aes.intclr = {.result=true, .dmadone=true};
+	    // configure stuff
+	    aes.aesalg = {.aes=true};
+	    aes.keyread = {.keyno=keyno, .busy=false};
+	    // wait until keyloaded
+	    do
+	    {   asm "nop";
+	    } while aes.keyread.busy;
+	    // check for errors
+	    if aes.intsts.keyrderr then
+	    {}
+	    // prepare the intialization vector
+	    iv[0] = L - 1;
+	    iv[1:15-L] = nonce[0:15-L];
+	    _zero(iv[16-L:L]);
+	    aes.aesiv[0] = iv[0:4];	// FIXME - can this be done by 1 copy?
+	    aes.aesiv[1] = iv[4:4];
+	    aes.aesiv[2] = iv[8:4];
+	    aes.aesiv[3] = iv[12:4];
+	    // program AES-CCM encryption
+	    aes.aesctl = { .dir=DEC, .ctr=true, .ctrsz=W128, .ccm = true,
+			   .ccmL=L-1, .ccmM=(_max(M,2)-2)/2, .savctx=true };
+	    aes.aeslenlo = plen;
+	    aes.aeslenhi = 0;
+	    aes.authlen  = alen;
+	    if alen != 0 then	// fetch AAD data
+	    {   aes.dma0ctl = {.enb=true};
+		aes.dma0adr = adata;
+		aes.dma0len = alen;
+		while !aes.intsts.dmadone do {}
+		if aes.intsts.dmaerr then
+		{	aes.intclr = {.dmaerr=true};
+			// FIXME - do something on error
+		}
+		aes.intclr = {.result=true, .dmadone=true};
+	    }
+	    if plen != 0 then
+	    {   aes.dma0ctl = {.enb=true};
+		aes.dma0adr = pdata;
+		aes.dma0len = plen;
+		aes.dma1ctl = {.enb=true};
+		aes.dma1adr = pdata;
+		aes.dma1len = plen;
+	    }	
+	}
+
+
+	proc AuthDecryptFinish(tag: @[]_byte, M: _uint)
+	{
+	    var sts: Intr2;
+	    var tmp: [16]_byte;
+
+	    sts = aes.intsts;
+	    // FIXME - check for individual errors
+if db > 2 then
+{ debug.str("intsts="); debug.hex32(_uint32(sts)); debug.nl(); }
+	    aes.aesalg = {};	// disable master control and DMA clock
+	    // wait for context ready indication
+	    do
+	    {   asm "nop";
+	    } while !aes.aesctl.sctxrdy;
+	    // unload tag from hardware
+	    tmp[0:4]  = aes.tagout[0];	
+	    tmp[4:4]  = aes.tagout[1];	
+	    tmp[8:4]  = aes.tagout[2];	
+	    tmp[12:4] = aes.tagout[3];
+	    // copy up just what is requested
+	    if M != 0 then
+		tag[0:M] = tmp[0:M];	
+	}
+    }
+}
+// vim: ts=8 sw=4 noet nowrap
+

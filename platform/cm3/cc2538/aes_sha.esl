@@ -1,0 +1,77 @@
+/*
+ * TI CC2538 AES Peripheral in SHA256 Mode
+ *
+ * Reference: TI SWRU319C, Chapter 22
+ *
+ * Copyright (c) 2014, Brian G. Lucas.  See LICENSE file.
+ */
+
+import aes;
+
+package aes	// extends package
+{
+    package sha	// with nested namespace
+    {
+	const BlockSize = 64;	// 64 bytes, 512 bits
+	const HashBytes = 32;	// 32 bytes, 256 bits		
+	const HashWords = 8;	// 8 32-bit words, 256 bits
+
+	type State:
+	{   length:    _uint64;	// in bits
+		curlen:    _uint32;
+		state:     [HashWords]_uint32;
+		newdigest: boolean;
+		findigest: boolean;
+		buf:       [BlockSize]_byte;
+	};
+	type pState: @State;
+
+	proc HashNew(hs: pState, data: @[]_byte, len: _uint, hash: @[HashWords]_uint32)
+	{
+	    var sts: Intr2;
+
+	    // these registers don't survive PM2
+	    aes.intcfg = LEVEL;
+	    aes.intenb = {.result=true, .dmadone=true};
+	    // configure algorithm
+	    aes.aesalg = {.hash=true, .tag=true};
+	    aes.intclr = {.result=true};
+	    aes.hashmode = {.new=true, .sha256=true};
+	    // if final buffer, then pad with length (in bits)
+	    if hs.findigest then
+	    {   aes.hashlenlo = _uint32(hs.length);
+		aes.hashlenhi = _uint32(hs.length >> 32);
+		aes.hashbctl  = {.dmapad=true};
+	    }
+	    // setup input dma
+	    aes.dma0ctl = {.enb=true};
+	    aes.dma0adr = data;
+	    aes.dma0len = len;
+	    // setup output dma
+	    aes.dma1ctl = {.enb=true};
+	    aes.dma1adr = hash;
+	    aes.dma1len = HashBytes;
+	    // poll for done
+	    do
+	    {   asm "nop";
+		sts = aes.intsts;
+	    } while !sts.result;
+	    // FIXME - check for errors
+	    if sts.dmaerr then
+	    {}
+	    aes.intclr = sts;	// clear status
+	    aes.aesalg = {};	// disable control
+	}
+
+	proc Init(hs: pState)
+	{
+
+	    hs.length = 0;
+	    hs.curlen = 0;
+	    hs.newdigest = true;
+	    hs.findigest = false;
+	}
+    }
+}
+// vim: ts=8 sw=4 noet nowrap
+
