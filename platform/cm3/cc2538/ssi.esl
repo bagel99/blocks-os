@@ -114,7 +114,7 @@ package ssi
 
 	if n > ssiaddr?len-1 then return 0;
 	ssi = SSI(ssiaddr[n]);
-	sysctl.EnableSSI(n, {.run=true});	// power on
+	sysctl.Enable(sysctl.SSI, n, {.run=true});	// power on
 	ssi.Disable();	// Disable SSI function before configuring module
 	// Set IO clock as SSI clock source
 	ssi.cc = {.piosc=IODIV};
@@ -125,19 +125,6 @@ package ssi
 	gpio.SetConf(pins[0], AF);
 	gpio.SetConf(pins[1], AF);
 	gpio.SetConf(pins[2], AF);
-/*
-	if n == 0 then
-	{
-	    gpio.PortOutSelect(sys.SSI0Ports[0], SSI0_CLK);
-	    gpio.PortOutSelect(sys.SSI0Ports[1], SSI0_TxD);
-	    gpio.PortInSelect( sys.SSI0Ports[2], SSI0_RxD); 
-	    gpio.SetConf(sys.SSI0Ports[0], AF);
-	    gpio.SetConf(sys.SSI0Ports[1], AF);
-	    gpio.SetConf(sys.SSI0Ports[2], AF);
-	}
-	else	// FIXME - only SSI0 implemented
-	    return 0;
-*/
 	ssi.Enable();			// Enable the SSI function
 	ssi.RxFlush();			// Flush the RX FIFO
 	return ssi;

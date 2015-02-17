@@ -608,7 +608,7 @@ debug.str(" Proto=0x"); debug.hex8(id.Protocol);
 debug.str(" NEP="); debug.uint8(id.NEP);
 debug.nl();
 }
-	    d.class = id.Class;
+	    d.class = _uint8(id.Class);
 	    d.subcls = id.SubClass;
 	    d.proto = id.Protocol;
 	    mb = ab.NewURB({.dev=d.devadr, .epn=0}, usb.SetupPkt?size+64);

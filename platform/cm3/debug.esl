@@ -83,6 +83,21 @@ package debug
 	str(buf);
     }
 
+    proc hex64(in: _uint64)
+    {   var buf: [17]_byte;
+	var i: _uint;
+
+	i = 15;
+	loop
+	{   buf[i] = hexdigit[in&0xF];
+	  exit i == 0;
+	    i -= 1;
+	    in = in >> 4;
+	}
+	buf[16] = 0;
+	str(buf);
+    }
+
     proc hex(in: _uint)::inline
     {
     	hex32(_uint(in));

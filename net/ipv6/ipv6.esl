@@ -163,7 +163,7 @@ package ipv6	// continue with implementation
 	    debug.str(" age=");
 	    debug.uint8(pnc.age);
 	    debug.str(" laddr=");
-	    MACPrint(pnc.laddr);
+	    MACPrint(pnc.laddr, 6);
 	    debug.nl();
 	    pnc = pnc.next;
 	}
@@ -258,7 +258,7 @@ if db > 3 then {debug.str("\tnew entry\n");}
 	    {   pnc.laddr = linkaddr@;
 		pnc.age = ReachableTO;
 		pnc.state = REACHABLE;
-if db > 3 then {debug.str("\tlinkaddr="); MACPrint(linkaddr); debug.nl();}
+if db > 3 then {debug.str("\tlinkaddr="); MACPrint(linkaddr, 6); debug.nl();}
 		if pnc.queue != 0 then intf.SendQueue(pnc);
 	    }
 	    else
@@ -438,7 +438,7 @@ if db > 5 then { intf.DumpAllAddr();}
     {   var pnc: pNCacheEntry;
 	var la: pEUI64;
 
-	ip.vtf = {.version=6, .traffic=0, .flow=0};
+	ip.vtf = {.version=6};
 	ip.hops = 255;
 	if intf.type != PPP then
 	{   // Build link destination header
@@ -540,7 +540,7 @@ if db > 2 then {debug.str("ipv6.USend: ifn="); debug.uint8(ifn); debug.nl();}
 	ip = pHeader(mb.GrowHead(Header?size - ULHeader?size));
 	ip.length = _uint16(mb.Size() - Header?size);
 	ip.proto = proto;
-	ip.vtf = {.version=6, .traffic=0, .flow=0};
+	ip.vtf = {.version=6};
 	ip.hops = 255;
 	mb.info = IPv6Type;
 	mb.tag = ifn;
@@ -562,6 +562,8 @@ if db > 2 then {debug.str("ipv6.USend: ifn="); debug.uint8(ifn); debug.nl();}
 	hbh = pHbHHeader(mb.Data());
 	proto = hbh.proto;
 	nbytes = (hbh.len + 1) * 8;
+if db > 2 then {debug.str("ipv6.RecvHbH: len="); debug.uint(nbytes);
+debug.str(" next="); debug.hex8(_uint8(proto)); debug.nl();}
 	mb.ShrinkHead(nbytes);
 	return proto;	
     }
@@ -619,6 +621,8 @@ debug.nl();}
 		    else
 		    {   uh = pULHeader(mb.ShrinkHead(Header?size - ULHeader?size));
 			// src/dst addresses already in place
+			// FIXME - above is not true if there were additional
+			// headers: in that case, must copy stuff into ULHeader
 			uh.info = { .isipv6=true, .ifn=mb.tag };
 			uh.proto = proto;
 			uh.len = len;
@@ -706,14 +710,14 @@ debug.uint16(li.mtu); debug.nl(); }
 	{   net.FromMAC(li.id, intf.iid);
 	    intf.state = TENTATIVE;
 	}
-	is PPP then
+	is PPP, WPAN then
 	{   intf.iid = li.id[0:8];
 	    intf.state = PREFERRED;
 	}
 if db > 0 then {
 addr[0:8] = LinkLocalPrefix[0:8]; addr[8:8] = intf.iid;
 debug.str( "\tlla="); AddrPrint(addr); debug.nl();}
-	intf.PfxCacheAdd(LinkLocalPrefix, 64, 0xFFFF_FFFF);
+	intf.PfxCacheAdd(LinkLocalPrefix, 64, _uint32?max);
 	addr[0:13] = SolicitedPrefix;
 	addr[13:3] = intf.iid[5:3];		// FIXME
 	intf.AddrAddMulticast(addr);		// multicast solicited-node
@@ -730,6 +734,14 @@ debug.uint8(e.tag); debug.nl(); }
 	if intf.neighbors != 0 then intf.DeleteQueue(intf.neighbors);
 	intf.state = DOWN;
 	ib.ifcount -= 1;
+    }
+
+    proc (ib: pIPv6Block) AddPrefix(ifn: _uint, pfx: @[8]_byte)
+    {   var intf: pLower;
+
+	intf = ib.GetInterface(ifn);
+	if intf == 0 then return;
+	intf.PfxCacheAdd(pfx, 64, _uint32?max);
     }
 
     proc (ib: pIPv6Block) InformUpper(isup: boolean)
@@ -846,7 +858,7 @@ if db > 0 then {debug.str("ipv6.Connect lower: intf="); debug.uint8(ce.chan); de
 	    {   var up: pUpper;
 if db > 0 then {debug.str("ipv6.Connect upper: intf="); debug.uint8(ce.chan); debug.nl();}
 		up = _new(Upper);
-		up.proto = ce.info;
+		up.proto = Proto(ce.info);
 		up.tag   = ce.chan;
 		up.bid   = ce.tag;
 		up.next = ib.upper;

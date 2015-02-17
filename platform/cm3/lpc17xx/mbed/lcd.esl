@@ -70,7 +70,7 @@ package lcd
     {
 	gpio.Clr(A0);
 	gpio.Clr(CS);
-	ds.spi.Send(cmd);
+	ds.spi.Send(_uint8(cmd));
 	gpio.Set(CS);
     }
 
@@ -150,7 +150,7 @@ package lcd
 	if x > 128 || y > 32 then return;
 	pbyte = ds.buf[x + (y/8 * 128)];
 	mask = 1 << (y%8);
-	if pix != 0 then
+	if pix then
 	    pbyte@ = pbyte@ | mask;
 	else
 	    pbyte@ = pbyte@ & ~mask;
@@ -185,12 +185,12 @@ package lcd
 	    for h from 0 to g.height-1 do
 	    {   if h < g.yoffs || h > g.yoffs + g.ysize -1 then
 	    	{   for w from 0 to g.width -1 do
-	    		ds.ShowPixel(x+w, y+h, 0);
+			ds.ShowPixel(x+w, y+h, false);
 	    	}
 	    	else
 		{   for w from 0 to g.width-1 do
 		    {   if w < g.xoffs || w > g.xoffs + g.xsize -1 then
-	    		    ds.ShowPixel(x+w, y+h, 0);
+			    ds.ShowPixel(x+w, y+h, false);
 			else
 			{   if b == 0 then
 			    {   bm = ds.fp.bitmaps[k];
@@ -198,9 +198,9 @@ package lcd
 				b = 8;
 			    }
 			    if (bm&0x80) != 0 then
-				ds.ShowPixel(x+w, y+h, 1);
+				ds.ShowPixel(x+w, y+h, true);
 			    else
-				ds.ShowPixel(x+w, y+h, 0);
+				ds.ShowPixel(x+w, y+h, false);
 			    bm = bm << 1;
 			    b -= 1;
 			}

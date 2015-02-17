@@ -109,7 +109,7 @@ if db > 3 then {debug.str("RunI "); debug.uint8(bid); debug.nl();}
 			bid.MakeIdle();
 if db > 1 then {debug.str("Run "); debug.uint8(bid); 
 debug.chr(':'); debug.uint8(e.tag);
-debug.chr(' '); debug.uint8(e.code);
+debug.chr(' '); debug.uint8(_uint8(e.code));
 debug.chr('('); debug.uint16(e.xsize); debug.str(")\n");}
 		    b.run@(b, e);
 		}

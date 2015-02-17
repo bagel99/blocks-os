@@ -9,8 +9,25 @@
 package sysctl
 {
 
-    type Select: [32]boolean: packed, lsb;
+    // peripheral control register group
+    const TMR   =  0;
+    const SSI   =  1;
+    const UART  = 2;
+    const I2C0  = 3;
+    const SEC   = 4;
+    const RADIO = 5;
+    // peripheral control register bit
+    const PKA   = 0;
+    const AES   = 1;
 
+
+    type Select: [32]boolean: packed, lsb;
+    type PeriphRegs:
+    {   run: Select: out;	// run mode
+	slp: Select: out;	// sleep mode
+	pm0: Select: out;	// deep sleep mode
+	rst: Select: out;	// reset
+    };
     type ClockRegs:
     {   sysdiv:  0..7;		// .00-02
 	_:       0..0b11111;	// .03-07
@@ -31,36 +48,7 @@ package sysctl
     type Regs:
     {   clkctl: ClockRegs: out;						// 00
     	clksts:	ClockRegs: in, ro;					// 04
-    	timer:
-    	{   run: Select: out;						// 08
-    	    slp: Select: out;						// 0C
-    	    pm0: Select: out;						// 10
-    	    rst: Select: out;						// 14
-    	};
-    	ssi:
-    	{   run: Select: out;						// 18
-    	    slp: Select: out;						// 1C
-    	    pm0: Select: out;						// 20
-    	    rst: Select: out;						// 34
-    	};
-    	uart:
-    	{   run: Select: out;						// 28
-    	    slp: Select: out;						// 2C
-    	    pm0: Select: out;						// 30
-    	    rst: Select: out;						// 34
-    	};
-    	i2c:
-    	{   run: Select: out;						// 38
-    	    slp: Select: out;						// 3C
-    	    pm0: Select: out;						// 40
-    	    rst: Select: out;						// 44
-    	};
-    	sec:
-    	{   run: Select: out;						// 48
-    	    slp: Select: out;						// 4C
-    	    pm0: Select: out;						// 50
-    	    rst: Select: out;						// 54
-    	};
+    	pctl:   [5]PeriphRegs;
     	pm:  (NONE, PM1, PM2, PM3): bits(32), out;			// 58
     	srcrc:								// 5C
 	    _uint32;
@@ -87,32 +75,39 @@ package sysctl
 
     type EnableMask: { run: boolean; slp: boolean; pm0: boolean; }: packed;
 
-    proc EnableTimer(which: 0..31, when: EnableMask)
+    proc DelayShort(n: _uint)
     {
-	if when.run then sc.timer.run[which] = true;
-	if when.slp then sc.timer.slp[which] = true;
-	if when.pm0 then sc.timer.pm0[which] = true;
+	do
+	    n -= 1;
+	while n > 0;
+    }
+ 
+    proc Enable(group: _uint, unit: _uint, when: EnableMask)
+    {
+	if group <= 4 then	// contiguous groups
+	{   if when.run then sc.pctl[group].run[unit] = true;
+	    if when.slp then sc.pctl[group].slp[unit] = true;
+	    if when.pm0 then sc.pctl[group].pm0[unit] = true;
+	}
+	else			// must be radio, only 1 unit
+	{   if when.run then sc.radio.run[0] = true;
+	    if when.slp then sc.radio.slp[0] = true;
+	    if when.pm0 then sc.radio.pm0[0] = true;
+	}
     }
 
-    proc EnableUart(which: 0..31, when: EnableMask)
+    proc Disable(group: _uint, unit: _uint, when: EnableMask)
     {
-	if when.run then sc.uart.run[which] = true;
-	if when.slp then sc.uart.slp[which] = true;
-	if when.pm0 then sc.uart.pm0[which] = true;
-    }
-
-    proc EnableSSI(which: 0..31, when: EnableMask)
-    {
-	if when.run then sc.ssi.run[which] = true;
-	if when.slp then sc.ssi.slp[which] = true;
-	if when.pm0 then sc.ssi.pm0[which] = true;
-    }
-
-    proc EnableRadio(when: EnableMask)
-    {
-	if when.run then sc.radio.run = {[0] = true};
-	if when.slp then sc.radio.slp = {[0] = true};
-	if when.pm0 then sc.radio.pm0 = {[0] = true};
+	if group <= 4 then	// contiguous groups
+	{   if when.run then sc.pctl[group].run[unit] = false;
+	    if when.slp then sc.pctl[group].slp[unit] = false;
+	    if when.pm0 then sc.pctl[group].pm0[unit] = false;
+	}
+	else			// must be radio, only 1 unit
+	{   if when.run then sc.radio.run[0] = false;
+	    if when.slp then sc.radio.slp[0] = false;
+	    if when.pm0 then sc.radio.pm0[0] = false;
+	}
     }
 
     proc WaitRadioEnabled(when: EnableMask)
@@ -122,18 +117,20 @@ package sysctl
 	}
     }
 
+    proc Reset(group: _uint, unit: _uint)
+    {
+	if group > 4 then	// must be radio, no reset
+	    return;
+	sc.pctl[group].rst[unit] = true;
+	DelayShort(16);
+	sc.pctl[group].rst[unit] = false;
+    }
+
     proc GetIOClock(): _uint
     {
 	return 32_000_000 / (sc.clksts.iodiv+1);
     }
 
-    proc DelayShort(n: _uint)
-    {
-	do
-	    n -= 1;
-	while n > 0;
-    }
- 
     proc Init(xtal: boolean)
     {   var cr: ClockRegs;
 

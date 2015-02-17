@@ -66,6 +66,11 @@ package inet
     } : align(4);
     type pULHeader: @ULHeader;
 
+    /*
+     * The upper level header is defined differently in the RFCs.
+     * But, because the way the checksum works:
+     * order of the 16-bit chunks doesn't change the result.
+     */
     type ULHeader6(ULHeader):	// same size as IPv6 Header
     {	zeros:	Net32;		// This field must be zero before checksumming
 	srcaddr:IPv6Addr;	// same place as IPv6 Header

@@ -282,7 +282,7 @@ package radio
     {
     	if state.rfon then return;
 
-	sysctl.EnableRadio({.run=true,.slp=true,.pm0=true});
+	sysctl.Enable(RADIO, 0, {.run=true,.slp=true,.pm0=true});
 	rf.ccactl0 = 0xF8;	// recommended in user guide?
 	// Changes from default settings, section 23.15
 	rf.txfltcfg = 0x09;

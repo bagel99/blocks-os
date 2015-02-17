@@ -600,7 +600,7 @@ if db > 3 then debug.str("UD\n");
 	    epi = hs.FindEndPoint(pipe);
 if db > 3 then td.Dump();
 	    // check for error
-	    if tdi.cc != 0 then
+	    if tdi.cc != NoError then
 	    {
 td.TDError();
 if db <= 3 then td.Dump();

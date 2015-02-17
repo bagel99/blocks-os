@@ -82,7 +82,7 @@ debug.str("Starting test-inet...\n");
     MyMAC[5] = _byte(serialno);
 */
     MyMAC = { 0x02, 0x12, 0x34, 0x45, 0x67, 0x78 };
-    debug.str("MyMAC="); ipv6.MACPrint(MyMAC); debug.nl();
+    debug.str("MyMAC="); ipv6.MACPrint(MyMAC, 6); debug.nl();
 
     timer.NewBlock(TimerID);
     eth.NewBlock(EthID);

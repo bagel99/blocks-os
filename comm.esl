@@ -9,7 +9,7 @@ import event;
 
 package comm
 {
-    type LinkType: (UNKN, ENET, PPP);
+    type LinkType: (UNKN, ENET, PPP, WPAN);
 
     type LinkInfo(event.Event):
     {   info:      _uint16;

@@ -8,7 +8,7 @@
 package event
 {
     type Code:
-    (	_,
+    (	NOP,
 	CONNECT,	// reserved for block connection protocol
 	START,
     	STOP,

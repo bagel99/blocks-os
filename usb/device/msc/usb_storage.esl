@@ -265,9 +265,9 @@ if db > 2 then {debug.str("S\n");}
 	    i += 1;
 	}
 	mss.datain[0] = 0x70;
-	mss.datain[2] = mss.sensekey;
+	mss.datain[2] = _uint8(mss.sensekey);
 	mss.datain[7] = 10;		// additional sense data length
-	mss.datain[12] = mss.sensecode;
+	mss.datain[12] = _uint8(mss.sensecode);
 	mss.datain[13] = mss.sensequal;
 	mss.state = INLAST;
 	mss.epin.StartIn(mss.datain, 18);

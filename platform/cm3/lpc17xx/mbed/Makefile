@@ -3,6 +3,7 @@ ARCH=	-mcortex-m3
 INC=	-I.. -I../.. -I../../.. -I../../.. -I../../../.. \
 	-I../../../../net -I../../../../net/phy \
 	-I../../../../net/ipv4  -I../../../../net/ipv6 \
+	-I../../../../net/wpan -I../../../../net/ppp \
 	-I../../../../display -I../../../../display/fonts \
 	-I../../../../usb \
 	-I../../../../usb/device/hid \
@@ -46,7 +47,8 @@ LIB= 	../../lib/lib.a
 
 all:	test-timer.bin test-inet.bin \
 	test-udp.bin test-tcp.bin \
-	test-lcd.bin test-colorled.bin test-adc.bin test-speaker.bin \
+	test-lcd.bin test-inet-lcd.bin \
+	test-colorled.bin test-adc.bin test-speaker.bin \
 	test-accel.bin test-usbhost.bin
 #	test-hid.elf test-sdcard.elf test-msc.elf
 

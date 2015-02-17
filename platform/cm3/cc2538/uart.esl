@@ -176,7 +176,7 @@ package uart
 
 	if n > uartaddr?len-1 then return 0;
 	u = Uart(uartaddr[n]);
-	sysctl.EnableUart(n, {.run=true});
+	sysctl.Enable(sysctl.UART, n, {.run=true, .slp=true});
 	u.Disable();
 	u.cc = { .piosc=IODIV, .dsen=SYSDIV };
 	// configure pins
@@ -192,6 +192,23 @@ package uart
 	u.SetConfig(115200, F8N1);
 	nvic.Enable(uartvect[n]);	// FIXME - not always?
 	return u;
+    }
+}
+
+// For debugging
+package debug
+{
+    // If Init not defined, they we are the debug port
+    if !_defined(Init) then {
+	var u: uart.Uart;
+	proc Init()
+	{
+	    u = uart.Init(sys.DebugPort, sys.UART0Ports);
+	}
+	proc PutC(c: _byte)
+	{
+	    u.Send(c);
+	}
     }
 }
 

@@ -645,7 +645,7 @@ proc (ep: eps) EPDump()
 debug.str("EP"); debug.uint8(ep.num);
 if ep.t.isconfig then
 {   debug.str(" config type=");
-    debug.uint8(ep.t.type);
+    debug.uint8(_uint8(ep.t.type));
     if ep.t.isin then
     {   debug.str(" IN txfifo="); debug.uint8(ep.t.txfifo);
     }
@@ -751,8 +751,8 @@ if db & db_other != 0 then {debug.str("RST\n");}
 	// clear any pending interrupts
 	i = 0;
 	while i < NumTxFIFO do
-	{   ud.iep[i].int = 0xFF;
-	    ud.oep[i].int = 0xFF;
+	{   ud.iep[i].int = IEPINTx(0xFF);
+	    ud.oep[i].int = OEPINTx(0xFF);
 	    i += 1;
 	}
 	ud.aint = { {[0..15]=true}, {[0..15]=true} }; // clear all EP interrupts

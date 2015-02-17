@@ -123,7 +123,7 @@ if db > 3 then debug.str("eth.XmitEnqueue\n");
 	eh = pHeader(mb.GrowHead(Header?size - EUI64?size));
 	eh.dstaddr = la@[0:6];	// use discarded data
 	eh.srcaddr = MyMAC;
-	eh.proto = mb.info;
+	eh.proto = Proto(mb.info);
 if db > 1 then {debug.str("eth.Send: size="); debug.uint(mb.Size());
 debug.str(" proto="); debug.hex16(_uint16(eh.proto));
 debug.nl();}
@@ -158,7 +158,7 @@ if db > 2 then {debug.str("\tup="); debug.hex(_uint(up)); debug.nl();}
 	{   mb.ShrinkHead(Header?size);
 	    mb.code = RCVD;
 	    mb.tag  = up.tag;
-	    mb.info = up.proto;
+	    mb.info = _uint16(up.proto);
 	    up.bid.Send(mb);
 	}
 	else

@@ -31,18 +31,9 @@ package sysctl
     } : packed, lsb, in, out;
     type CLK_T:
     {	_:	0..0xFFFF_FFFF;		// what is at 0x100?		// 0x0
-	cpu:								// 0x4
-	{   sel:    0..255;	// divide PLL0 outout to get CPU clock
-	    _:      0..0xFF_FFFF;
-	}: packed, lsb, out;
-	usb:								// 0x8
-	{   sel:    0..15;	// divide PLL0 output to get USB clock
-	    _:      0..0xFFF_FFFF;
-	}: packed, lsb, out;
-	src:								// 0xC
-	{   sel:    (internalrc, main, rtc, invalid);
-	    _:	    0..0x3FFF_FFFF;
-	}: packed, lsb, out;
+	cpu:    0..255: bits(32), out;	// divide PLL0 to get CPU clock	// 0x4
+	usb:	0..15: bits(32), out;	// divide PLL0 to get USB clock	// 0x8
+	src:	(internalrc, main, rtc, invalid): bits(32), out;	// 0xC
     };
     type PLL0_T:
     {   ctl:
@@ -230,7 +221,7 @@ package sysctl
 	while !sc@.scs.oscrdy do
 	    {}	// loop until ready
 	sc@.clk.cpu = 3;		// PLL divisor for CPU (minus 1)
-	sc@.clk.src = { .sel=main };		// select XTAL as clock source
+	sc@.clk.src = main;		// select XTAL as clock source
 	sc@.pll0.cfg = { .m=11, .n=0 };	// FIXME: assumes 12->72 MHz
 	sc@.pll0.ctl = { .enb=true, .con=false };	// enable
 	sc@.pll0.feed = 0xAA;  sc@.pll0.feed = 0x55;

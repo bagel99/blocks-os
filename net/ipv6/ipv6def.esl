@@ -50,7 +50,8 @@ package ipv6
     type Header:
     {	vtf:
 	{   version: 0..15;		// 4-bit version, must be 6
-	    traffic: 0..0xFF;		// 8-bit traffic class
+	    dscp:    0..0x3F;		// 6-bit diff. services code point
+	    ecn:     0..3;		// 2-bit explicit congestion notif.
 	    flow:    0..0xFFFFF;	// 20-bit flow label
 	}: packed, msb, be;
 	length:  Net16;			// 16-bit payload length
@@ -229,14 +230,14 @@ if _defined(debug) then {
 	debug.strn(buf, n);
     }
 
-    proc MACPrint(a: @net.MAC)
+    proc MACPrint(a: @[]_byte, n: _uint)
     {   var i: _uint;
 
 	i = 0;
 	loop
 	{   debug.hex8(a[i]);
 	    i += 1;
-	  exit i == 6;
+	  exit i == n;
 	    debug.chr(':'); 
 	}
     }

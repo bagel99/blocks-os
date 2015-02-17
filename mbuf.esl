@@ -151,7 +151,7 @@ if _defined(debug) then {
 	tsize = size + offs;	// offs followed by size
 	mb = _new(MBuf(tsize));
  	if mb != 0 then
-	{   mb.code = 0;
+	{   mb.code = NOP;
 	    mb.next = 0;
 	    mb.xsize = tsize + HdrSize;
 	    mb.info = 0;

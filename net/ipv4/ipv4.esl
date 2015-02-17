@@ -648,7 +648,7 @@ if db > 0 then {debug.str("ipv4.Connect lower: intf="); debug.uint8(ce.chan); de
 	    {   var up: pUpper;
 if db > 0 then {debug.str("ipv4.Connect upper: intf="); debug.uint8(ce.chan); debug.nl();}
 		up = _new(Upper);
-		up.proto = ce.info;
+		up.proto = Proto(ce.info);
 		up.tag   = ce.chan;
 		up.bid   = ce.tag;
 		up.next  = ib.upper;
