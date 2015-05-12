@@ -4,6 +4,7 @@ INC=	-I.. -I../.. -I../../.. -I../../.. -I../../../.. \
 	-I../../../../net -I../../../../net/phy \
 	-I../../../../net/ipv4  -I../../../../net/ipv6 \
 	-I../../../../net/wpan -I../../../../net/ppp \
+	-I../../../../sensors \
 	-I../../../../display -I../../../../display/fonts \
 	-I../../../../usb \
 	-I../../../../usb/device/hid \

@@ -1,7 +1,8 @@
 AS=	arm-as -mcpu=cortex-m3
 LD=	arm-ld
 
-OBJS=	memset.o memcpy.o memcmp.o memlen.o
+OBJS=	memset.o memcpy.o memcmp.o memlen.o \
+	eabi_memset.o eabi_memcpy.o
 
 %.o: %.S
 	$(AS) -o $@ $<
@@ -22,5 +23,11 @@ memcmp.o: memcmp.S
 	$(AS) -o $@ $<
 
 memlen.o: memlen.S
+	$(AS) -o $@ $<
+
+eabi_memset.o: eabi_memset.S
+	$(AS) -o $@ $<
+
+eabi_memcpy.o: eabi_memcpy.S
 	$(AS) -o $@ $<
 

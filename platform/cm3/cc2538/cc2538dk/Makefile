@@ -5,6 +5,7 @@ INC=	-I.. -I../.. -I../../.. -I../../.. -I../../../.. \
 	-I../../../../net/ipv4  -I../../../../net/ipv6 \
 	-I../../../../net/wpan \
 	-I../../../../display -I../../../../display/fonts \
+	-I../../../../sensors \
 	-I../../../../usb \
 	-I../../../../usb/device/hid \
 	-I../../../../usb/host \

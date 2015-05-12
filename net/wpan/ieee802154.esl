@@ -1,0 +1,249 @@
+/*
+ * IEEE 802.15.4 MAC Layer
+ */
+
+import crc_itut16;
+import net;		// for pack, unpk
+
+package ieee802154
+{
+    type FrameInfo:	// FIXME - move elsewhere?
+    {   srcadr:  _uint64;
+	dstadr:  _uint64;
+	srcpan:  _uint16;
+	dstpan:  _uint16;
+	flags:   _uint8;	// TBD
+	rssi:    _int8;
+	datoff:  _uint8;
+	datlen:  _uint8;
+    };
+
+    alias crc_itut16 as crc;
+    const MTU = 127;	// max length of frame
+    const FCS = 2;	// length of FCS
+    type PANId:	    ( Broadcast=0xFFFF );
+    type AddrShort: ( UnAlloc=0xFFFE, UnAssoc=0xFFFF );
+    type AddrLong:  _uint64;
+    type Command:   ( AssocReq=1, AssocRsp, DisAssoc,
+		      DataReq, Conflict, Orphan, BeaconReq,
+		      Realign, GTSReq, Max=15
+		    );
+
+    //API Status defined in sect 7.1.17
+    type  MACStatus:
+  	( SUCCESS=0x00,
+  	  BEACON_LOSS=0xe0,
+	  CHANNEL_ACCESS_FAILURE=0xe1,
+	  DENIED=0xe2,
+	  DISABLE_TRX_FAILURE=0xe3,
+	  FAILED_SECURITY_CHECK=0xe4,
+	  FRAME_TOO_LONG=0xe5,
+	  INVALID_GTS=0xe6,
+	  INVALID_HANDLE=0xe7,
+	  INVALID_PARAMETER=0xe8,
+	  NO_ACK=0xe9,
+	  NO_BEACON=0xea,
+	  NO_DATA=0xeb,
+	  NO_SHORT_ADDRESS=0xec,
+	  OUT_OF_CAP=0xed,
+	  PAN_ID_CONFLICT=0xee,
+	  REALIGNMENT=0xef,
+	  TRANSACTION_EXPIRED=0xf0,
+	  TRANSACTION_OVERFLOW=0xf1,
+	  TX_ACTIVE=0xf2,
+	  UNAVAILABLE_KEY=0xf3,
+	  UNSUPPORTED_ATTRIBUTE=0xf4
+	);
+
+    /*
+     * From IEEE 802.15.4-2011:
+     * [T]he leftmost bit is transmitted first in time. Bits within each
+     * field are numbered from 0 (leftmost and least significant) to k – 1
+     * (rightmost and most significant), where the length of the field is k bits.
+     * Fields that are longer than a single octet are sent ... in the order
+     * from the octet containing the lowest numbered bits to the octet
+     * containing the highest numbered bits.
+     * [A]ll reserved bits shall be set to zero upon transmission and may be
+     * ignored upon receipt.
+     * A device’s extended address shall be a 64-bit universal address,
+     * as defined by the IEEE Registration Authority.
+     */
+    // MAC Header
+    type FrameType: ( Beacon, Data, Ack, Comd ): bits(3);
+    type AddrMode:  ( None, _, Short, Long );
+    type FrameCF:
+    {	type:	FrameType;	// .00-02
+	se:	boolean;	// .03 security enabled
+	fp:	boolean;	// .04 frame pending
+	ar:	boolean;	// .05 ACK request
+	ip:	boolean;	// .06 Intra-PAN
+	_:	0..1;		// .07 reserved
+	_:	0..3;		// .08-09 reserved
+	dm:	AddrMode;	// .10-11 destination address mode
+	vers:	0..3;		// .12-13 frame version
+	sm:	AddrMode;	// .14-15
+    }: packed, lsb;
+    type  Header:
+    {
+	fcf: FrameCF: le;
+	seqno:     0..255;
+	addr: []_byte;
+    };
+    type pHeader: @Header;
+
+    // Security Header
+    type SecLevel: (NONE, MIC32, MIC64, MIC128, ENC, ENC_MIC32, ENC_MIC64, ENC_MIC128);
+    type SecHeader:
+    {   cntl:
+	{   lvl:     SecLevel;	// .00-02
+	    keymode: 0..3;	// .03-04
+	    rsvd:    0..0b111;	// .05-07
+	}:packed, lsb;
+	frmcnt: _uint32: align(1);
+	keyid: []_byte;
+    };
+    	
+
+    /*
+     * Type Intra Dst  Src | Dst Dst Src Src  Tot
+     *       PAN Mode Mode | Pan Adr Pan Adr  Hdr
+     *  1,3   x    0    0                            Invalid?
+     *  1,3   x    0    2     0   0   2   2    7     To PAN coordinator
+     *  1,3   x    0    3     0   0   2   8   13     To PAN coordinator
+     *  1,3   x    2    0     2   2   0   0    7     From PAN coordinator
+     *  1,3   x    3    0     2   8   0   0   13     From PAN coordinator
+     *  1,3   0    2    2     2   2   2   2   11
+     *  1,3   1    2    2     2   2   0   2    9     SrcPan=DstPan
+     *  1,3   0    2    3     2   2   2   8   17
+     *  1,3   1    2    3     2   2   0   8   17     SrcPan=DstPan
+     *  1,3   0    3    2     2   8   2   2   17
+     *  1,3   1    3    2     2   8   0   2   15     SrcPan=DstPan
+     *  1,3   0    3    3     2   8   2   8   23
+     *  1,3   1    3    3     2   8   0   8   21     SrcPan=DstPan
+     *   0    x    0    2     0   0   2   2    7     Beacon
+     *   0    x    0    8     0   0   2   8   13     Beacon
+     *   2    x    0    0     0   0   0   0    3     Ack, no addresses allowed
+     */
+    const ShortUUID: _uint64 = 0x000000FF_FE000000;
+
+
+
+    proc Recv(frame: @[]_byte, len: _uint, info: @FrameInfo)
+    {
+	var n: 0..255;
+	var h: pHeader;
+	var srcpan, dstpan: _uint16;
+	var srcadr, dstadr: _uint64;
+
+
+        var fcs: _uint16;
+        fcs = crc.calc(frame, len);
+        if fcs != 0 then
+        {
+debug.str("fcs error="); debug.hex16(fcs); debug.nl();
+	    // FIXME - discard frame
+	}
+	h = pHeader(frame);
+debug.str("seqno="); debug.uint8(h.seqno);
+debug.str(" dm="); debug.uint8(_uint8(h.fcf.dm));
+debug.str(" sm="); debug.uint8(_uint8(h.fcf.sm));
+debug.str(" ip="); debug.uint8(_uint8(h.fcf.ip));
+debug.nl();
+	if h.fcf.type == Ack then
+	    return;	// FIXME - what to do with an ACK
+	n = 0;		// offset to data from start of address fields
+	if h.fcf.dm != None then
+	{   dstpan = net.unpkle16(h.addr[n:2]);
+	    n += 2;
+	    if h.fcf.dm == AddrMode.Short then
+	    {   dstadr = ShortUUID | net.unpkle16(h.addr[n:2]);
+		n += 2;
+	    } else	// assume Long
+	    {   dstadr = net.unpkle64(h.addr[n:8]);
+		n += 8;
+	    }
+	}
+	if h.fcf.sm == None then
+	{   // assert h.fcf.dm != None
+	    srcpan = dstpan;		// From PAN coordinator
+	}
+	else
+	{   if h.fcf.ip then
+	    {   // assert h.fcf.dm != None
+		srcpan = dstpan;
+	    }
+	    else
+	    {   srcpan = net.unpkle16(h.addr[n:2]);
+		n += 2;
+	    }
+	    if h.fcf.sm == AddrMode.Short then
+	    {   srcadr = ShortUUID | net.unpkle16(h.addr[n:2]);
+	        n += 2;
+	    } else	// assume Long
+	    {   srcadr = net.unpkle64(h.addr[n:8]);
+		n += 8;
+	    }
+	    if h.fcf.dm == None then
+	    	dstpan = srcpan;	// To PAN coordinator
+	}
+	info.datoff = n + 3;
+	info.datlen = len - n - 5;
+	info.dstpan = dstpan;
+	info.dstadr = dstadr;
+	info.srcpan = srcpan;
+	info.srcadr = srcadr;
+    }
+
+
+    proc HeaderLength(fcf: FrameCF): _uint
+    {   var n: _uint;
+    	const AddrLen1: [AddrMode][boolean]_byte  = {{0,0}, {0,0}, {4,2}, {10,8}};
+    	const AddrLen: [boolean][AddrMode]_byte  = {{ 0, 0, 4,10 },{ 0, 0, 2, 8 }};
+ 
+	n = 3 + AddrLen[false][fcf.dm] + AddrLen[fcf.ip][fcf.sm];
+	if fcf.se then n += 1;
+	return n;
+    }
+
+    proc MaxPayload(fcf: FrameCF): _uint
+    {
+    	// FIXME - security stuff if enabled
+	return MTU - FCS - HeaderLength(fcf);
+    }
+
+  type  ScanTypes: (ED, Active, Passive, Orphan);
+  const NumChannels = 32;
+  type  ChannelRange: 0..NumChannels-1;
+  type  ChannelMap: [NumChannels] boolean;
+  type  ScanDuration: 0..14;
+
+  var   SupportedChannels: ChannelMap;
+
+  // MLME-SCAN.request
+
+  proc Scan(ScanType: ScanTypes,
+	    RequestedChannels: ChannelMap,
+	    Duration: ScanDuration)
+  {
+      if ScanType
+      is ScanTypes.ED then
+      {
+//	  for chan in ChannelRange
+//	  {   if SupportedChannels[chan] and RequestedChannels[chan]
+//	      then
+//	      {   PHYSetChannel(chan);
+//
+//	      }
+//	  }
+      }
+      is ScanTypes.Orphan then
+      {
+      }
+      is ScanTypes.Active then
+      {
+      }
+      is ScanTypes.Passive then
+      {
+      }
+  }
+}

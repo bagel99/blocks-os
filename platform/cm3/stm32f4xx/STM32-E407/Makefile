@@ -16,23 +16,22 @@ LD=	arm-ld
 OBJCOPY=arm-objcopy
 OBJDUMP=arm-objdump -Mforce-thumb
 NM=	arm-nm
-LIBDIR= ../../lib
-LIBOBJ= memset.o memcpy.o memcmp.o mem.o
+LIB= 	../../lib/lib.a
 
 # keep intermediate files, for now
-.PRECIOUS: %.elf %.s %.ll
+.PRECIOUS: %.out %.s %.ll
 
-%.dis: %.elf
+%.dis: %.out
 	$(OBJDUMP) -d $< >$@
 
-%.map: %.elf
+%.map: %.out
 	$(NM) -n $< >$@
 
-%.bin: %.elf
+%.bin: %.out
 	$(OBJCOPY) -I elf32-littlearm -O binary $< $@
 
-%.elf: %.o startup.o $(LIBOBJ) mem.o
-	$(LD) -T ../stm32f407.ld startup.o $<  $(LIBOBJ) -o $@
+%.out: %.o startup.o mem.o $(LIB)
+	$(LD) -T ../stm32f407.ld startup.o $<  mem.o $(LIB) -o $@
 
 %.o: %.s
 	$(AS) -o $@ $<
@@ -46,25 +45,16 @@ LIBOBJ= memset.o memcpy.o memcmp.o mem.o
 %.dep: %.esl
 	$(ESLC) -M $(ARCH) $(DBG) $(INC) $(OPT) $<
 
-all:	test-uart.elf test-blink42.elf test-inet.elf \
-	test-hid.elf
+all:	test-uart.out test-blink42.out test-inet.out \
+	test-hid.out
 
 startup.o: ../startup.S
 	$(AS) -o startup.o ../startup.S
-
-memset.o: $(LIBDIR)/memset.S
-	$(AS) -o memset.o $(LIBDIR)/memset.S
-
-memcpy.o: $(LIBDIR)/memcpy.S
-	$(AS) -o memcpy.o $(LIBDIR)/memcpy.S
-
-memcmp.o: $(LIBDIR)/memcmp.S
-	$(AS) -o memcmp.o $(LIBDIR)/memcmp.S
 
 mem.o:	../../../mem_ff.esl
 	$(ESLC) $(ARCH) $(DBG) $(OPT) $<
 	$(AS) -o $@ mem_ff.s
 
 clean:
-	rm -f *.bin *.elf *.o *.s *.ll *.map *.dis
+	rm -f *.bin *.out *.o *.s *.ll *.map *.dis
 

@@ -4,8 +4,8 @@ INC=	-I.. -I../.. -I../../.. -I../../../.. \
 	-I../../../../net -I../../../../net/inet -I../../../../net/phy \
 	-I../../../../net/inet/ipv4  -I../../../../net/inet/ipv6 \
 	-I../../../../usb -I../../../../fs -I../../../../crc \
+	-I../../../../sensors \
 	-I../../../../usb/device/hid
-#	-I../../../../fs
 
 DBG=
 OPT=	-i	# disable inlining
