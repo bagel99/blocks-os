@@ -73,7 +73,7 @@ package lcd
 
     type State:
     {
-	spi:	ssi.SSI;
+	spi:	ssi.Device;
 	width:  _uint16;	// display width in pixels
 	height: _uint16;	// display height in pixels
 	col:    _uint16;	// current column in pixels
@@ -90,7 +90,7 @@ package lcd
 
     proc (ds: DS) SpiEnd():: inline
     {
-    	ds.spi.SendWaitDone();
+	ds.spi.WaitTxDone();
 	gpio.Set(sys.LCDSelectPin);
     }
 
@@ -284,23 +284,16 @@ package lcd
 	ds.fp = newfont;
     }
 
-    proc (ds: DS) Init(ssiunit: _uint, ssipins: @[3]gpio.PortDesc)
-    {   var spi: ssi.SSI;
+    proc (ds: DS) Init(sd: spi.Device, cs: gpio.PortDesc)
+    {
 
-//	sys.V3_3Enable();	// should this be here?
-
-	spi = ssi.Init(ssiunit, ssipins);
-	if spi == 0 then return;
-	ds.spi = spi;
+	ds.spi = sd;
 	ds.width = 128;
 	ds.height = 64;
 	ds.row = 0;
 	ds.col = 0;
 	ds.fp = 0;	// must be set by SetFont() before use
-	spi.SetSpiMaster(MODE3, sys.SPIClock, 8);
-	spi.Enable();
 	gpio.SetConf(sys.LCDModePin, OUT1);	// output
-	gpio.SetConf(sys.LCDSelectPin, OUT1);	// output
 	gpio.SetConf(sys.LCDResetPin, OUT0);	// output, assert reset
 	// Delay ~100ms for LCD to be powered up
 	sys.Delay_mS(100);

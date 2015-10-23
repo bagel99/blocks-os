@@ -46,7 +46,7 @@ LIB= 	../../lib/lib.a
 %.dep: %.esl
 	$(ESLC) -M $(ARCH) $(DBG) $(INC) $(OPT) $<
 
-all:	test-uart.out test-lcd.out
+all:	test-uart.out test-lcd.out test-radioxmit.out test-radiorecv.out
 
 startup.o: ../startup.S
 	$(AS) -o startup.o ../startup.S

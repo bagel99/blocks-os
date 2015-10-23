@@ -20,18 +20,18 @@ NM=	arm-nm
 LIB= 	../../lib/lib.a
 
 # keep intermediate files, for now
-.PRECIOUS: %.elf %.s %.ll
+.PRECIOUS: %.out %.s %.ll
 
-%.dis: %.elf
+%.dis: %.out
 	$(OBJDUMP) -d $< >$@
 
-%.map: %.elf
+%.map: %.out
 	$(NM) -n $< >$@
 
-%.bin: %.elf
+%.bin: %.out
 	$(OBJCOPY) -I elf32-littlearm -O binary $< $@
 
-%.elf: %.o startup.o mem.o $(LIB)
+%.out: %.o startup.o mem.o $(LIB)
 	$(LD) -T ../lpc17xx.ld startup.o $<  mem.o $(LIB) -o $@
 
 %.o: %.s
@@ -51,7 +51,7 @@ all:	test-timer.bin test-inet.bin \
 	test-lcd.bin test-inet-lcd.bin \
 	test-colorled.bin test-adc.bin test-speaker.bin \
 	test-accel.bin test-usbhost.bin
-#	test-hid.elf test-sdcard.elf test-msc.elf
+#	test-hid.out test-sdcard.out test-msc.out
 
 startup.o: ../startup.S
 	$(AS) -o startup.o ../startup.S
@@ -61,5 +61,5 @@ mem.o:	../../../mem_ff.esl
 	$(AS) -o $@ mem_ff.s
 
 clean:
-	rm -f *.bin *.elf *.o *.s *.ll *.map *.dis
+	rm -f *.bin *.out *.o *.s *.ll *.map *.dis
 

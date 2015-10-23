@@ -36,6 +36,7 @@
 
 import sysctl;
 import gpio;
+import ssi;
 
 package sys
 {
@@ -48,9 +49,11 @@ package sys
     const LCDModePin:    gpio.PortDesc = {.port=B,.bit=2};
     const LCDResetPin:   gpio.PortDesc = {.port=B,.bit=3};
     const LCDSelectPin:  gpio.PortDesc = {.port=B,.bit=5};
-    const SDSelectPin:   gpio.PortDesc = {.port=D,.bit=0};
+    const SDCSelectPin:  gpio.PortDesc = {.port=D,.bit=0};
     const ACCSelectPin:  gpio.PortDesc = {.port=D,.bit=5};
     const ACCPowerPin:   gpio.PortDesc = {.port=D,.bit=4};
+    const ACCInt1Pin:    gpio.PortDesc = {.port=D,.bit=2};
+    const ACCInt2Pin:    gpio.PortDesc = {.port=D,.bit=1};
     const ALSPowerPin:   gpio.PortDesc = {.port=A,.bit=7};
     const UART0Ports: [2]gpio.PortDesc =
     {   {.port=A,.bit=0},	// RxD
@@ -110,12 +113,33 @@ package sys
 
     proc V3_3Enable()
     {
-	gpio.Set(V3_3EnablePin);
+	if !gpio.Tst(V3_3EnablePin) then	// power was off
+	{   // needs to stay off >1 ms for SD card cycle
+	    sys.Delay_uS(1500);		// 1.5 ms
+	    gpio.Set(V3_3EnablePin);	// turn 3.3V power of
+	    sys.Delay_uS(600);		// allow 600 us to stabilize
+	}
     }
 
     proc V3_3Disable()
     {
 	gpio.Clr(V3_3EnablePin);
+    }
+
+    /*
+     * Three board devices use SPI: LCD, Accelerometer, SD Card.
+     * So we provide a common initialization routine.
+     * They all seem to take the same mode and speed.
+     */
+    proc SPIInit(): ssi.Device
+    {   var sd: ssi.Device;
+
+	sd = ssi.Init(0, sys.SSI0Ports);
+	if sd == 0 then return 0;
+	sd.SetSpiMaster(MODE3, 8);
+	sd.SetSpeed(sys.SPIClock);
+	sd.Enable();
+	return sd;
     }
 
     proc Init(xtal: boolean)
@@ -134,7 +158,7 @@ package sys
 	{   gpio.SetConf(BTNPorts[i], IN);
 	    gpio.PortPadControl(BTNPorts[i], {.pullup=true});
 	    gpio.DisableIntr(BTNPorts[i]);
-	    gpio.SetIntr(BTNPorts[i], RISE);
+	    gpio.SetIntrType(BTNPorts[i], FALL);
 	}
 
 
@@ -145,7 +169,7 @@ package sys
 	gpio.SetConf(LCDSelectPin, OUT1);
 
 	// SD Card reader CSn (output high)
-	gpio.SetConf(SDSelectPin, OUT1);
+	gpio.SetConf(SDCSelectPin, OUT1);
 
 	// Accelerometer (PWR output low, CSn output high)
 	gpio.SetConf(ACCPowerPin, OUT0);
@@ -166,5 +190,37 @@ package sys
 //	if(!bIntDisabled)
 //	    IntMasterEnable();
     }
-
 }
+
+/*
+ * Now for board specific initialization
+ */
+package sys
+{
+    proc LCDInit(): ssi.Device, gpio.PortDesc
+    {   var spi: ssi.Device;
+
+	V3_3Enable();
+	spi = SPIInit();
+	return spi, sys.LCDSelectPin;
+    }
+
+    proc SDCInit(): ssi.Device, gpio.PortDesc
+    {   var spi: ssi.Device;
+
+	V3_3Enable();
+	spi = SPIInit();
+//	gpio.SetConf(sys.SDCSelectPin, OUT1);	// output high
+	return spi, sys.SDCSelectPin;
+    }
+
+    proc ACCInit(): ssi.Device, gpio.PortDesc
+    {   var spi: ssi.Device;
+
+	spi = SPIInit();
+	gpio.SetConf(sys.ACCPowerPin, OUT1);	// output high
+//	gpio.SetConf(sys.ACCSelectPin, OUT1);	// output high
+	return spi, sys.ACCSelectPin;
+    }
+}
+

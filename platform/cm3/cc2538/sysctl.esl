@@ -126,6 +126,11 @@ package sysctl
 	sc.pctl[group].rst[unit] = false;
     }
 
+    proc GetCPUClock(): _uint
+    {
+	return 32_000_000 / (sc.clksts.sysdiv+1);
+    }
+
     proc GetIOClock(): _uint
     {
 	return 32_000_000 / (sc.clksts.iodiv+1);

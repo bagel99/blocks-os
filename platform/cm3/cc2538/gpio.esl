@@ -92,18 +92,27 @@ package gpio
 	g.data[1 << which.bit] = 0xFF;
     }
 
-    proc SetGroup(port: Ports, bits: Group, mask: Group)
+    proc Tst(which: PortDesc): boolean
+    {   var g: GPIO;
+
+	g = GPIO(gpioaddr[which.port]);
+	return g.data[1 << which.bit] != 0;
+    }
+
+    proc SetGroupData(port: Ports, mask: Group, bits: Group)
     {   var g: GPIO;
 
 	g = GPIO(gpioaddr[port]);
 	g.data[_uint8(mask)] = _uint8(bits);
     }
 
-    proc Tst(which: PortDesc): boolean
+    proc GetGroupData(port: Ports, mask: Group): _uint8
     {   var g: GPIO;
+	var data: _uint8;
 
-	g = GPIO(gpioaddr[which.port]);
-	return g.data[1 << which.bit] != 0;
+	g = GPIO(gpioaddr[port]);
+	data = _uint8(g.data[_uint8(mask)]);
+	return data;
     }
 
     proc SetDir(which: PortDesc, out: boolean)
@@ -145,7 +154,7 @@ package gpio
 	}
     }
 
-    proc SetIntr(which: PortDesc, how: Event)
+    proc SetIntrType(which: PortDesc, how: Event)
     {   var g: GPIO;
 
 	g = GPIO(gpioaddr[which.port]);
@@ -174,6 +183,29 @@ package gpio
 	    g.ievnt[which.bit] = true;
 	}
 	g.ienb[which.bit] = true;
+    }
+
+    proc GetGroupStatus(port: Ports): _uint8
+    {   var g: GPIO;
+	var sts: _uint8;
+
+	g = GPIO(gpioaddr[port]);
+	sts = _uint8(_uint32(g.irsts));
+	return sts;
+    }
+
+    proc TstIntr(which: PortDesc): boolean
+    {   var g: GPIO;
+
+	g = GPIO(gpioaddr[which.port]);
+	return g.irsts[which.bit];
+    }
+
+    proc ClrIntr(which: PortDesc)
+    {   var g: GPIO;
+
+	g = GPIO(gpioaddr[which.port]);
+	g.iclr[which.bit] = true;
     }
 
     proc DisableIntr(which: PortDesc)

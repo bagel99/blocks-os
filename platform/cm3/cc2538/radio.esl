@@ -16,13 +16,15 @@ package radio
     const ChanMin = 11;
     const ChanMax = 26;
     const ChanDelta = 5;
+    const RSSIOffset = 73;
 
     type CSP:	// command strobe processor opcodes
     (   RXON=0xE3,	TXON=0xE9,	TXONCCA=0xEA,
 	FLUSHRX=0xED,	FLUSHTX=0xEE,	RFOFF=0xEF
     );
+
     type AddrReg: _uint8: bits(32);
-    type Intr0:		// bits in irqenb0
+    type Intr0:		// bits in irqenb0, irqf0
     {	actunused: boolean;	// .00
 	sfd:       boolean;	// .01
 	fifop:     boolean;	// .02
@@ -32,7 +34,7 @@ package radio
 	rxpktdone: boolean;	// .06
 	rxmaskzero:boolean;	// .07
     }: packed, lsb, bits(32);
-    type Intr1:		// bits in irqenb1
+    type Intr1:		// bits in irqenb1, irqf1
     {   txackdone: boolean;	// .00
 	txdone:    boolean;	// .01
 	rfidle:    boolean;	// .02
@@ -40,7 +42,7 @@ package radio
 	cspstop:   boolean;	// .04
 	cspwait:   boolean;	// .05
     }: packed, lsb, bits(32);
-    type IntrE:		// bits in irqenbe
+    type IntrE:		// bits in irqenbe, errf
     {   nlock:     boolean;	// .00
 	rxabo:     boolean;	// .01
 	rxovrfl:   boolean;	// .02
@@ -92,20 +94,23 @@ package radio
 	    append: boolean;			// .07
 	}: packed, lsb, bits(32), out, at(0x624);
 	frmctl1:							// 628
-		_uint32;	// FIXME
-	rxenable: _uint8: bits(32), in, ro;				// 62C
+	{   rxenbontx: boolean;	// .00
+	    igntxundf: boolean;	// .01
+	    pendingor: boolean;	// .02
+	}: packed, lsb, bits(32), out;
+	rxenable:  _uint8: bits(32), in, ro;				// 62C
 	rxmaskset: _uint8: bits(32), out;				// 630
 	rxmaskclr: _uint8: bits(32), out;				// 634
-	freqtune:  0..15: bits(32), out;				// 638
-	freqctl: 0..127: bits(32), out, at(0x63C);			// 63C
-	txpwr:								// 640
-	{   bias:   0..15;	// .00-03
-	    power:  0..15;	// .04-07
-	}: packed, lsb, bits(32), out;
+	freqtune:  0..15:  bits(32), out;				// 638
+	freqctl:   0..127: bits(32), out, at(0x63C);			// 63C
+	txpwr:	   _uint8: bits(32), out;				// 640
 	txctl:								// 644
 		_uint32;	// FIXME
 	fsmsts0:							// 648
-		_uint32;	// FIXME
+	{   fsmstate: 0..0x3F;	// .00-05 what do values mean?
+	    calrunning: boolean;// .06
+	    caldone:  boolean;	// .07
+	}: packed, lsb, bits(32), in, ro;
 	fsmsts1:							// 64C
 	{   rxact:  boolean;	// .00
 	    txact:  boolean;	// .01
@@ -119,10 +124,12 @@ package radio
 	fifopctl: 0..127: bits(32), out;				// 650
 	fsmctl:								// 654
 		_uint32;	// FIXME
-	ccactl0: 0..255: bits(32), out;					// 658
+	ccactl0:   _int8: bits(32), out;				// 658
 	ccactl1:							// 65C
-		_uint32;	// FIXME
-	rssi:    -128..127: bits(32), in, ro;				// 660
+	{   hyst:  0..7;	// .00-02
+	    mode:  0..0b11;	// .03-04
+	}: packed, lsb, bits(32);
+	rssi:      _int8: bits(32), in, ro;				// 660
 	rssists: boolean: bits(32), in, ro;				// 664
 	rxfirst:   _uint8: bits(32), in, ro;				// 668
 	rxfifocnt: _uint8: bits(32), in, ro;				// 66C
@@ -142,19 +149,60 @@ package radio
 	    qrnd:   0..1;
 	}: packed, lsb, bits(32), in, ro;
 
-	agcctl1:  0..63: bits(32), out, at(0x6C8);			// 6C8
+	mdmctl1:							// 6A4
+		_uint32: at(0x6A4);	// FIXME
+	freqest:  _int8: bits(32), in, ro;				// 6A8
+	rxctl:								// 6AC
+		_uint32;		// FIXME
+	fsctl:								// 6B0
+		_uint32;		// FIXME
+	fscal0:								// 6B4
+		_uint32;		// FIXME
+	fscal1:								// 6B8
+		_uint32;		// FIXME
+	fscal2:								// 6BC
+		_uint32;		// FIXME
+	fscal3:								// 6C0
+		_uint32;		// FIXME
+	agcctl0:							// 6C4
+		_uint32;		// FIXME
+	agcctl1:  0..63: bits(32), out;					// 6C8
+	agcctl2:							// 6CC
+		_uint32;		// FIXME
+	agcctl3:							// 6D0
+		_uint32;		// FIXME
+	adctest0:							// 6D4
+		_uint32;		// FIXME
+	adctest1:							// 6D8
+		_uint32;		// FIXME
+	adctest2:							// 6DC
+		_uint32;		// FIXME
+	mdmtest0:							// 6E0
+		_uint32;		// FIXME
+	mdmtest1:							// 6E4
+		_uint32;		// FIXME
+	dactest0:							// 6E8
+		_uint32;		// FIXME
+	dactest1:							// 6EC
+		_uint32;		// FIXME
+	dactest2:							// 6F0
+		_uint32;		// FIXME
+	atest:								// 6F4
+		_uint32;		// FIXME
+	ptest0:								// 6F8
+		_uint32;		// FIXME
+	ptest1:								// 6FC
+		_uint32;		// FIXME
 
 	txfltcfg: 0..15: bits(32), out, at(0x7E8);			// 7E8
 	// SFR
 	data:   _uint8: bits(32), in, out, at(0x828);			// 828
-	errf:								// 82C
-		_uint32;	// FIXME
-	irqf1:								// 830
-		_uint32;	// FIXME
-	irqf0:								// 834
-		_uint32;	// FIXME
+	errf:   IntrE: in, out;						// 82C
+	irqf1:  Intr1: in, out;						// 830
+	irqf0:	Intr0: in, out;						// 834
 	inst:   CSP: bits(32), in, out;					// 838
-	
+
+	// Source address matching table begins here
     };
     type RF: @RFRegs;
 
@@ -162,6 +210,19 @@ package radio
 
     const rfvectnorm = 141;
     const rfvecterr  = 142;
+
+    // Lookup table for setting transmit power
+    type TxPowerEntry:
+    {   dbm:     _int8;
+	val:     _uint8;	// hi nibble is power, lo nibble is bias
+    };
+    const TxPowerTable: []TxPowerEntry =
+    {	{   7, 0xFF }, {   5, 0xED }, {   3, 0xD5 }, {   1, 0xC5 },
+	{   0, 0xB6 }, {  -1, 0xB0 }, {  -3, 0xA1 }, {  -5, 0x91 },
+	{  -7, 0x88 }, {  -9, 0x72 }, { -11, 0x62 }, { -13, 0x58 },
+	{ -15, 0x42 }, { -24, 0x00 },
+    };  
+
 
 
     var state:
@@ -171,28 +232,30 @@ package radio
 
 
 
-    proc SetPan(pan: @[2]_uint8)
+    proc SetPan(pan: _uint16)
     {
-	rf.pan[0] = pan[0];
-	rf.pan[1] = pan[1];
+	rf.pan[0] = _uint8(pan);
+	rf.pan[1] = pan >> 8;
     }
 
-    proc GetPan(pan: @[2]_uint8)
-    {
-	pan[0] = rf.pan[0];
-	pan[1] = rf.pan[1];
+    proc GetPan(): _uint16
+    {   var pan: _uint16;
+
+	pan = (rf.pan[1] << 8) | rf.pan[0];
+	return pan;
     }
 
-    proc SetShortAddr(adr: @[2]_uint8)
+    proc SetShortAddr(adr: _uint16)
     {
-	rf.sadr[0] = adr[0];
-	rf.sadr[1] = adr[1];
+	rf.sadr[0] = _uint8(adr);
+	rf.sadr[1] = adr >> 8;
     }
 
-    proc GetShortAddr(adr: @[2]_uint8)
-    {
-	adr[0] = rf.sadr[0];
-	adr[1] = rf.sadr[1];
+    proc GetShortAddr(): _uint16
+    {   var adr: _uint16;
+
+	adr = (rf.sadr[1] << 8) | rf.sadr[0];
+	return adr;
     }
 
     proc SetLongAddr(adr: @[8]_uint8)
@@ -209,17 +272,176 @@ package radio
 	    adr[i] = rf.xadr[i];
     }
 
-    proc FlushRx()
+    proc SetAutoAck(onoff: boolean)
+    {
+	rf.frmctl0.autoack = onoff;
+    }
+
+    proc SetFrameFilter(onoff: boolean)
+    {
+	rf.frmflt0.enb = onoff;
+    }
+
+    proc SetPanCoordinator(onoff: boolean)
+    {
+	rf.frmflt0.pancoord = onoff;
+    }
+
+    proc SetMaxFrameVersion(vers: _uint)
+    {
+	rf.frmflt0.maxfrmver = vers;
+    }
+
+    proc FlushRx(): : inline
     {
 	rf.inst = FLUSHRX;
 	rf.inst = FLUSHRX;
     }
 
+    proc FlushTx(): : inline
+    {
+	rf.inst = FLUSHTX;
+    }
+
+    proc TurnOff()
+    {
+	// Wait for any transmission to end
+	while rf.fsmsts1.txact do {}
+	FlushRx();
+	if rf.rxenable != 0 then
+	    rf.inst = RFOFF;
+	state.rxactive = false;
+    }
+
+    proc TurnOn()
+    {
+	if !state.rxactive then
+	{   FlushRx();
+	    rf.inst = RXON;
+	    state.rxactive = true;
+	}
+    }
+
+    proc SetChannel(chan: _uint)
+    {   var wason: boolean = false;
+
+	if chan < ChanMin || chan > ChanMax then return;
+	if rf.fsmsts0.fsmstate != 0 then
+	{   wason = true;
+	    TurnOff();
+	}
+	rf.freqctl = ChanMin + ChanDelta*(chan-ChanMin);
+	if wason then
+	    TurnOn();
+    }
+
+    proc GetChannel(): _uint
+    {   var freq: _uint;
+
+	freq = rf.freqctl;
+	return (freq - ChanMin)/ChanDelta + ChanMin;
+    }
+
+    proc GetRSSI(): _int
+    {   var wasoff: boolean = false;
+	var rssi: _int8;
+
+	if rf.fsmsts0.fsmstate == 0 then
+	{   wasoff = true;
+	    TurnOn();
+	}
+	// wait for RSSI to become valid
+	while !rf.rssists do {}
+	rssi = rf.rssi - RSSIOffset;
+	if wasoff then
+	    TurnOff();
+	return rssi;
+    }
+
+    proc GetCCAThreshold(): _int
+    {
+	return rf.ccactl0 - RSSIOffset;
+    }
+
+    proc SetCCAThreshold(val: _int)
+    {
+	rf.ccactl0 = _int8(val + RSSIOffset);
+    }
+
+    // Return whether the channel is clear
+    proc IsChannelClear(): boolean
+    {   var wasoff: boolean = false;
+	var cca: boolean;
+
+	if rf.fsmsts0.fsmstate == 0 then
+	{   wasoff = true;
+	    TurnOn();
+	}
+	// wait for RSSI to become valid
+	while !rf.rssists do {}
+	cca = rf.fsmsts1.cca;
+	if wasoff then
+	    TurnOff();
+	return cca;	
+    }
+
+    proc GetTxPower(): _int
+    {   var txpwr: _uint8;
+	var i: _uint;
+
+	txpwr = rf.txpwr;
+	for i from 0 to TxPowerTable?len-1 do
+	{   if txpwr >= TxPowerTable[i].val then
+		return TxPowerTable[i].dbm;
+	}
+	return TxPowerTable[TxPowerTable?len-1].dbm;
+    }
+
+    proc SetTxPower(dbm: _int)
+    {   var i: _uint;
+
+	i = TxPowerTable?len-1;
+	loop
+	{   if dbm <= TxPowerTable[i].dbm then
+	    {   rf.txpwr = TxPowerTable[i].val;
+		return;
+	    }
+	  exit i == 0;
+	    i -= 1;
+	}
+    }
+
+
     /*
-     * Copy received frame into bp.
+     * Copy frame to be transmitted into the FIFO
+     */
+    proc XmitWrite(bp: @[]_byte, len: _uint)
+    {   var i: _uint;
+
+    	FlushTx();
+    	// FIXME - clear Tx done interrupt?
+    	rf.data = _uint8(len);    	// First comes the length byte
+	for i from 0 to len-1 do
+	    rf.data = bp[i];    	
+    }
+
+    proc XmitStart(cca: boolean)
+    {
+	if cca then
+	    rf.inst = TXONCCA;
+	else
+	    rf.inst = TXON;
+	// FIXME - use interrupt?
+	// wait for TxDone flag
+	while !rf.irqf1.txdone do {}
+	rf.irqf1.txdone = false;	// clear flag
+    }
+
+    /*
+     * Copy received frame from the FIFO.
      * Two extra bytes follow the data: rssi and lqi.
      */
-    proc ReadRecvFifo(bp: @[]_byte): _uint	// returns len
+    proc RecvRead(bp: @[]_byte): _uint	// returns len
     {   var len: _uint;
     	var lqi: _uint8;
 	var i: _uint;
@@ -242,47 +464,11 @@ package radio
     }
 
 
-    proc Off()
-    {
-	// Wait for any transmission to end
-	while rf.fsmsts1.txact do {}
-	FlushRx();
-	if rf.rxenable != 0 then
-	    rf.inst = RFOFF;
-	state.rxactive = false;
-    }
-
-    proc On()
-    {
-	if !state.rxactive then
-	{   FlushRx();
-	    rf.inst = RXON;
-	    state.rxactive = true;
-	}
-    }
-
-    proc SetChannel(chan: _uint)
-    {
-	if chan < ChanMin || chan > ChanMax then return;
-	Off();
-	rf.freqctl = ChanMin + ChanDelta*(chan-ChanMin);
-	On();
-    }
-
-    proc GetChannel(): _uint
-    {   var freq: _uint;
-
-	freq = rf.freqctl;
-	return (freq - ChanMin)/ChanDelta + ChanMin;
-    }
-
-
-
     proc Init(chan: _uint)
     {
     	if state.rfon then return;
 
-	sysctl.Enable(RADIO, 0, {.run=true,.slp=true,.pm0=true});
+	sysctl.Enable(sysctl.RADIO, 0, {.run=true,.slp=true,.pm0=true});
 	rf.ccactl0 = 0xF8;	// recommended in user guide?
 	// Changes from default settings, section 23.15
 	rf.txfltcfg = 0x09;
@@ -291,24 +477,25 @@ package radio
 
 	rf.frmctl0 = { .autocrc=true };
 	rf.frmctl0.autoack = true;
+//	rf.frmctl0 = { .autocrc=true, .autoack=true, maxfrmver=3 };
 	rf.srcmatch = { .enb=false };
 	rf.fifopctl = 127;
-	rf.txpwr = { .power=13, .bias=5 };		// why?
+	rf.txpwr = 0xD5;		// why?
 	SetChannel(chan);
 
 	// Enable interrupts
 	rf.irqenb0.fifop = true;	// just FIFOP
-	nvic.Enable(rfvectnorm);
+//	nvic.Enable(rfvectnorm);
 	rf.irqenbe = {.nlock=true,.rxabo=true,.rxovrfl=true,.rxundfl=true,
 		      .txovrfl=true,.txundfl=true,.strobe=true};
-	nvic.Enable(rfvecterr);
-
+//	nvic.Enable(rfvecterr);
+/*
 	// Setup DMA	
 	dma.ChanMaskSet(TxDMAChan);
 	dma.SetChanDst(TxDMAChan, rf.data);
 	dma.ChanMaskSet(RxDMAChan);
 	dma.SetChanSrc(RxDMAChan, rf.data); 
-
+*/
 	state.rfon = true;
     }
 

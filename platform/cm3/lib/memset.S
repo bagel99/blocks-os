@@ -5,8 +5,9 @@
 	.thumb_func
 	.globl	memset
 memset:
-	strb	r1,[r0],1
+	cbz	r2,9f
+0:	strb	r1,[r0],1
 	subs	r2,#1
-	bgt	memset
-	bx	lr
+	bgt	0b
+9:	bx	lr
 

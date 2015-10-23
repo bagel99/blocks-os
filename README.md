@@ -1,5 +1,6 @@
 # blocks-os
-An operating system written in the ESL programming language (FIXME - repository).
+An operating system written in the ESL programming language
+(see https://github.com/bagel99/esl).
 
 The code is not production quality by far, it is rudimentary and incomplete.
 But it does contain some support for IPv4 and IPv6, USB devices, UARTs and such.

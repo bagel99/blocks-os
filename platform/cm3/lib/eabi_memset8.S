@@ -3,13 +3,14 @@
 	.eabi_attribute	6, 10
 	.code	16
 	.thumb_func
-	.globl	__aeabi_memset
-	.globl	__aeabi_memclr
+	.globl	__aeabi_memset8
+	.globl	__aeabi_memclr8
 	@ order of args differs from traditional memset
 	@ r0 - dest, r1 - n, r2 - c
-__aeabi_memclr:
+	@ FIXME - optimize for 8-byte alignment
+__aeabi_memclr8:
 	mov	r2,#0
-__aeabi_memset:
+__aeabi_memset8:
 	cbz	r1,9f
 0:	strb	r2,[r0],1
 	subs	r1,#1

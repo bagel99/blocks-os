@@ -39,7 +39,7 @@ package ssi
 	sr:								// 00C
 	{   tfe:    boolean;		// .00 xmit fifo empty
 	    tnf:    boolean;		// .01 xmit fifo not full
-	    rne:    boolean;		// .02 recv fifo empty
+	    rne:    boolean;		// .02 recv fifo not empty
 	    rff:    boolean;		// .03 recv fifo full
 	    bsy:    boolean;		// .04 SSI active
 	}: packed, lsb, bits(32), in, ro;
@@ -58,15 +58,25 @@ package ssi
 	    dsen:  (SYSDIV, PIO);
 	}: packed, lsb, bits(32), out, at(0xFC8);
     };
-    type SSI: @SSIRegs;
+    type Device: @SSIRegs;
 
     const ssiaddr: [2]_address = { 0x4000_8000, 0x4000_9000 };
     const ssivect: [2]_uint8 =   { 7, 34 };
 
-    proc (ssi: SSI) SetSpiMaster(mode: SPIMode, speed:_uint, bits:_uint)
+
+    proc (ssi: Device) GetSpeed(): _uint
+    {   var clk: _uint;
+
+	if ssi.cc.piosc == SYSDIV then
+	    clk = sysctl.GetCPUClock();
+	else
+	    clk = sysctl.GetIOClock();
+	return clk / (ssi.cpsr * (ssi.cr0.scr+1));
+    }
+
+    proc (ssi: Device) SetSpeed(speed:_uint)
     {   var scr, pre, clk: _uint;
 
-	ssi.cr1 = {};	// all false
 	clk = sysctl.GetIOClock();
 	speed = _min(speed, clk/2);
 	clk = clk / speed;
@@ -76,31 +86,44 @@ package ssi
 	    scr = (clk/pre) - 1;
 	} while scr > 255;
 	ssi.cpsr = pre;
-	ssi.cr0 = {.dss=bits-1, .frf=SPI, .mode=mode, .scr=scr};
+	ssi.cr0.scr = scr;
     }
 
-    proc (ssi: SSI) Enable():: inline
+    proc (ssi: Device) SetSpiMaster(mode: SPIMode, bits:_uint)
+    {
+
+	ssi.cr1 = {};	// all false
+	ssi.cr0 = {.dss=bits-1, .frf=SPI, .mode=mode};
+    }
+
+    proc (ssi: Device) Enable():: inline
     {
 	ssi.cr1.enb = true;
     }
 
-    proc (ssi: SSI) Disable():: inline
+    proc (ssi: Device) Disable():: inline
     {
 	ssi.cr1.enb = false;
     }
 
-    proc (ssi: SSI) Send(data: _uint16)
+    proc (ssi: Device) Recv(): _uint16
+    {
+	while !ssi.sr.rne do {}
+	return ssi.dr;
+    }
+
+    proc (ssi: Device) Send(data: _uint16)
     {
 	while !ssi.sr.tnf do {}
 	ssi.dr = data;
     }
 
-    proc (ssi: SSI) SendWaitDone()
+    proc (ssi: Device) WaitTxDone()
     {
 	while !ssi.sr.tfe do {}
     }
 
-    proc (ssi: SSI) RxFlush()
+    proc (ssi: Device) FlushRx()
     {
 	while ssi.sr.rne do
 	    _ = ssi.dr;
@@ -109,11 +132,11 @@ package ssi
     /*
      * Pins: 0 - CLK, 1 - TxD(MOSI), 2 - RxD(MISO)
      */
-    proc Init(n: _uint, pins: @[3]gpio.PortDesc): SSI
-    {   var ssi: SSI;
+    proc Init(n: _uint, pins: @[3]gpio.PortDesc): Device
+    {   var ssi: Device;
 
 	if n > ssiaddr?len-1 then return 0;
-	ssi = SSI(ssiaddr[n]);
+	ssi = Device(ssiaddr[n]);
 	sysctl.Enable(sysctl.SSI, n, {.run=true});	// power on
 	ssi.Disable();	// Disable SSI function before configuring module
 	// Set IO clock as SSI clock source
@@ -126,7 +149,7 @@ package ssi
 	gpio.SetConf(pins[1], AF);
 	gpio.SetConf(pins[2], AF);
 	ssi.Enable();			// Enable the SSI function
-	ssi.RxFlush();			// Flush the RX FIFO
+	ssi.FlushRx();			// Flush the RX FIFO
 	return ssi;
     }
 }

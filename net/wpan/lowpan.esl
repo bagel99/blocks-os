@@ -31,6 +31,7 @@
  */
 
 import mbuf;
+import block;
 import ipv6def;
 import ieee802154;
  
@@ -49,7 +50,13 @@ package lowpan
     alias ieee802154 as mac;
     alias ieee802154.FrameInfo as FrameInfo;
 
-    type HeaderType: (BAD, DISP, MESH, FRAG);
+    // First 2 bits (msb) are major type:
+    type HeaderType:
+    (   BAD,			// not a LowPAN frame
+	DISP,			// low bits are DispatchType/DispHeader
+	MESH,			// low bits are MeshHeader
+	FRAG			// low bits are FragType/FragHeader
+    );
     type DispatchType:
     (   ESC=    0b000000,	// escape, redefined in RFC6282
 	IPV6=	0b000001,	// uncompressed IPv6 header follows
@@ -70,8 +77,8 @@ package lowpan
     
     type MeshHeader:		// Mesh Header	
     {   type:    HeaderType;	// 10
-	ss:      boolean;	// source address is short
-    	ds:      boolean;	// destination address is short
+	v:       boolean;	// originator address is short
+	f:       boolean;	// destination address is short
     	hops:    0..15;		// 15 => byte follows with hop count
     }: packed, msb;
 
@@ -90,19 +97,23 @@ package lowpan
     type FragHdrN(FragHdr1):
     {   offs:  _uint8;
     }: nopad;
-    type pFragHdrN: @FragHdrN;
 
-    type IPHCHeader0:
+    type IPHCHeader0:		// bits numbered from the left
     {   type:    HeaderType;	// .00-01 = 01
 	one:     0..1;		// .02 - must be 1
 	fc:      boolean;	// .03 - flow label compressed
-	tc:      boolean;	// .04- traffic class compressed
-	nh:      boolean;	// .05 -next header compressed
+	tc:      boolean;	// .04 - traffic class compressed
+	nh:      boolean;	// .05 - next header compressed
 	hlim:    (IL,H1,H64,H255); // .06-07 - hop limit
     }: packed, msb;
 
-    type AddrMode: (AM128, AM64, AM16, AM0);
-    type IPHCHeader1:
+    type AddrMode:
+    (   AM128,			// 16 bytes inline
+	AM64,			// 8 bytes inline
+	AM16,			// 2 bytes inline
+	AM0			// normal: nothing inline, multicast: 1 byte inline
+    );
+    type IPHCHeader1:		// bits numbered from the left
     {   cid:     boolean;	// .00 - true if addition context info
 	sac:     boolean;	// .01 - true if src addr stateful compression
 	sam:     AddrMode;	// .02-03 - src addr mode
@@ -136,6 +147,7 @@ package lowpan
 	info:   []_byte;
     };
 
+    // deprecated
     type HC1Info:
     {   srcpfx:  boolean;	// false => inline, true => prefix assumed
         srciid:  boolean;	// false => inline, true => otherwise derived
@@ -157,6 +169,7 @@ package lowpan
     type pMeshHeader: @MeshHeader;
     type pDispHeader: @DispHeader;
     type pFragHeader: @FragHeader;
+    type pFragHdrN:   @FragHdrN;
 
 
     /*
@@ -218,9 +231,62 @@ package lowpan
     
 
     proc RecvMesh(mb: pMBuf): boolean
-    {
-	return true;
+    {   var hops: _uint;
+	var i: _uint;
+	var pb: @[]_byte;
+	var mh: MeshHeader;
+	var sa: _uint16;
+	var ours: boolean;
+
+	pb = mb.Data();
+	mh = MeshHeader(pb[0]);
+	i = 1;
+	hops = mh.hops;
+	if hops == 15 then  // extended to next byte
+	{   hops = pb[1];
+	    i += 1;
+	}
+debug.str("mesh hops="); debug.uint(hops);
+	if mh.v then	    // originating address is short
+	{
+	    i += 2;
+	}
+	else		    // long address, not used in Thread
+	{
+	    i += 8;
+	}
+	if mh.f then       // final address is short
+	{
+	    sa = _unpkbe(pb[i:2]);
+debug.str(" final=");  debug.hex16(sa);
+// FIXME - temporary
+ours = sa == 0x0402;
+	    i += 2;
+	}
+	else		    // long address, not used in Thread
+	{
+// FIXME - temporary
+ours = false;
+	    i += 8;
+	}
+debug.nl();
+	if !ours then
+	{   hops -= 1;
+	    if hops != 0 then   // forward into the mesh
+	    {   if mh.hops == 15 then
+		    pb[1] = hops;
+		else
+		{   mh.hops = hops;
+		    pb[0] = _byte(mh);
+		}
+debug.str("mesh route\n");
+	    }
+	}
+	else
+	    mb.ShrinkHead(i);
+	return ours;
     }
+
     proc RecvBroadcast(mb: pMBuf)
     {
     }
@@ -253,47 +319,47 @@ package lowpan
 	return n+2;
     }
 
-    proc MulticastUnpack(mode: 0..3, bp: @_memory, ipaddr: @inet.IPv6Addr): _uint
+    proc MulticastUnpack(mode: AddrMode, bp: @_memory, ipaddr: @inet.IPv6Addr): _uint
     {
 
-	if mode == 0 then
+	if mode == AM128 then
 	{   ipaddr[0:16] = bp[0:16];
 	    return 16;
 	}
 	ipaddr[0:16] = MulticastAddr[0:16];
-	if mode == 3 then
+	if mode == AM0 then     // this means 1 byte
 	{   ipaddr[15] = bp[0];
 	    return 1;
 	}
 	ipaddr[1] = bp[0];
-	if mode == 2 then
+	if mode == AM16 then
 	{   ipaddr[13:3] = bp[1:3];
 	    return 4;
 	}
-	// mode 1
+	// mode AM64
 	ipaddr[11:5] = bp[1:5];
 	return 6;
     }
 
-    proc UnicastUnpack(mode: 0..3, bp: @_memory, prefix: @[8]_byte,
+    proc UnicastUnpack(mode: AddrMode, bp: @_memory, prefix: @[8]_byte,
     		       linkaddr: _uint64, ipaddr: @inet.IPv6Addr): _uint
     {
-	if mode == 0 then		// [inline128]
+	if mode == AM128 then		// [inline128]
 	{   ipaddr[0:16] = bp[0:16];
 	    return 16;
 	}
 	ipaddr[0:8] = prefix@;
-	if mode == 1 then		// [prefix64]:[inline64]
+	if mode == AM64 then		// [prefix64]:[inline64]
 	{   ipaddr[8:8] = bp[0:8];
 	    return 8;
 	}
-	if mode == 2 then		// [prefix64]:[IIDMap48]:[inline16]
+	if mode == AM16 then		// [prefix64]:[IIDMap48]:[inline16]
 	{   ipaddr[8:6] = IIDMapping;
 	    ipaddr[14:2] = bp[0:2];
 	    return 2;
 	}
-	// mode == 3			// [prefix64]:[linkaddr64]
-	net.packbe64(ipaddr[8:8], linkaddr);
+	// mode == AM0			// [prefix64]:[linkaddr64]
+	_packbe(ipaddr[8:8], linkaddr);
 	return 0;
     }
 
@@ -319,10 +385,9 @@ package lowpan
 	h0 = IPHCHeader0(bp[0]);
 	h1 = IPHCHeader1(bp[1]);
 debug.str("h0="); debug.hex8(_uint8(h0));
-debug.str(" h1="); debug.hex8(_uint8(h1)); debug.nl();
+debug.str(" h1="); debug.hex8(_uint8(h1));
 	n = 2;
-debug.str("n="); debug.uint(n);
-debug.str(" cid="); debug.uint8(_uint8(h1.cid)); debug.nl();
+debug.str(" cid="); debug.uint8(_uint8(h1.cid));
 	cid = 0;		// default to this
 	if h1.cid then
 	{   cid = bp[2];
@@ -331,8 +396,7 @@ debug.str(" cid="); debug.uint8(_uint8(h1.cid)); debug.nl();
 	ph6.vtf.version = 6;	// gotta be
 
 	// 1. uncompress flow and traffic
-debug.str("n="); debug.uint(n);
-debug.str(" tc="); debug.uint8(_uint8(h0.tc)); debug.nl();
+debug.str(" tc="); debug.uint8(_uint8(h0.tc));
 	if h0.tc then
 	{   ph6.vtf.dscp = 0;
 	    ph6.vtf.ecn  = 0;   
@@ -342,8 +406,7 @@ debug.str(" tc="); debug.uint8(_uint8(h0.tc)); debug.nl();
 	    ph6.vtf.ecn  = bp[n] >> 6;
 	    n += 1;
 	}
-debug.str("n="); debug.uint(n);
-debug.str(" fc="); debug.uint8(_uint8(h0.fc)); debug.nl();
+debug.str(" fc="); debug.uint8(_uint8(h0.fc));
 	if h0.fc then
 	    ph6.vtf.flow = 0;
 	else
@@ -354,15 +417,13 @@ debug.str(" fc="); debug.uint8(_uint8(h0.fc)); debug.nl();
 	}
 
 	// 2. uncompress next protocol
-debug.str("n="); debug.uint(n);
-debug.str(" nh="); debug.uint8(_uint8(h0.nh)); debug.nl();
+debug.str(" nh="); debug.uint8(_uint8(h0.nh));
 	if h0.nh then   ph6.proto = UDP;
-	         else { ph6.proto = bp[n]; n += 1; }
+	         else { ph6.proto = inet.Proto(bp[n]); n += 1; }
 
 	// 3. uncompress hop limit
 	// FIXME - table driven?
-debug.str("n="); debug.uint(n);
-debug.str(" hlim="); debug.uint8(_uint8(h0.hlim)); debug.nl();
+debug.str(" hlim="); debug.uint8(_uint8(h0.hlim));
 	if h0.hlim
 	is IL then { ph6.hops = bp[n]; n += 1; }
 	is H1 then   ph6.hops = 1;
@@ -370,13 +431,12 @@ debug.str(" hlim="); debug.uint8(_uint8(h0.hlim)); debug.nl();
 	is H255 then ph6.hops = 255;
 
 	// 4. uncompress source address
-debug.str("n="); debug.uint(n);
 debug.str(" sac="); debug.uint8(_uint8(h1.sac));
 debug.str(" sam="); debug.uint8(_uint8(h1.sam));
 debug.str(" dac="); debug.uint8(_uint8(h1.dac));
 debug.str(" dam="); debug.uint8(_uint8(h1.dam)); debug.nl();
 	if h1.sac then
-	{   if h1.sam == 0 then
+	{   if h1.sam == AM128 then
 		ph6.srcaddr = ipv6.UnspecAddr;
 	    else
 	    {	// FIXME - stateful addressing not yet implemented
@@ -384,7 +444,7 @@ debug.str(" dam="); debug.uint8(_uint8(h1.dam)); debug.nl();
 	    	if ctx == 0 then
 	    	{
 debug.str("src context not found\n");
-	    	    return;
+		    return 0;
 	    	}
 		n += UnicastUnpack(h1.sam, bp[n:], ctx.prefix,
 				   info.srcadr, ph6.srcaddr);
@@ -400,7 +460,7 @@ debug.str("src context not found\n");
 	    if ctx == 0 then
 	    {
 debug.str("dst context not found\n");
-	    	    return;
+		return 0;
 	    }
 	    n += UnicastUnpack(h1.dam, bp[n:], ctx.prefix,
 			       info.dstadr, ph6.dstaddr);
@@ -470,6 +530,8 @@ debug.str("dst context not found\n");
 	mb = ib.fraglist[n].mb;
 	if mb == 0 then
 	{   // New fragment source
+if db > 2 then {
+debug.str("New frag size="); debug.uint16(size); debug.nl(); }
 	    mb = mbuf.Alloc(size, 0);
 	    ib.fraglist[n].mb = mb;
 	    ib.fraglist[n].src = src;
@@ -483,7 +545,7 @@ if db > 1 then _zero(bp(size));	// testing
 	    bp[0] = (size+7)/8;		// start completely empty
 	    bp[1] = (size+7)/8;		// end of list
 	}
-	return fraglist[n];
+	return ib.fraglist[n];
     }
 
     proc (fd: pFragDesc) DumpFragList(size: _uint)
@@ -646,7 +708,7 @@ if db > 0 then { debug.str("nomatch offs="); debug.uint(offs); debug.nl(); }
     	dt = pb[0];
     	if dt.type == MESH then
     	{
-    	    if RecvMesh(mb) then
+	    if !RecvMesh(mb) then
     	    	return;		// sent elsewhere, nothing to do locally
     	    // mesh header stripped, start anew
     	    pb = mb.Data();
@@ -658,10 +720,12 @@ if db > 0 then { debug.str("nomatch offs="); debug.uint(offs); debug.nl(); }
     	}
     	if dt.type == FRAG then
     	{
-	    mb = ib.RecvFragment(mb, info);
-	    if mb == 0 then
+	    newmb = ib.RecvFragment(mb, info);
+	    if newmb == 0 then
 	    	return;		// not a complete frame yet
-	    Consume(mb);
+	    newmb.code = RCVD;
+	    newmb.tag = ib.uifn;
+	    ib.ubid.Send(newmb);
 	    return;
     	}
     	if dt.type == DISP then
@@ -798,7 +862,7 @@ if db > 0 then { debug.str("nomatch offs="); debug.uint(offs); debug.nl(); }
 	if ph6.proto == UDP then
 	    h0.nh = true;
 	else
-	{   cd[n] = ph6.proto;
+	{   cd[n] = _uint8(ph6.proto);
 	    n += 1;
 	}
 //debug.chr(','); debug.uint(n);
@@ -957,7 +1021,7 @@ debug.str(" maxlen="); debug.uint(maxlen); debug.nl(); }
 	{   li = _new(comm.LinkInfo);
 	    li.code = UP;;
 	    li.tag = ib.uifn;	// interface number
-	    net.packbe64(li.id[0:8], MyIID);
+	    _packbe(li.id[0:8], MyIID);
 	    li.hdr = FrameInfo?size;
 	    li.trl = 0;
 	    li.mtu = 1280;

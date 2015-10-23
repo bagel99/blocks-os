@@ -3,7 +3,6 @@
  */
 
 import crc_itut16;
-import net;		// for pack, unpk
 
 package ieee802154
 {
@@ -127,6 +126,26 @@ package ieee802154
     const ShortUUID: _uint64 = 0x000000FF_FE000000;
 
 
+    /*
+     * Command Frame Identifiers
+     */
+    type ComdId:
+    (	AssocRequest	=0x01,
+	AssocResponse	=0x02,
+	DisAssocNotify	=0x03,
+	DataRequest	=0x04,
+	PANIDBadNotify	=0x05,
+	OrphanNotify	=0x06,
+	BeaconRequest	=0x07,
+	CoordRealign	=0x08,
+	GTSRequest	=0x09,
+	EndReserved	=0xFF
+    );
+
+
+    proc SendBeaconRequest()
+    {
+    }
 
     proc Recv(frame: @[]_byte, len: _uint, info: @FrameInfo)
     {
@@ -153,13 +172,13 @@ debug.nl();
 	    return;	// FIXME - what to do with an ACK
 	n = 0;		// offset to data from start of address fields
 	if h.fcf.dm != None then
-	{   dstpan = net.unpkle16(h.addr[n:2]);
+	{   dstpan = _unpkle(h.addr[n:2]);
 	    n += 2;
 	    if h.fcf.dm == AddrMode.Short then
-	    {   dstadr = ShortUUID | net.unpkle16(h.addr[n:2]);
+	    {   dstadr = ShortUUID | _unpkle(h.addr[n:2]);
 		n += 2;
 	    } else	// assume Long
-	    {   dstadr = net.unpkle64(h.addr[n:8]);
+	    {   dstadr = _unpkle(h.addr[n:8]);
 		n += 8;
 	    }
 	}
@@ -173,14 +192,14 @@ debug.nl();
 		srcpan = dstpan;
 	    }
 	    else
-	    {   srcpan = net.unpkle16(h.addr[n:2]);
+	    {   srcpan = _unpkle(h.addr[n:2]);
 		n += 2;
 	    }
 	    if h.fcf.sm == AddrMode.Short then
-	    {   srcadr = ShortUUID | net.unpkle16(h.addr[n:2]);
+	    {   srcadr = ShortUUID | _unpkle(h.addr[n:2]);
 	        n += 2;
 	    } else	// assume Long
-	    {   srcadr = net.unpkle64(h.addr[n:8]);
+	    {   srcadr = _unpkle(h.addr[n:8]);
 		n += 8;
 	    }
 	    if h.fcf.dm == None then

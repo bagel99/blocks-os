@@ -106,9 +106,9 @@ package debug
     proc uint32(in: _uint32)
     {   var buf: [11]_byte;
 	var tmp: _uint32;
-	var i: 0..12;
+	var i: _uint;
 
-	i = 11;
+	i = 10;
 	buf[i] = 0;
 	if in != 0 then
 	{   while in != 0 do
