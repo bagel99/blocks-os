@@ -137,6 +137,7 @@ debug.nl();}
 	    up = up.next;
 	if up == 0 then
 	{   mbuf.Free(mb);
+if db > 0 then { debug.str("UDP Send: No match for tag\n"); }
 	    return;
 	}
 	// copy connection info and then discard
@@ -149,6 +150,11 @@ debug.nl();}
 	dp.srcport = up.port;
 	dp.dstport = conn.port;
 	dp.len = len;
+if db > 1 then { debug.str("udp.Send: srcport="); debug.uint16(dp.srcport);
+debug.str(" dstport="); debug.uint16(dp.dstport);
+debug.str(" len="); debug.uint16(dp.len);
+debug.str(" af="); debug.hex8(_uint8(conn.af)); debug.nl();
+}
 	// Create checksum header
 	if conn.af == IPV6 then
 	{   uh6 = inet.pULHeader6(mb.GrowHead(inet.ULHeader6?size));
@@ -156,7 +162,7 @@ debug.nl();}
 	    uh6.len = len;
 	    uh6.proto = Proto.UDP;
 	    uh6.zeros = 0;
-	    uh6.info = inet.InfoZero;
+	    uh6.info = {true, conn.ifn};
 	    bid = ub.lower6.bid;
 	}
 	else
@@ -164,7 +170,7 @@ debug.nl();}
 	    uh4.dstaddr = conn.addr[0:inet.IPv4AddrLen];
 	    uh4.len = len;
 	    uh4.proto = Proto.UDP;
-	    uh4.info = inet.InfoZero;
+	    uh4.info = {false, conn.ifn};
 	    bid = ub.lower4.bid;
 	}
 	mb.code = SEND;
@@ -241,6 +247,10 @@ if db > 0 then {debug.str("udp.NewBlock ");
 debug.uint8(id); debug.chr(' ');
 debug.hex(_uint(ub)); debug.nl(); }
 	ub.BlockInit(id, Run);
+if db > 0 then {
+if !_defined(IPv4ID) && !_defined(IPv6ID) then
+  debug.str("UDP: neither IPv4ID or IPv6ID defined!\n");
+}
 	if _defined(IPv4ID) then ub.lower4.bid = IPv4ID;
 	if _defined(IPv6ID) then ub.lower6.bid = IPv6ID;
 	return ub;

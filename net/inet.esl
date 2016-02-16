@@ -99,7 +99,7 @@ package inet
 	var i, n: _uint;
 
 //debug.str("Checksum: len="); debug.uint32(len); debug.nl();
-//debug.dump("", data, len);
+//debug.dumpb("", data, len);
 	sum = 0;
 	p = Puint16(data);		// sum data
 	i = 0;

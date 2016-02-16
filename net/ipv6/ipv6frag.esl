@@ -118,13 +118,14 @@ if db > 2 then {debug.str("\tsuccess\n");}
 	}
     }
 
-    proc (ib: pIPv6Block) RecvFrag(ip: pHeader, mb: pMBuf): Proto
+    proc (ib: pIPv6Block) RecvFrag(mb: pMBuf, ip: pHeader): Proto
     {   var newfh, oldfh: pFragHeader;
 	var oldmb, prvmb: pMBuf;
 	var fp: pFrag;
 	var ident, length, offset: _uint32;
 
-	newfh = pFragHeader(mb.ShrinkHead(Header?size));
+//	newfh = pFragHeader(mb.ShrinkHead(Header?size));
+	newfh = pFragHeader(mb.Data());
 	ident = newfh.ident;
 	offset = newfh.info.offset * 8;
 	length = mb.Size() - FragHeader?size;

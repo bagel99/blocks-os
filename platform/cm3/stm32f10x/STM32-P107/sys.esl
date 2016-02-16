@@ -136,6 +136,7 @@ package sys
 
     proc Init()
     {   var i: _uint;
+	var af: gpio.AFIO;
 
     	// we need to remap pins, so turn on alternate function control clock
     	rcc.ClockEnable(AFIO);
@@ -143,7 +144,6 @@ package sys
 	for i from 0 to PinOut?len-1 do
 	    gpio.Init(PinOut[i]);
 	// remap GPIO pins
-	var af: gpio.AFIO;
 	af = gpio.afio;
 	af.mapr.usart3 = REMAP;			// remap USART3
 	af.mapr.spi3 = REMAP;			// remap SPI3

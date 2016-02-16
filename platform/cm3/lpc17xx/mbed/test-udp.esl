@@ -11,10 +11,10 @@ package debug
     const db_fault   = 1;
     const db_block   = 1;
     const db_timer   = 1;
-    const db_eth     = 2;
-    const db_ipv4    = 2;
-    const db_ipv6    = 2;
-    const db_udp     = 5;
+    const db_eth     = 1;
+    const db_ipv4    = 1;
+    const db_ipv6    = 1;
+    const db_udp     = 1;
 }
 
 import fault;
@@ -135,8 +135,8 @@ proc main(): _int
     sysctl.Init();
     fault.Init();
     debug.Init();
-    sys.ledon(0);							// 01
-debug.str("Starting test-udp...\n");
+    sys.ledon(0);							// 0001
+debug.str("Starting test-udp on port 5683...\n");
     meminit(0x2007C100, 0x7F00, 0);	// FIXME
     // create MAC from serial number
     serialno = chip.GetSerialNumber();
@@ -150,11 +150,13 @@ debug.str("Starting test-udp...\n");
 
     timer.NewBlock(TimerID);
     eth.NewBlock(EthID);
+    sys.ledon(1);							// 0011
     ipv4.NewBlock(IPv4ID);
     ipv6.NewBlock(IPv6ID);
     udp.NewBlock(UDPID);
     app.NewBlock(AppID);
     block.InitConnections(Connections, Connections?len);
+    sys.ledon(2);							// 0111
     {   var e: pEvent;
 	e = _new(Event);
 	e.code = START;
@@ -164,7 +166,7 @@ debug.str("Starting test-udp...\n");
 	IPv6ID.Send(e);
     }
 
-    sys.ledon(1);							// 11
+    sys.ledon(3);							// 1111
 
     var u: uart.Uart;				// for debug print
     var c: _byte;				// for debug print

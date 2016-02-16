@@ -16,18 +16,11 @@ package info
     var mem: Mem: external(0x0028_0000);
 
     proc GetEUI64(eui64: @[8]_uint8)
-    {   var tmp: _uint32;
-
-	tmp = mem.ieee[0];			// bytes are little endian
-	eui64[3] = _uint8(tmp);
-	eui64[2] = _uint8(tmp>>8);
-	eui64[1] = _uint8(tmp>>16);
-	eui64[0] = _uint8(tmp>>24) | 0x02;	// globally unique bit
-	tmp = mem.ieee[1];
-	eui64[7] = _uint8(tmp);
-	eui64[6] = _uint8(tmp>>8);
-	eui64[5] = _uint8(tmp>>16);
-	eui64[4] = _uint8(tmp>>24);
+    {
+	// bytes are little endian with a word, we want big endian
+	_packbe(eui64[0:4], mem.ieee[0]);
+	_packbe(eui64[4:4], mem.ieee[1]);
+	eui64[0] = eui64[0] | 0x02;	// globally unique bit
     }
 }
 

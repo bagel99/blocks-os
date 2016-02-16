@@ -36,12 +36,17 @@
 
 import sysctl;
 import gpio;
+import syscb;
 import ssi;
 
 package sys
 {
     const CoreClock = 32_000_000;	// must use external XTAL
     const SPIClock  =  8_000_000;
+
+    const TopOfStack = 0x20008000;
+
+    const TicksPerSecond = 50;
 
     const DebugPort = 0;
 

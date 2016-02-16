@@ -3,13 +3,15 @@
  *
  * Reference: TI SWRU319C, Chapter 23.
  *
- * Copyright (c) 2014, Brian G. Lucas.  See LICENSE file.
+ * Copyright (c) 2014-2016, Brian G. Lucas.  See LICENSE file.
  */
 
 import dma;
 
 package radio
 {
+    const autofcs: boolean = true;	// hardware checks incoming FCS
+
     const TxDMAChan = 2;	// FIXME - make configurable in sys
     const RxDMAChan = 3;	// FIXME - make configurable in sys
 
@@ -23,39 +25,43 @@ package radio
 	FLUSHRX=0xED,	FLUSHTX=0xEE,	RFOFF=0xEF
     );
 
-    type AddrReg: _uint8: bits(32);
+    type AddrReg: _uint8: bits(32);	// only low 8 bit used
+
     type Intr0:		// bits in irqenb0, irqf0
-    {	actunused: boolean;	// .00
-	sfd:       boolean;	// .01
-	fifop:     boolean;	// .02
-	matchdone: boolean;	// .03
-	matchfound:boolean;	// .04
-	framegood: boolean;	// .05
-	rxpktdone: boolean;	// .06
-	rxmaskzero:boolean;	// .07
+    {	actunused: boolean;	// .00 - reserved
+	sfd:       boolean;	// .01 - SFD recv or xmit
+	fifop:     boolean;	// .02 - FIFO full or done
+	matchdone: boolean;	// .03 - source match done
+	matchfound:boolean;	// .04 - source match found
+	framegood: boolean;	// .05 - frame passed filtering
+	rxpktdone: boolean;	// .06 - complete frame recvd
+	rxmaskzero:boolean;	// .07 - RXENABLE is now all zero
     }: packed, lsb, bits(32);
     type Intr1:		// bits in irqenb1, irqf1
-    {   txackdone: boolean;	// .00
-	txdone:    boolean;	// .01
-	rfidle:    boolean;	// .02
-	cspmanint: boolean;	// .03
-	cspstop:   boolean;	// .04
-	cspwait:   boolean;	// .05
+    {   txackdone: boolean;	// .00 - ACK has been xmitted
+	txdone:    boolean;	// .01 - frame has been xmitted
+	rfidle:    boolean;	// .02 - state machine in idle state
+	cspmanint: boolean;	// .03 - manual interrupt from CSP
+	cspstop:   boolean;	// .04 - CSP has stopped
+	cspwait:   boolean;	// .05 - CSP continued after wait
     }: packed, lsb, bits(32);
     type IntrE:		// bits in irqenbe, errf
-    {   nlock:     boolean;	// .00
-	rxabo:     boolean;	// .01
-	rxovrfl:   boolean;	// .02
-	rxundfl:   boolean;	// .03
-	txovrfl:   boolean;	// .04
-	txundfl:   boolean;	// .05
-	strobe:    boolean;	// .06
+    {   nlock:     boolean;	// .00 - freq synth failed to lock
+	rxabo:     boolean;	// .01 - frame recv aborted
+	rxovrfl:   boolean;	// .02 - Rx FIFO overflow
+	rxundfl:   boolean;	// .03 - Rx FIFO underflow
+	txovrfl:   boolean;	// .04 - Tx FIFO overflow
+	txundfl:   boolean;	// .05 - Tx FIFO underflow
+	strobe:    boolean;	// .06 - command strobe ignored
     }: packed, lsb, bits(32);
 
     type RFRegs:
     {   rxfifo:   [128]_uint8;						// 000
 	txfifo:   [128]_uint8;						// 200
-
+	// Source address filtering, 3 sets, gap between 1 and 3
+	filter0:  [8]AddrReg: out;					// 400
+	filter1:  [8]AddrReg: out;					// 420
+	filter3:  [8]AddrReg: out, at(0x560);				// 560
 	// FFSM - these are in RAM and reset values are undefined
 	srcres0:  _uint8: bits(32), in, at(0x580);			// 580
 	srcres1:  _uint8: bits(32), in;					// 584
@@ -67,31 +73,37 @@ package radio
 	srcspend0:_uint8: bits(32), out;				// 59C
 	srcspend1:_uint8: bits(32), out;				// 5A0
 	srcspend2:_uint8: bits(32), out;				// 5A4
-	xadr:     [8]AddrReg: out;					// 5A8
-	pan:      [2]AddrReg: out;					// 5C8
-	sadr:     [2]AddrReg: out;					// 5D0
+	xadr:     [8]AddrReg: out;	// 64-bit long address		// 5A8
+	pan:      [2]AddrReg: out;	// 16-bit PAN			// 5C8
+	sadr:     [2]AddrReg: out;	// 16-bit short address		// 5D0
 
 	// XREG
 	frmflt0:							// 600
-	{   enb:      boolean;	// .00
-	    pancoord: boolean;	// .01
-	    maxfrmver:0..3;	// .02-3
+	{   enb:      boolean;	// .00 - enable frame filter (reset=1)
+	    pancoord: boolean;	// .01 - device is pan coordinator
+	    maxfrmver:0..3;	// .02-3 - maximum frame version accepted
 	}: packed, lsb, bits(32), out, at(0x600);
 	frmflt1:							// 604
-		_uint32;	// FIXME
+	{   _:        0..1;	// .00 - reserved
+	    modmsb:   0..3;	// .01-2 - modify MSB of frame type
+	    enbeac:   boolean;	// .03 - enable beacon
+	    endata:   boolean;	// .04 - enable data
+	    enack:    boolean;	// .05 - enable ack
+	    encomd:   boolean;	// .06 - enable mac command
+	}: packed, lsb, bits(32), out;
 	srcmatch:							// 608
-	{   enb:      boolean;	// .00
-	    autopend: boolean;	// .01
-	    datareq:  boolean;	// .02
+	{   enb:      boolean;	// .00 - enable source addr matching
+	    autopend: boolean;	// .01 - enable auto ack pending flag
+	    datareq:  boolean;	// .02 - autopend data request comd only
 	}: packed, lsb, bits(32), out;
 	    	
 	frmctl0:							// 624
 	{   txmode: (NORM, _, LOOP, RAND);	// .00-01
 	    rxmode: (NORM, SER, LOOP, DISSS);	// .02-03
-	    engscan:(NORM, PEAK);		// .04
-	    autoack:boolean;			// .05
-	    autocrc:boolean;			// .06
-	    append: boolean;			// .07
+	    engscan:(NORM, PEAK);	// .04
+	    autoack:boolean;	// .05
+	    autocrc:boolean;	// .06
+	    append: boolean;	// .07
 	}: packed, lsb, bits(32), out, at(0x624);
 	frmctl1:							// 628
 	{   rxenbontx: boolean;	// .00
@@ -105,7 +117,10 @@ package radio
 	freqctl:   0..127: bits(32), out, at(0x63C);			// 63C
 	txpwr:	   _uint8: bits(32), out;				// 640
 	txctl:								// 644
-		_uint32;	// FIXME
+	{   txmixcur:  0..3;	// .00-1
+	    dacdc:     0..3;	// .02-3
+	    daccur:    0..7;	// .04-6
+	}: packed, lsb, bits(32), out;
 	fsmsts0:							// 648
 	{   fsmstate: 0..0x3F;	// .00-05 what do values mean?
 	    calrunning: boolean;// .06
@@ -123,7 +138,9 @@ package radio
 	}: packed, lsb, bits(32), in, ro;
 	fifopctl: 0..127: bits(32), out;				// 650
 	fsmctl:								// 654
-		_uint32;	// FIXME
+	{   rx2rxto:boolean;	// .00
+	    slotack:boolean;	// .01
+	}: packed, lsb, bits(32), out;
 	ccactl0:   _int8: bits(32), out;				// 658
 	ccactl1:							// 65C
 	{   hyst:  0..7;	// .00-02
@@ -140,9 +157,9 @@ package radio
 	_:         _uint32;						// 680
 	txbegadr:  _uint8: bits(32), in, ro;				// 684
 	txendadr:  _uint8: bits(32), in, ro;				// 688
-	irqenb0:   Intr0: out;						// 68C
-	irqenb1:   Intr1: out;						// 690
-	irqenbe:   IntrE: out;						// 694
+	irqenb0:   Intr0: out;	// interrupt enable (masks)		// 68C
+	irqenb1:   Intr1: out;	// interrupt enable (masks)		// 690
+	irqenbe:   IntrE: out;	// interrupt enable (masks)		// 694
 	_:         _uint32;						// 689
 	rfrnd:								// 69C
 	{   irnd:   0..1;
@@ -150,7 +167,9 @@ package radio
 	}: packed, lsb, bits(32), in, ro;
 
 	mdmctl1:							// 6A4
-		_uint32: at(0x6A4);	// FIXME
+	{   corrthd:0..0x1F;	// .00-4
+	    corrstd:boolean;	// .05
+	}: packed, lsb, bits(32), out, at(0x6A4);
 	freqest:  _int8: bits(32), in, ro;				// 6A8
 	rxctl:								// 6AC
 		_uint32;		// FIXME
@@ -196,7 +215,7 @@ package radio
 
 	txfltcfg: 0..15: bits(32), out, at(0x7E8);			// 7E8
 	// SFR
-	data:   _uint8: bits(32), in, out, at(0x828);			// 828
+	data:   _uint8: bits(32), in, out, at(0x828);	// FIFO		// 828
 	errf:   IntrE: in, out;						// 82C
 	irqf1:  Intr1: in, out;						// 830
 	irqf0:	Intr0: in, out;						// 834
@@ -448,6 +467,7 @@ package radio
 
 	if !rf.fsmsts1.fifop then return 0;
 	len = rf.data;			// get length of data in fifo
+debug.str("len="); debug.uint(len); debug.nl();
 	if len > 127 || len <= 4 then	// perhaps lost fifo synchronization
 	{   FlushRx();
 	    return 0;
@@ -455,6 +475,7 @@ package radio
 	for i from 0 to len-1 do
 	    bp[i] = rf.data;
 	lqi = bp[len-1];
+debug.str("lqi="); debug.hex8(lqi); debug.nl();
 	if lqi & 0x80 == 0 then		// FCS error
 	    return 0;
 	// If FIFOP==1 and FIFO==0 then there was a FIFO overflow
@@ -477,9 +498,10 @@ package radio
 
 	rf.frmctl0 = { .autocrc=true };
 	rf.frmctl0.autoack = true;
-//	rf.frmctl0 = { .autocrc=true, .autoack=true, maxfrmver=3 };
+//	rf.frmctl0 = { .autocrc=true, .autoack=true };
+	rf.frmflt0 = { .enb=false, .pancoord=false, .maxfrmver=3 };
 	rf.srcmatch = { .enb=false };
-	rf.fifopctl = 127;
+	rf.fifopctl = 127;	// max, so fifop intr is complete packet
 	rf.txpwr = 0xD5;		// why?
 	SetChannel(chan);
 

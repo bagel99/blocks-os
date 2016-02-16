@@ -1,0 +1,163 @@
+// Test radio receive
+
+import sys;
+import uart;	// for debug
+import debug;
+
+package debug
+{
+    const db_fault   = 1;
+    const db_block   = 2;
+    const db_connect = 1;
+    const db_802154  = 3;
+    const db_lowpan  = 3;
+    const db_ipv6    = 4;
+    const db_udp     = 2;
+}
+import fault;
+
+import info;	// for 64-bit radio address
+
+import block;
+import mbuf;
+
+const TimerID: block.BlockID = 1;	// must be global
+const LPID:    block.BlockID = 15;
+const IPv6ID:  block.BlockID = 14;	// must be ahead of import udp
+const UDPID:   block.BlockID = 13;
+const ECHOID:  block.BlockID = 12;
+
+import timer;
+
+// FIXME - move somewhere, e.g. sys
+var MyIID: [8]_uint8;
+// FIXME - remove following once prefix via RPL works
+const ContikiPrefix:   [8]_byte = {0xAA, 0xAA, 0, 0, 0, 0, 0, 0};
+
+// FIXME - beg
+proc RadioSend(buf: @[]_byte, len: _uint)
+{
+debug.str("RadioSend\n");
+}
+proc Xmit(mb: mbuf.pMBuf)
+{
+debug.str("Xmit\n");
+}
+// FIXME - end
+
+import radio;
+import lowpan;
+var lpb: lowpan.pLPBlock;
+
+// FIXME - beg
+proc MyRecv(mb: mbuf.pMBuf)
+{   var info: ieee802154.FrameInfo;
+
+    ieee802154.Recv(mb.Data(), mb.Size(), info);
+    mb.ShrinkHead(_uint(info.datoff));	// 802.15.4 header
+    mb.ShrinkTail(2);			// 802.15.4 FCS or RSSI+FCSOK|LQI
+    lpb.Recv(mb, info);
+}
+// FIXME - end
+
+package ipv6
+{
+    const config_RPL = true;
+}
+import ipv6;
+
+// Contiki RPL-boarder-router
+    const channel = 25;
+    const pan: _uint16 = 0x5449;
+    const sadr:_uint16 = 0x0402;
+
+proc Setup()
+{
+const Connections: []block.ConnectionInfo =
+{   {	LPID,   IPv6ID,  UPPER,  1, 0 },
+    {   IPv6ID, LPID,    LOWER,  1, 0 },
+};
+    var ip6b: ipv6.pIPv6Block;
+
+    lpb = lowpan.pLPBlock(lowpan.NewBlock(LPID));
+    ip6b = ipv6.pIPv6Block(ipv6.NewBlock(IPv6ID));
+    block.InitConnections(Connections, Connections?len);
+
+{   var e: event.pEvent;
+    e = _new(event.Event);
+    e.code = START;
+    ip6b.id.Send(e);
+}
+    while block.Sched() do {}
+
+    lpb.SetLongAddr(MyIID);
+    lpb.SetContext(ContikiPrefix, 0);
+    ip6b.AddPrefix(1, ContikiPrefix, 64);
+
+debug.str("Init radio\n");
+    radio.Init(channel);
+    radio.SetPan(pan);
+    radio.SetShortAddr(sadr);
+    radio.SetLongAddr(MyIID);
+    radio.SetChannel(channel);
+}
+
+proc meminit(addr: _address, size: _uint, pool: _uint): : external;
+
+
+proc main(): _int
+{
+    var n: _uint;
+    var i: _uint;
+    var irqf0, tmp: _uint32;
+    var mb: mbuf.pMBuf;
+
+    sys.Init(true);
+    fault.Init();
+    debug.Init();
+    meminit(0x20002000, 0x4000, 0);	// FIXME
+    info.GetEUI64(MyIID);
+debug.str("Set RF parameters\n");
+    Setup();
+debug.str("Start Channel=");  debug.uint(radio.GetChannel()); debug.nl();
+    radio.TurnOn();
+debug.str("frmflt0="); debug.hex32(_uint32(radio.rf.frmflt0)); debug.nl();
+debug.str("frmflt1="); debug.hex32(_uint32(radio.rf.frmflt1)); debug.nl();
+    irqf0 = 0;
+    loop
+    {
+	if mb == 0 then
+	    mb = mbuf.Alloc(128, 0);
+	tmp = _uint32(radio.rf.errf);
+	if tmp != 0 then
+	{
+debug.str("errf =");  debug.hex32(tmp); debug.nl();
+	    radio.rf.errf = {};
+	}
+	tmp = _uint32(radio.rf.irqf1);
+	if tmp != 0 then
+	{
+debug.str("irqf1=");  debug.hex32(tmp); debug.nl();
+	    radio.rf.irqf1 = {};
+	}
+	tmp = _uint32(radio.rf.irqf0);
+	if tmp != irqf0 then
+	{   irqf0 = tmp;
+debug.str("irqf0=");  debug.hex32(tmp); debug.nl();
+	}
+	if radio.rf.irqf0.fifop then
+	{
+	    n = radio.RecvRead(mb.Data());
+	    radio.rf.irqf0.fifop = false;
+	    if n != 0 then
+	    {	mb.GrowTail(n);
+		MyRecv(mb);
+		mb = 0;
+	    }
+	}
+	while block.Sched() do {}
+    }
+
+    return 0;
+}
+

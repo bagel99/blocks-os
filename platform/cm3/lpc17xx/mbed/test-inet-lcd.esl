@@ -1,4 +1,4 @@
-// TEST: Test lower level internet via ping
+// TEST: Test lower level internet via ping display address in LCD
 
 import sys;
 import trace;
@@ -36,10 +36,16 @@ import timer;
 import enetsys;
 
 import inet;
-const MyIPv4Addr: inet.IPv4Addr = { 192,156,205,18 };
-const MyIPv4Mask: inet.IPv4Addr = { 255,255,255,128 };
+const MyIPv4Addr: inet.IPv4Addr = { 0,0,0,0 };	// force DHCP
+const MyIPv4Mask: inet.IPv4Addr = { 0,0,0,0 };
 import ipv6;
 import ipv4;
+
+import lcd;
+import font_mono5x8;  alias font_mono5x8 as myfont;
+//import font_sans20x27b;  alias font_sans20x27b as myfont;
+
+var ds: lcd.State;	// FIXME - dynamic allocation
 
 alias event.Event as Event;
 alias event.pEvent as pEvent;
@@ -54,11 +60,10 @@ proc wait()::external;
 proc meminit(addr: _address, size: _uint, pool: _uint): : external;
 
 const Connections: []block.ConnectionInfo =
-{
-    {	IPv4ID, EthID,   LOWER,  1, 0 },
+{   {   IPv4ID, EthID,   LOWER,  1, 0 },
     {	EthID,  IPv4ID,  UPPER,  1, _uint16(eth.Proto.IPV4) },
     {	EthID,  IPv4ID,  UPPER,  1+0x80, 0x0806 },
-    {	IPv6ID, EthID,   LOWER,  1, 0 },
+    {   IPv6ID, EthID,   LOWER,  1, 0 },
     {	EthID,  IPv6ID,  UPPER,  1, _uint16(eth.Proto.IPV6) },
 };
 
@@ -66,13 +71,15 @@ const Connections: []block.ConnectionInfo =
 proc main(): _int
 {   var serialno: _uint32;
 
+    var ip4: ipv4.pIPv4Block;
+    var ip6: ipv6.pIPv6Block;
+    
     sys.Init();
-
     sysctl.Init();
     fault.Init();
     debug.Init();
-    sys.ledon(0);							// 0001
-debug.str("Starting test-inet...\n");
+    sys.ledon(0);							// 01
+debug.str("Starting test-inet-lcd...\n");
     meminit(0x2007C100, 0x7F00, 0);	// FIXME
     // create MAC from serial number
     serialno = chip.GetSerialNumber();
@@ -86,11 +93,9 @@ debug.str("Starting test-inet...\n");
 
     timer.NewBlock(TimerID);
     eth.NewBlock(EthID);
-    sys.ledon(1);							// 0011
-    ipv4.NewBlock(IPv4ID);
-    ipv6.NewBlock(IPv6ID);
+    ip4 = ipv4.pIPv4Block(ipv4.NewBlock(IPv4ID));
+    ip6 = ipv6.pIPv6Block(ipv6.NewBlock(IPv6ID));
     block.InitConnections(Connections, Connections?len);
-    sys.ledon(2);							// 0111
     {   var e: pEvent;
 	e = _new(Event);
 	e.code = START;
@@ -100,12 +105,44 @@ debug.str("Starting test-inet...\n");
 	IPv6ID.Send(e);
     }
 
-    sys.ledon(3);							// 1111
+    sys.ledon(1);							// 11
+    ds.Init();
+    ds.SetFont(myfont.fonttab);
+    
+    var buf: [40]_byte;
+    var addr4: ipv4.IPv4Addr;
+    var addr6: ipv6.IPv6Addr;
+    var n: _uint;
+    var once4: _boolean = false;
+    var once6: _boolean = false;
+	
     var u: uart.Uart;				// for debug print
     var c: _byte;				// for debug print
     u = uart.Init(sys.DebugPort);		// for debug print
     loop
     {
+	if !once4 then
+	{   if ip4.GetAddress(1, addr4) != 0 then
+	    {	n = ipv4.AddrToText(addr4, buf[0:15]);
+		buf[n] = 0;
+		ds.SetXY(0,0);
+		ds.ShowString(buf);
+		ds.Refresh();
+		sys.ledon(3);						// 1111
+		once4 = true;
+	    }
+	}
+	if !once6 then
+	{   if ip6.GetAddress(1, addr6) != 0 then
+	    {   n = ipv6.AddrToText(addr6, buf[0:40]);
+		buf[n] = 0;
+		ds.SetXY(0,10);
+		ds.ShowString(buf);
+		ds.Refresh();
+		sys.ledon(2);						// 111
+		once6 = true;
+	    }
+	}
     	c = debug.Empty();			// for debug print
     	if c != 0 then				// for debug print
     	    u.Send(c);				// for debug print

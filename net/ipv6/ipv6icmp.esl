@@ -8,44 +8,6 @@
 
 package ipv6	// extends the package
 {
-    type ICMPProtocols:
-    (   DestinationUnreachable=1,
-	PacketTooBig=2,
-	TimeExceeded=3,
-	ParameterProblem=4,
-	EchoRequest=128,
-	EchoReply=129,
-	MulticastListenerQuery=130,
-	MulticastListenerReport=131,
-	MulticastListenerDone=132,
-	RouterSolicitation=133,
-	RouterAdvertisement=134,
-	NeighborSolicitation=135,
-	NeighborAdvertisement=136,
-	RedirectMessage=137,
-	RouterRenumbering=138,
-	NodeInformationQuery=139,
-	NodeInformationResponse=140,
-	InverseNeighborDiscoverySolicitation=141,
-	InverseNeighborDiscoveryAdvertisement=142,
-	Version2MulticastListenerReport=143,       
-	HomeAgentAddressDiscoveryRequest=144,
-	HomeAgentAddressDiscoveryReply=145,
-	MobilePrefixSolicitation=146,
-	MobilePrefixAdvertisement=147,
-	CertificationPathSolicitation=148,
-	CertificationPathAdvertisement=149,
-	MulticastRouterAdvertisement=151,
-	MulticastRouterSolicitation=152,
-	MulticastRouterTermination=153,
-	Expansion=255
-    );
-    type ICMPHeader:
-    {   type:	ICMPProtocols;
-	code:	_byte;
-	chksum:	_uint16;
-    };
-    type pICMPHeader: @ICMPHeader;
     type ICMPNSHeader(ICMPHeader):	// Neighbor Solicitation
     {   resv: _uint32;
 	tgt:  IPv6Addr;
@@ -138,25 +100,30 @@ package ipv6	// extends the package
 	ic.chksum = 0;
 	ic.chksum = inet.Checksum(mb.Data(), mb.Size());
 	ip.proto = ICMPv6;
+	ip.hops = 255;
 if db > 3 then {debug.str("SendICMP: ifn="); debug.uint8(mb.tag);
 debug.str(" size="); debug.uint32(mb.Size());
 debug.str(" uplen="); debug.uint32(ip.length);
 debug.str(" type="); debug.uint32(_uint32(ic.type));
 debug.str(" code="); debug.hex8(ic.code);
+debug.str("\n\tfm="); AddrPrint(ip.srcaddr);
+debug.str("\n\tto="); AddrPrint(ip.dstaddr);
 debug.nl();}
 	intf.ISend(mb, ip);
     }
 
     proc (intf: pLower) AddOptionLinkAddr(mb: pMBuf, type: ICMPOptions)
-    {   var optlen: _uint8;
+    {   var adrlen, optlen: _uint;
 	var opt: @[]_byte;
 	
-
-	optlen = 8;	// FIXME: must be multiple of 8
+	adrlen = LinkAddrLen[intf.type];
+	optlen = 2 + adrlen + 7;    // extra 7 to round up to multiple of 8
+	optlen = optlen & ~7;       // roundup
 	opt = mb.GrowTail(optlen);
+	_zero(opt[0:optlen]);
 	opt[0] = _uint8(type);
-	opt[1] = optlen>>3;
-	net.ToMAC(intf.iid, opt[2:6]);
+	opt[1] = _uint8(optlen>>3);
+	opt[2:adrlen] = intf.iid[0:adrlen];
     }
 
     proc (intf: pLower) SendNS(src: @IPv6Addr, dst: @IPv6Addr, tgt: @IPv6Addr)
@@ -186,7 +153,7 @@ debug.nl();}
 	mb = mbuf.Alloc(Header?size + ICMPNAHeader?size + OptSize + intf.hdr,
 		      intf.hdr);
 	ip = pHeader(mb.GrowTail(Header?size));
-	intf.SetLinkLocalAddress(ip);
+	intf.GetLinkLocalAddress(ip.srcaddr);
 	ip.dstaddr = dst@;
 	ic = pICMPNAHeader(mb.GrowTail(ICMPNAHeader?size));
 	ic.type = NeighborAdvertisement;
@@ -206,7 +173,7 @@ debug.nl();}
 		      intf.hdr);
 	ip = pHeader(mb.GrowTail(Header?size));
 	if intf.state == PREFERRED then
-	    intf.SetLinkLocalAddress(ip);
+	    intf.GetLinkLocalAddress(ip.srcaddr);
 	else ip.srcaddr = UnspecAddr;
 	if dst != 0 then ip.dstaddr = dst@; else ip.dstaddr = AllRoutersAddr;
 	ic = pICMPRSHeader(mb.GrowTail(ICMPRSHeader?size));
@@ -223,7 +190,7 @@ debug.nl();}
 
     // Receive Neighbor Solicitation
     // Upper Layer header still attached
-    proc (ib: pIPv6Block) RecvNS(mb: pMBuf, ip: pHeader, ic: pICMPHeader)
+    proc (ib: pIPv6Block) RecvNS(mb: pMBuf, uh: pULHeader, ic: pICMPHeader)
     {   var nsh: pICMPNSHeader;
 	var optlen: _uint;
 	var intf: pLower;
@@ -235,15 +202,15 @@ if db > 2 then {debug.str("RecvNS: ifn="); debug.uint8(mb.tag);
 debug.str(" tgt="); AddrPrint(nsh.tgt); debug.nl();}
 	    optlen = mb.Size() - Header?size - ICMPNSHeader?size;
 	    if optlen > 0 && ICMPOptions(nsh.opt[0]) == ICMPOptions.SrcLinkAddr then
-		intf.NCacheAdd(ip.srcaddr, nsh.opt[2:6]);
-	    intf.SendNA(ip.srcaddr, nsh.tgt);
+		intf.NCacheAdd(uh.srcaddr, nsh.opt[2:]);
+	    intf.SendNA(uh.srcaddr, nsh.tgt);
 	}
 	mbuf.Free(mb);
     }
 
     // Receive Neighbor Advertisement
     // Upper Layer header still attached
-    proc (ib: pIPv6Block) RecvNA(mb: pMBuf, ip: pHeader, ic: pICMPHeader)
+    proc (ib: pIPv6Block) RecvNA(mb: pMBuf, uh: pULHeader, ic: pICMPHeader)
     {   var nah: pICMPNAHeader;
 	var optlen: _uint;
 	var intf: pLower;
@@ -255,14 +222,14 @@ debug.str(" tgt="); AddrPrint(nsh.tgt); debug.nl();}
 if db > 2 then {debug.str("RecvNA: tgt="); AddrPrint(nah.tgt); debug.nl();}
 	optlen = mb.Size() - Header?size - ICMPNAHeader?size;
 	if optlen > 0 && ICMPOptions(nah.opt[0]) == ICMPOptions.TgtLinkAddr then
-	    intf.NCacheAdd(ip.srcaddr, nah.opt[2:6]);
+	    intf.NCacheAdd(uh.srcaddr, nah.opt[2:]);
 	}
 	mbuf.Free(mb);
     }
 
     // Receive Router Advertisement
     // Upper Layer header still attached
-    proc (ib: pIPv6Block) RecvRA(mb: pMBuf, ip: pHeader, ic: pICMPHeader)
+    proc (ib: pIPv6Block) RecvRA(mb: pMBuf, uh: pULHeader, ic: pICMPHeader)
     {   var rah: pICMPRAHeader;
 	var optlen, i: _uint;
 	type pICMPOptPrefix: @ICMPOptPrefix;
@@ -285,7 +252,7 @@ debug.nl();}
 	while i < optlen do
 	{   if rah.opt[i]
 	    is ICMPOptions.SrcLinkAddr then
-		intf.NCacheAdd(ip.srcaddr, rah.opt[i+2:6]);
+		intf.NCacheAdd(uh.srcaddr, rah.opt[i+2:6]);
 	    is ICMPOptions.PrefixInfo then
 	    {
 		var pop: pICMPOptPrefix;
@@ -330,7 +297,7 @@ debug.nl();}
 
     // Receive Router Solicitation
     // Upper Layer header still attached
-    proc (ib: pIPv6Block) RecvRS(mb: pMBuf, ip: pHeader, ic: pICMPHeader)
+    proc (ib: pIPv6Block) RecvRS(mb: pMBuf, uh: pULHeader, ic: pICMPHeader)
     {
 if db > 2 then debug.str("RecvRS\n");
 	if !ib.IsRouter then
@@ -343,80 +310,74 @@ if db > 2 then debug.str("RecvRS\n");
     // Receive Echo Request
     // Upper Layer header still attached
     // Will reuse received buffer for transmit
-    proc (ib: pIPv6Block) RecvEchoReq(mb: pMBuf, ip: pHeader, ic: pICMPHeader)
-    {   var tmp: IPv6Addr;
+    proc (ib: pIPv6Block) RecvEchoReq(mb: pMBuf, uh: pULHeader, ic: pICMPHeader)
+    {   var src, dst: IPv6Addr;
 	var intf: pLower;
+	var ip: pHeader;
 
 if db > 2 then debug.str("RecvEchoReq\n");
 	intf = ib.GetInterface(mb.tag);
 	if intf != 0 then
-	{   ic.type = EchoReply;
-	    tmp = ip.srcaddr;
-	    ip.srcaddr = ip.dstaddr;
-	    ip.dstaddr = tmp;
+	{   dst = uh.srcaddr;
+	    src = uh.dstaddr;
+	    ic.type = EchoReply;
+	    // replace upper layer header with ipv6 header, same size
+	    ip = pHeader(uh);
+	    ip.srcaddr = src;
+	    ip.dstaddr = dst;
 	    intf.SendICMP(mb, ip, ic);
 	}
 	else
 	    mbuf.Free(mb);
     }
 
-    type ValidCheck:
-    {   code:	boolean;	// check for code=0
-	hops:	boolean;	// check for hops=255
-	local:	boolean;	// check for linklocal srcaddr
-    }: packed;
-    const Local:  ValidCheck = {.code=true, .hops=true, .local=true};
-    const Normal: ValidCheck = {.code=true, .hops=true, .local=false};
-
-    // Some validity checks per RFC 4861
-    proc IsValid(ip: pHeader, ic: pICMPHeader, check: ValidCheck): boolean
-    {
-	if check.code && ic.code != 0 then return false;
-	if check.hops && ip.hops != 255 then return false;
-	if check.local && !IsLinkLocal(ip.srcaddr) then return false;
-	return true;
-    }
-	
     // FIXME: need to pass the original IPv6 header in order to do validity checks
-    proc (ib: pIPv6Block) ICMPRecv(mb: pMBuf)
-    {   var ip: pHeader;
+    proc (ib: pIPv6Block) ICMPRecv(mb: pMBuf, hops: _uint8)
+    {   var uh: pULHeader;
 	var ic: pICMPHeader;
 	var chksum: _uint16;
-	var hops: _uint8;
+	var info: inet.ULInfo;
 
-	ip = pHeader(mb.Data());
+	uh = pULHeader(mb.Data());
 if db > 2 then {debug.str("ICMPRecv: size="); debug.uint32(mb.Size());
-debug.str(" uplen="); debug.uint32(ip.length); debug.nl();}
-	if ip.length >= ICMPHeader?size then
-	{   // for checksumming, things need to be moved or zero'ed
-	    ip.vtf = { 0, 0, 0 };
-	    hops = ip.hops;	// save, we need it later for checks
-	    ip.hops = _uint8(ip.proto);	// for checksumming
-	    ip.proto = Proto(0);
-	    chksum = inet.Checksum(mb.Data(), ip.length + Header?size);
-	    ip.hops = hops;	// restore
-if db > 3 then {debug.str(" chksum="); debug.hex16(chksum); debug.nl();}
-	    if chksum == 0 then
+debug.str(" uplen="); debug.uint32(uh.len); debug.nl();}
+	if uh.len >= ICMPHeader?size then
+	{   // for checksumming, things need to be zero'ed
+	    info = uh.info;
+	    uh.info = inet.InfoZero;
+//debug.dumpb("chksumming", mb.Data(), uh.len + inet.ULHeader6?size);
+	    chksum = inet.Checksum(mb.Data(), uh.len + inet.ULHeader6?size);
+	    uh.info = info;	// restore
+	    if chksum != 0 then
+	    {
+if db > 1 then {debug.str(" chksum error="); debug.hex16(chksum); debug.nl();}
+	    }
 	    {	ic = pICMPHeader(mb.Offset(Header?size));
 if db > 3 then {debug.str(" type="); debug.uint32(_uint32(ic.type));
 debug.str(" code="); debug.hex8(ic.code);
 debug.nl();}
 		if ic.type
 		is EchoRequest then
-		    ib.RecvEchoReq(mb, ip, ic);
-		is NeighborSolicitation then
-		    if IsValid(ip, ic, Normal) then
-			ib.RecvNS(mb, ip, ic);
-		is NeighborAdvertisement then
-		    if IsValid(ip, ic, Normal) then
-			ib.RecvNA(mb, ip, ic);
-		is RouterSolicitation then
-		    ib.RecvRS(mb, ip, ic);
-		is RouterAdvertisement then
-		    if IsValid(ip, ic, Local) then
-			ib.RecvRA(mb, ip, ic);
-		else	// ignore
-		{   mbuf.Free(mb);
+		    ib.RecvEchoReq(mb, uh, ic);
+		else
+		{   if ic.code == 0 && hops == 255 then
+		    {
+			if ic.type
+			is NeighborSolicitation then
+			    ib.RecvNS(mb, uh, ic);
+			is NeighborAdvertisement then
+			    ib.RecvNA(mb, uh, ic);
+			is RouterSolicitation then
+			    ib.RecvRS(mb, uh, ic);
+			is RouterAdvertisement then
+			    ib.RecvRA(mb, uh, ic);
+			else	// ignore
+			{   mbuf.Free(mb);
+			}
+		    }
+		    else
+		    {  mbuf.Free(mb);
+		    }
 		}
 		return;
 	    }

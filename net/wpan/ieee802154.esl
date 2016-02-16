@@ -1,97 +1,116 @@
 /*
  * IEEE 802.15.4 MAC Layer
+ *
+ * From IEEE 802.15.4-2011:
+ * [T]he leftmost bit is transmitted first in time. Bits within each
+ * field are numbered from 0 (leftmost and least significant) to k – 1
+ * (rightmost and most significant), where the length of the field is k bits.
+ * Fields that are longer than a single octet are sent ... in the order
+ * from the octet containing the lowest numbered bits to the octet
+ * containing the highest numbered bits.
+ * [A]ll reserved bits shall be set to zero upon transmission and may be
+ * ignored upon receipt.
+ * A device’s extended address shall be a 64-bit universal address,
+ * as defined by the IEEE Registration Authority.
  */
 
 import crc_itut16;
 
 package ieee802154
 {
+    if _defined(debug.db_802154) then
+	alias debug.db_802154 as db;
+    else
+	const db = 0;
+    alias crc_itut16 as crc;
+    const MTU = 127;	// max length of frame
+    const FCS = 2;	// length of FCS
+
+    type PANId:	_uint16;
+    const BroadcastPAN: _uint16 = 0xFFFF;
+
+    type AddrShort: _uint16;
+    const UnallocAddr:   _uint16 = 0xFFFE;
+    const BroadcastAddr: _uint16 = 0xFFFF;
+
+    type AddrLong:  [8]_byte;
+    const ShortUUID: [6]_byte = { 0, 0, 0, 0xFF, 0xFE, 0};
+    const ShortMask: _uint64 = 0x000000FF_FF000000;
+
     type FrameInfo:	// FIXME - move elsewhere?
-    {   srcadr:  _uint64;
-	dstadr:  _uint64;
-	srcpan:  _uint16;
-	dstpan:  _uint16;
-	flags:   _uint8;	// TBD
-	rssi:    _int8;
+    {   srcadr:  AddrLong;
+	dstadr:  AddrLong;
+	srcpan:  PANId;
+	dstpan:  PANId;
+	flags:
+	{   fcserr: boolean;
+	    ack:    boolean;
+	}: packed, bits(8);
+	misc:    _uint8;	// rssi (signed) for Recv, seqno for Send
 	datoff:  _uint8;
 	datlen:  _uint8;
     };
 
-    alias crc_itut16 as crc;
-    const MTU = 127;	// max length of frame
-    const FCS = 2;	// length of FCS
-    type PANId:	    ( Broadcast=0xFFFF );
-    type AddrShort: ( UnAlloc=0xFFFE, UnAssoc=0xFFFF );
-    type AddrLong:  _uint64;
-    type Command:   ( AssocReq=1, AssocRsp, DisAssoc,
-		      DataReq, Conflict, Orphan, BeaconReq,
-		      Realign, GTSReq, Max=15
-		    );
-
-    //API Status defined in sect 7.1.17
-    type  MACStatus:
-  	( SUCCESS=0x00,
-  	  BEACON_LOSS=0xe0,
-	  CHANNEL_ACCESS_FAILURE=0xe1,
-	  DENIED=0xe2,
-	  DISABLE_TRX_FAILURE=0xe3,
-	  FAILED_SECURITY_CHECK=0xe4,
-	  FRAME_TOO_LONG=0xe5,
-	  INVALID_GTS=0xe6,
-	  INVALID_HANDLE=0xe7,
-	  INVALID_PARAMETER=0xe8,
-	  NO_ACK=0xe9,
-	  NO_BEACON=0xea,
-	  NO_DATA=0xeb,
-	  NO_SHORT_ADDRESS=0xec,
-	  OUT_OF_CAP=0xed,
-	  PAN_ID_CONFLICT=0xee,
-	  REALIGNMENT=0xef,
-	  TRANSACTION_EXPIRED=0xf0,
-	  TRANSACTION_OVERFLOW=0xf1,
-	  TX_ACTIVE=0xf2,
-	  UNAVAILABLE_KEY=0xf3,
-	  UNSUPPORTED_ATTRIBUTE=0xf4
-	);
-
     /*
-     * From IEEE 802.15.4-2011:
-     * [T]he leftmost bit is transmitted first in time. Bits within each
-     * field are numbered from 0 (leftmost and least significant) to k – 1
-     * (rightmost and most significant), where the length of the field is k bits.
-     * Fields that are longer than a single octet are sent ... in the order
-     * from the octet containing the lowest numbered bits to the octet
-     * containing the highest numbered bits.
-     * [A]ll reserved bits shall be set to zero upon transmission and may be
-     * ignored upon receipt.
-     * A device’s extended address shall be a 64-bit universal address,
-     * as defined by the IEEE Registration Authority.
+     * IEEE 802.15.4 addresses and pan ids are little-endian in the frame.
+     * The upper level stuff all assumes big-endian (internet network order).
+     * This makes address parsing and generation more complicated.
      */
+    proc RevAddrLong(to: @AddrLong, fm: @AddrLong)
+    {   var i: _uint;
+
+	i = 8;
+	do
+	{   i -= 1;
+	    to[7-i] = fm[i];
+	} while i != 0;
+    }
+
+    proc AddrLongFromShort(to: @AddrLong, fm: @[2]_byte)
+    {
+	to[0:6] = ShortUUID[0:6];
+	to[6] = fm[1];
+	to[7] = fm[0];
+    }
+
+    proc AddrShortFromLong(to: [2]_byte, fm: @AddrLong)
+    {
+	to[0] = fm[7];
+	to[1] = fm[6];
+    }
+
+
     // MAC Header
     type FrameType: ( Beacon, Data, Ack, Comd ): bits(3);
     type AddrMode:  ( None, _, Short, Long );
-    type FrameCF:
+    type FrameCF0:	// 1st octet of FCF
     {	type:	FrameType;	// .00-02
 	se:	boolean;	// .03 security enabled
 	fp:	boolean;	// .04 frame pending
 	ar:	boolean;	// .05 ACK request
 	ip:	boolean;	// .06 Intra-PAN
 	_:	0..1;		// .07 reserved
-	_:	0..3;		// .08-09 reserved
-	dm:	AddrMode;	// .10-11 destination address mode
-	vers:	0..3;		// .12-13 frame version
-	sm:	AddrMode;	// .14-15
     }: packed, lsb;
+    type FrameCF1:	// 2nd octet of FCF
+    {	_:	0..3;		// .00-01 reserved
+	dm:	AddrMode;	// .02-03 destination address mode
+	vers:	0..3;		// .04-05 frame version
+	sm:	AddrMode;	// .06-07
+    }: packed, lsb;
+    type FrameCF:
+    {	f0:	FrameCF0;
+	f1:	FrameCF1;
+    };
     type  Header:
-    {
-	fcf: FrameCF: le;
-	seqno:     0..255;
-	addr: []_byte;
+    {	fcf:	FrameCF;
+	seqno:  0..255;
+	addr:   []_byte;
     };
     type pHeader: @Header;
 
     // Security Header
-    type SecLevel: (NONE, MIC32, MIC64, MIC128, ENC, ENC_MIC32, ENC_MIC64, ENC_MIC128);
+    type SecLevel:
+	(NONE, MIC32, MIC64, MIC128, ENC, ENC_MIC32, ENC_MIC64, ENC_MIC128);
     type SecHeader:
     {   cntl:
 	{   lvl:     SecLevel;	// .00-02
@@ -123,71 +142,54 @@ package ieee802154
      *   0    x    0    8     0   0   2   8   13     Beacon
      *   2    x    0    0     0   0   0   0    3     Ack, no addresses allowed
      */
-    const ShortUUID: _uint64 = 0x000000FF_FE000000;
 
-
-    /*
-     * Command Frame Identifiers
-     */
-    type ComdId:
-    (	AssocRequest	=0x01,
-	AssocResponse	=0x02,
-	DisAssocNotify	=0x03,
-	DataRequest	=0x04,
-	PANIDBadNotify	=0x05,
-	OrphanNotify	=0x06,
-	BeaconRequest	=0x07,
-	CoordRealign	=0x08,
-	GTSRequest	=0x09,
-	EndReserved	=0xFF
-    );
-
-
-    proc SendBeaconRequest()
-    {
-    }
 
     proc Recv(frame: @[]_byte, len: _uint, info: @FrameInfo)
     {
 	var n: 0..255;
 	var h: pHeader;
 	var srcpan, dstpan: _uint16;
-	var srcadr, dstadr: _uint64;
 
-
-        var fcs: _uint16;
-        fcs = crc.calc(frame, len);
-        if fcs != 0 then
-        {
+	info.datlen = 0;	// default for errors
+	info.flags = {};
+	if !radio.autofcs then
+        {   var fcs: _uint16;
+            fcs = crc.calc(frame, len);
+            if fcs != 0 then
+            {
 debug.str("fcs error="); debug.hex16(fcs); debug.nl();
-	    // FIXME - discard frame
+		info.flags = {.fcserr = true};
+		return;
+	    }
 	}
 	h = pHeader(frame);
-debug.str("seqno="); debug.uint8(h.seqno);
-debug.str(" dm="); debug.uint8(_uint8(h.fcf.dm));
-debug.str(" sm="); debug.uint8(_uint8(h.fcf.sm));
-debug.str(" ip="); debug.uint8(_uint8(h.fcf.ip));
-debug.nl();
-	if h.fcf.type == Ack then
-	    return;	// FIXME - what to do with an ACK
+if db > 1 then {debug.str("seqno="); debug.uint8(h.seqno);
+debug.str(" dm="); debug.uint8(_uint8(h.fcf.f1.dm));
+debug.str(" sm="); debug.uint8(_uint8(h.fcf.f1.sm));
+debug.str(" ip="); debug.uint8(_uint8(h.fcf.f0.ip));
+debug.nl(); }
+	if h.fcf.f0.type == Ack then
+	{   info.flags = {.ack = true};
+	    return;
+	}
 	n = 0;		// offset to data from start of address fields
-	if h.fcf.dm != None then
+	if h.fcf.f1.dm != None then
 	{   dstpan = _unpkle(h.addr[n:2]);
 	    n += 2;
-	    if h.fcf.dm == AddrMode.Short then
-	    {   dstadr = ShortUUID | _unpkle(h.addr[n:2]);
+	    if h.fcf.f1.dm == AddrMode.Short then
+	    {   AddrLongFromShort(info.dstadr, h.addr[n:2]);
 		n += 2;
 	    } else	// assume Long
-	    {   dstadr = _unpkle(h.addr[n:8]);
+	    {   RevAddrLong(info.dstadr, h.addr[n:8]);
 		n += 8;
 	    }
 	}
-	if h.fcf.sm == None then
+	if h.fcf.f1.sm == None then
 	{   // assert h.fcf.dm != None
 	    srcpan = dstpan;		// From PAN coordinator
 	}
 	else
-	{   if h.fcf.ip then
+	{   if h.fcf.f0.ip then
 	    {   // assert h.fcf.dm != None
 		srcpan = dstpan;
 	    }
@@ -195,34 +197,84 @@ debug.nl();
 	    {   srcpan = _unpkle(h.addr[n:2]);
 		n += 2;
 	    }
-	    if h.fcf.sm == AddrMode.Short then
-	    {   srcadr = ShortUUID | _unpkle(h.addr[n:2]);
+	    if h.fcf.f1.sm == AddrMode.Short then
+	    {   AddrLongFromShort(info.srcadr, h.addr[n:2]);
 	        n += 2;
 	    } else	// assume Long
-	    {   srcadr = _unpkle(h.addr[n:8]);
+	    {   RevAddrLong(info.srcadr, h.addr[n:8]);
 		n += 8;
 	    }
-	    if h.fcf.dm == None then
+	    if h.fcf.f1.dm == None then
 	    	dstpan = srcpan;	// To PAN coordinator
 	}
 	info.datoff = n + 3;
 	info.datlen = len - n - 5;
 	info.dstpan = dstpan;
-	info.dstadr = dstadr;
 	info.srcpan = srcpan;
-	info.srcadr = srcadr;
+    }
+
+
+    proc Xmit(data: @[]_byte, len: _uint, info: @FrameInfo)
+    {   var h0: FrameCF0;
+	var h1: FrameCF1;
+	var frame: [128]_byte;
+	var n: _uint;
+
+	h0 = {.type=Data, .ar=true};
+	h1 = {.vers=1};
+	n = 3;
+	if info.dstpan != 0 then
+	{   _packle(frame[n:2], info.dstpan);
+	    n += 2;
+	    if info.srcpan == info.dstpan then
+		h0.ip = true;
+	    else
+	    {	_packle(frame[n:2], info.srcpan);
+		n += 2;
+	    }
+	}
+	if info.dstadr[3:2] == ShortUUID[3:2] then
+	{   h1.dm = Short;
+	    AddrShortFromLong(frame[n:2], info.dstadr);
+	    n += 2;
+	}
+	else
+	{   h1.dm = Long;
+	    RevAddrLong(frame[n:8], info.dstadr);
+	    n += 8;
+	}
+	if info.srcpan != 0 && !h0.ip then
+	{   _packle(frame[n:2], info.srcpan);
+	    n += 2;
+	}
+	if info.srcadr[3:2] == ShortUUID[3:2]  then
+	{   h1.sm = Short;
+	    AddrShortFromLong(frame[n:2], info.srcadr);
+	    n += 2;
+	}
+	else
+	{   h1.sm = Long;
+	    RevAddrLong(frame[n:8], info.srcadr);
+	    n += 8;
+	}
+	frame[0] = _uint8(h0);
+	frame[1] = _uint8(h1);
+	frame[2] = info.misc;		// seqno
+	frame[n:len] = data[0:len];
+	RadioSend(frame, n+len);
     }
 
 
     proc HeaderLength(fcf: FrameCF): _uint
     {   var n: _uint;
-    	const AddrLen1: [AddrMode][boolean]_byte  = {{0,0}, {0,0}, {4,2}, {10,8}};
-    	const AddrLen: [boolean][AddrMode]_byte  = {{ 0, 0, 4,10 },{ 0, 0, 2, 8 }};
+	const AddrLen: [boolean][AddrMode]_byte  =
+	    {{ 0, 0, 4,10 },{ 0, 0, 2, 8 }};
  
-	n = 3 + AddrLen[false][fcf.dm] + AddrLen[fcf.ip][fcf.sm];
-	if fcf.se then n += 1;
+	n = 3 + AddrLen[false][fcf.f1.dm] + AddrLen[fcf.f0.ip][fcf.f1.sm];
+	if fcf.f0.se then n += 1;
 	return n;
     }
+
 
     proc MaxPayload(fcf: FrameCF): _uint
     {
@@ -230,23 +282,65 @@ debug.nl();
 	return MTU - FCS - HeaderLength(fcf);
     }
 
-  type  ScanTypes: (ED, Active, Passive, Orphan);
-  const NumChannels = 32;
-  type  ChannelRange: 0..NumChannels-1;
-  type  ChannelMap: [NumChannels] boolean;
-  type  ScanDuration: 0..14;
 
-  var   SupportedChannels: ChannelMap;
+    proc SendBeacon(payload: @[]_uint8, info: @FrameInfo)
+    {   var frame: [128]_uint8;
 
-  // MLME-SCAN.request
 
-  proc Scan(ScanType: ScanTypes,
+    }
+
+
+    /*
+     * Command Frame Identifiers
+     */
+    type ComdId:
+    (	AssocRequest	=0x01,	AssocResponse	=0x02,
+	DisAssocNotify	=0x03,	DataRequest	=0x04,
+	PANIDBadNotify	=0x05,	OrphanNotify	=0x06,
+	BeaconRequest	=0x07,	CoordRealign	=0x08,
+	GTSRequest	=0x09,
+	EndReserved	=0xFF
+    );
+
+    type CapabilityInfo:
+    {	_: 0..1;		// .00 reserved
+	devtype:  (RFD, FFD);	// .01 device type
+	pwrsrc:   (BATT, MAINS);// .02 power source
+	rcvron:   boolean;	// .03 receiver on when idle
+	_:        0..0b11;	// .04-05 reserved
+	seccap:   boolean;	// .06 security capabilty
+	allocadr: boolean;	// .07 allocate address
+    }: packed, lsb, bits(8);
+
+
+    proc SendBeaconRequest(seqno: _uint8)
+    {   var frame: [8]_uint8;
+
+	frame[0] = _uint8(FrameCF0{.type=Comd, .fp=false});
+	frame[1] = _uint8(FrameCF1{.dm=Short, .sm=None, .vers=1});
+	frame[2] = seqno;
+	_packle(frame[3:2], BroadcastPAN);
+	_packle(frame[5:2], BroadcastAddr);
+	frame[7] = _uint8(ComdId.BeaconRequest);
+	RadioSend(frame, 8);
+    }
+
+    type  ScanTypes: (ED, Active, Passive, Orphan);
+    const NumChannels = 32;
+    type  ChannelRange: 0..NumChannels-1;
+    type  ChannelMap: [NumChannels] boolean;
+    type  ScanDuration: 0..14;
+
+    var   SupportedChannels: ChannelMap;
+
+    // MLME-SCAN.request
+    proc Scan(ScanType: ScanTypes,
 	    RequestedChannels: ChannelMap,
 	    Duration: ScanDuration)
-  {
-      if ScanType
-      is ScanTypes.ED then
-      {
+    {
+	if ScanType
+	is ScanTypes.ED then
+	{
 //	  for chan in ChannelRange
 //	  {   if SupportedChannels[chan] and RequestedChannels[chan]
 //	      then
@@ -254,15 +348,15 @@ debug.nl();
 //
 //	      }
 //	  }
-      }
-      is ScanTypes.Orphan then
-      {
-      }
-      is ScanTypes.Active then
-      {
-      }
-      is ScanTypes.Passive then
-      {
-      }
-  }
+	}
+	is ScanTypes.Orphan then
+	{
+	}
+	is ScanTypes.Active then
+	{
+	}
+	is ScanTypes.Passive then
+	{
+	}
+    }
 }

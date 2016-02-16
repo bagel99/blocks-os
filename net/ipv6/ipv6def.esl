@@ -22,8 +22,6 @@ package ipv6
 
     const IPv6Type = 0x86DD;
 
-    const useArrayCompare: boolean = true;     // FIXME
-
     const IsRouter: boolean = false;
     // Timeout constants
     const DupAddrDetectTransmits = 1;
@@ -71,14 +69,80 @@ package ipv6
     };
     type pOptionHeader: @OptionHeader;
 
+    type ICMPProtocols:
+    (   DestinationUnreachable=1,
+	PacketTooBig=2,
+	TimeExceeded=3,
+	ParameterProblem=4,
+	EchoRequest=128,
+	EchoReply=129,
+	MulticastListenerQuery=130,
+	MulticastListenerReport=131,
+	MulticastListenerDone=132,
+	RouterSolicitation=133,
+	RouterAdvertisement=134,
+	NeighborSolicitation=135,
+	NeighborAdvertisement=136,
+	RedirectMessage=137,
+	RouterRenumbering=138,
+	NodeInformationQuery=139,
+	NodeInformationResponse=140,
+	InverseNeighborDiscoverySolicitation=141,
+	InverseNeighborDiscoveryAdvertisement=142,
+	Version2MulticastListenerReport=143,
+	HomeAgentAddressDiscoveryRequest=144,
+	HomeAgentAddressDiscoveryReply=145,
+	MobilePrefixSolicitation=146,
+	MobilePrefixAdvertisement=147,
+	CertificationPathSolicitation=148,
+	CertificationPathAdvertisement=149,
+	MulticastRouterAdvertisement=151,
+	MulticastRouterSolicitation=152,
+	MulticastRouterTermination=153,
+	RPLControlMessage=155,
+	Expansion=255
+    );
+    type ICMPHeader:
+    {   type:	ICMPProtocols;
+	code:	_byte;
+	chksum:	_uint16;
+    };
+    type pICMPHeader: @ICMPHeader;
+
+    /*
+     * Options used in Hop-by-hop header and Destination header
+     * High two bits indicate action to take if the option is
+     * not recoqnized:
+     *  00 - skip (ignore option)
+     *  01 - discard packet
+     *  10 - discard and send ICMP problem
+     *  11 - discard and if dst not multicast, send ICMP problem
+     * The third highest bit indicates if option can change in route:
+     *  0  - no
+     *  1  - yes
+     */
+    type HBHOptions:
+    (   Pad1	    = 0b00_0_00000,
+	PadN	    = 0b00_0_00001,
+	Jumbo       = 0b11_0_00010,
+	RPL	    = 0b01_1_00011,
+	// FIXME - more to come
+    );
+
+
     type AddrType: (UNSPEC, LOOPBACK, UNICAST, MULTICAST);
     type AddrScope:
     (   InterfaceLocal=1, LinkLocal=2, AdminLocal=4, SiteLocal=5,
 	OrganizationLocal=8, Global=14
     );
+    type AddrKind:
+    {   scope:  AddrScope;
+        type:   AddrType;
+    }: packed, lsb, bits(8);
+
 
     const Hex: [16]_byte =
-	{'0','1','2','3','4','5','6','7','8','9','a','b','c','d','e','f'};
+	{'0','1','2','3','4','5','6','7','8','9','A','B','C','D','E','F'};
 
     proc ToHex(b: _byte, t: @[2]_byte, n: _uint): _uint
     {   var v: _uint;
@@ -230,6 +294,25 @@ if _defined(debug) then {
 	debug.strn(buf, n);
     }
 
+    proc PrefixPrint(a: @[]_byte, n: _uint)
+    {   var i: _uint;
+	var nb: _uint;
+
+	// FIXME - assumes prefix is even number of bytes
+	nb = n/8;
+	if nb < 2 then return;
+	i = 0;
+	loop
+	{   debug.hex8(a[i]);
+	    debug.hex8(a[i+1]);
+	    i += 2;
+	  exit i >= nb;
+	    debug.chr(':');
+	}
+	debug.chr('/');
+	debug.uint(n);
+    }
+
     proc MACPrint(a: @[]_byte, n: _uint)
     {   var i: _uint;
 
@@ -247,18 +330,7 @@ if _defined(debug) then {
     // Replace with simple array compare when compiler handles it.
     proc AddrSame(a1: @IPv6Addr, a2: @IPv6Addr): boolean
     {
-if useArrayCompare then {
 	return a1@ == a2@;
-} else {
-	var i: _uint;
-
-	i = 0;
-	while i < IPv6AddrLen do
-	{   if a1[i] != a2[i] then return false;
-	    i += 1;
-	}
-	return true;
-}
     }
 
     proc IsMulticast(a: @IPv6Addr): boolean: inline
@@ -268,50 +340,32 @@ if useArrayCompare then {
 
     proc IsLinkLocal(a: @IPv6Addr): boolean: inline
     {
-if useArrayCompare then {
 	return a[0:2] == LinkLocalPrefix[0:2];
-} else {
-	return a[0] == 0xFE && a[1] == 0x80;
-}
     }
 
-    proc GetAddrType(a: @IPv6Addr): AddrType, AddrScope
+    proc GetAddrKind(a: @IPv6Addr): AddrKind
     {
 
 	if a[0]
 	is 0xFF then
-	    return MULTICAST, AddrScope(a[1]&0xF);
+	    return {.type=MULTICAST, .scope=AddrScope(a[1]&0xF)};
 	is 0xFE then
 	{
-if useArrayCompare then {
-	    if a[2:6] != UnspecAddr[2:6] then return UNICAST, Global;
-} else {
-	    i = 2;
-	    while i < 8 do
-	    {  if a[i] != 0 then return UNICAST, Global;
-		i += 1;
-	    }
-}
-	    if a[1]
-	    is 0xC0 then return UNICAST, SiteLocal;	// deprecated
-	    is 0x80 then return UNICAST, LinkLocal;
+	    if a[2:6] != UnspecAddr[2:6] then
+	        return {.type=UNICAST, .scope=Global};
+	    if a[1] // FIXME - there are others
+	    is 0xC0 then return {.type=UNICAST, .scope=SiteLocal}; // deprecated
+	    is 0x80 then return {.type=UNICAST, .scope=LinkLocal};
 	}
 	is 0x00 then
 	{
-if useArrayCompare then {
-	    if a[1:14] != UnspecAddr[1:14] then return UNICAST, Global;
-} else {
-	    i = 1;
-	    while i < 15 do
-	    {  if a[i] != 0 then return UNICAST, Global;
-		i += 1;
-	    }
-}
+	    if a[1:14] != UnspecAddr[1:14] then
+		return {.type=UNICAST, .scope=Global};
 	    if a[15]
-	    is 0x00 then return UNSPEC, AddrScope(0);
-	    is 0x01 then return LOOPBACK, InterfaceLocal;
+	    is 0x00 then return {.type=UNSPEC, .scope=AddrScope(0)};
+	    is 0x01 then return {.type=LOOPBACK, .scope=InterfaceLocal};
 	}
-	return UNICAST, Global;
+	return {.type=UNICAST, .scope=Global};
     }
 
     // Are prefixes always multiples of bytes in practice?
