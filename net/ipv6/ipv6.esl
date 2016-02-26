@@ -58,13 +58,15 @@ package ipv6	// continue with implementation
     type Lower:
     {   iid:       [iidlen]_byte;       // interface ID, may be smaller
 	ifn:       _uint8;
-	bid:       BlockID;
+	bid:       BlockID;		// of lower block
 	type:      comm.LinkType;
-        state:     AddrState;		// FIXME
+        state:     AddrState;		// state of DAD for link local addr
 	rsage:     _uint16;		// router solicitation aging
+	mtu:       _uint16;		// e.g, 1500 for ethernet
 	hdr:       _uint8;		// space for link level header(s)
 	trl:       _uint8;
-	mtu:       _uint16;		// e.g, 1500 for ethernet
+	iftimer:   (NONE, RUN);		// interface timer state
+	mybid:     BlockID;		// my block
 	prefixes:  @IntfAddrEntry;
 	multicast: @IntfAddrEntry;
 	neighbors: @NCacheEntry;	// forward
@@ -79,7 +81,6 @@ package ipv6	// continue with implementation
 	trl:       _uint8;			// max over all interfaces
 	ifcount:   _uint8;			// number of ready interfaces
 	IsRouter:  boolean;
-	iftimer:   (NONE, RUN);			// interface timer state
     };
     type pIPv6Block: @IPv6Block;
 
@@ -118,13 +119,16 @@ package ipv6	// continue with implementation
 	}
     }
 
-    proc DumpPacket(msg: @[]_byte, mb: pMBuf, ip: pHeader)
+    proc DumpPacket(msg: @[]_byte, mb: pMBuf, ip: pHeader, la: pEUI64)
     {
 	debug.str(msg);
 	debug.str(": ifn="); debug.uint8(mb.tag);
 	debug.str(" size="); debug.uint32(_uint32(mb.Size()));
 	debug.str(" length="); debug.uint32(ip.length);
 	debug.str(" proto="); debug.hex8(_uint8(ip.proto));
+	if la != 0 then
+	{   debug.str("\n\tla="); MACPrint(la, 8);
+	}
 	debug.str("\n\tfm="); AddrPrint(ip.srcaddr);
 	debug.str("\n\tto="); AddrPrint(ip.dstaddr);
 	debug.nl();
@@ -176,6 +180,7 @@ package ipv6	// continue with implementation
        }
        return 0;
     }
+
 
 
     /*
@@ -345,7 +350,7 @@ if db > 3 then {debug.str("ipv6.NCacheTimer should send NS\n");}
     }
 
     // Per interface timer, returns next timeout in seconds
-    proc (intf: pLower) Timer(): _uint
+    proc (intf: pLower) Timer(te: timer.pTimerEvent)
     {   var nexttime: _uint;
 	var toaddr, myaddr: IPv6Addr;
 
@@ -376,7 +381,23 @@ debug.str(" state="); debug.uint8(_uint8(intf.state)); debug.nl(); }
 	    }
 	    intf.NCacheTimer();
 	}
-	return nexttime;
+	if nexttime != 0 then
+	    te.RestartSeconds(intf.mybid, intf.ifn, nexttime);
+	else
+	{
+if db > 3 then {debug.str("ipv6.Timer deleted\n");}
+	    event.Free(te);
+	}
+    }
+
+    proc (intf: pLower) StartTimer()
+    {
+
+if db > 3 then {debug.str("ipv6.StartTimer\n");}
+	if intf.iftimer == NONE then
+	{   intf.iftimer = RUN;
+	    timer.StartSeconds(intf.mybid, intf.ifn, 5);
+	}
     }
 
 
@@ -476,7 +497,6 @@ debug.nl();}
     {   var pnc: pNCacheEntry;
 	var la: pEUI64;
 
-	ip.vtf = {.version=6};
 	if intf.type != PPP then
 	{   // Build link destination header
 	    la = pEUI64(mb.GrowHead(EUI64?size));
@@ -499,7 +519,7 @@ debug.nl();}
 		// FIXME
 	    }
 	}
-if db > 2 then DumpPacket("ipv6.ISend", mb, ip);
+if db > 2 then DumpPacket("ipv6.ISend", mb, ip, 0);
 	mb.info = IPv6Type;
 	mb.code = SEND;
 	mb.tag  = intf.ifn;       // tag event with interface number
@@ -752,7 +772,7 @@ package ipv6
 	ip = pHeader(mb.Data());
 	if mb.Size() >= Header?size && ip.vtf.version == 6 then
 	{
-if db > 1 then DumpPacket("ipv6.Recv", mb, ip);
+if db > 1 then DumpPacket("ipv6.Recv", mb, ip, 0);
 	    intf = ib.GetInterface(mb.tag);
 	    if intf != 0 then   // valid interface
 	    {   if intf.ToUs(ip.dstaddr) then
@@ -795,6 +815,7 @@ debug.str("ipv6: Interface number out of range\n");
 
 	intf = ib.GetInterface(li.tag);
 	if intf == 0 then return;
+	intf.mybid = ib.id;
 if db > 0 then {debug.str("ipv6.InterfaceUp: ifn=");
 debug.uint8(li.tag); debug.chr(':');
 debug.uint8(li.hdr); debug.chr(',');
@@ -821,6 +842,7 @@ debug.str( "\tlla="); AddrPrint(addr); debug.nl();}
 	addr[0:13] = SolicitedPrefix;
 	addr[13:3] = intf.iid[5:3];		// FIXME
 	intf.AddrAddMulticast(addr);		// multicast solicited-node
+	intf.StartTimer();
 	ib.ifcount += 1;
     }
 
@@ -872,47 +894,16 @@ debug.nl();}
 	}
     }
 
-   proc (ib: pIPv6Block) StartTimer()
-    {   var te: timer.pTimerEvent;
-
-if db > 3 then {debug.str("ipv6.StartTimer\n");}
-	if ib.iftimer == NONE then
-	{   ib.iftimer = RUN;
-	    te = timer.Alloc(TSTART);
-	    te.tag = ib.id;
-	    te.ticks = timer.SecondsToTicks(5);    // FIXME: if first then should be random
-	    TimerID.Send(te);
-	}
-    }
-
     proc (ib: pIPv6Block) Timer(te: timer.pTimerEvent)
     {   var intf: pLower;
-	var nexttime, thistime: _uint;
-	var ifn: _uint;
 
-	nexttime = 0;
-	for ifn from 0 to NIPv6Lower-1 do
-	{   intf = ib.lower[ifn];
-	    if intf != 0 then
-	    {   thistime = intf.Timer();
-		if nexttime == 0 then
-		    nexttime = thistime;
-		else
-		    nexttime = _min(nexttime, thistime);
-	    }
-	}
-	if nexttime != 0 then
-	{   te.code = TSTART;
-	    te.ticks = timer.SecondsToTicks(nexttime);
-	    TimerID.Send(te);
-	}
+	intf = ib.GetInterface(te.tag);
+	if intf != 0 then
+	    intf.Timer(te);
 	else
-	{
-if db > 3 then {debug.str("ipv6.Timer deleted\n");}
 	    event.Free(te);
-	}
     }
-
+    
     proc Run(b: pBlock, e: pEvent)
     {   var ib: pIPv6Block;
 
@@ -931,7 +922,6 @@ if db > 3 then {debug.str("ipv6.Timer deleted\n");}
 	    _delete(li);
 	    if ib.ifcount == 1 then // first interface came up
 	    {   ib.InformUpper(true);
-		ib.StartTimer();
 	    }
 	}
 	is DOWN then    // interface has gone down

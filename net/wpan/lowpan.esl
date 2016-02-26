@@ -5,8 +5,7 @@
  *   1. RFC4944
  *   2. RFC6282
  *
- * Copyright (c) 2014, Brian G. Lucas.  See LICENSE file.
- * $Id$
+ * Copyright (c) 2014-2016, Brian G. Lucas.  See LICENSE file.
  *
  * LoWPAN Dispatch Header Byte
  * 00xxxxxx - Not a LoWPAN frame
@@ -347,12 +346,12 @@ debug.str("mesh route not yet implemented\n");
 	return 0;
     }
 
-    proc (ib: pLPBlock) UnicastAddrPack(ipaddr: @inet.IPv6Addr,
-			prefix: @[8]_byte, bp: @_memory): AddrMode, _uint
+    proc (ib: pLPBlock) UnicastPack(ipaddr: @inet.IPv6Addr, prefix: @[8]_byte,
+			linkaddr: AddrLong,bp: @_memory): AddrMode, _uint
     {
 
 	if ipaddr[0:8] == prefix@ then
-	{   if ipaddr[8:8] == ib.laddr then
+	{   if ipaddr[8:8] == linkaddr then
 		return AM0, 0;
 	    if ipaddr[8:6] == {0x00,0x00,0x00,0xFF,0xFE,0x00} then
 	    {   if ib.saddr != 0 then
@@ -860,8 +859,7 @@ if db > 0 then debug.str("HC1 frame not handled\n");
 	    mbuf.Free(mb);		// not a valid header, ignore
     }
 
-    proc (ib: pLPBlock) HeaderPack(mb: pMBuf, DstShortAddr: AddrShort,
-				    SrcShortAddr: AddrShort)
+    proc (ib: pLPBlock) HeaderPack(mb: pMBuf, info:@ieee802154.FrameInfo)
     {   var ph6: ipv6.pHeader;
 	var bp: @_memory;
 	var h0: IPHCHeader0;
@@ -925,7 +923,7 @@ if db > 2 then { debug.str("src ctx=");  debug.uint(ctx.index); debug.nl(); }
 	    }
 	    else
 		pfx = ipv6.LinkLocalPrefix[0:8];
-	    h1.sam, k = ib.UnicastAddrPack(ph6.srcaddr, pfx, cd[n:]);
+	    h1.sam, k = ib.UnicastPack(ph6.srcaddr, pfx, info.srcadr, cd[n:]);
 if db > 2 then { debug.str("sam="); debug.uint8(_uint8(h1.sam));
 debug.str(" k="); debug.uint(k); debug.nl(); }
 	    n += k;
@@ -968,7 +966,7 @@ if db > 2 then { debug.str("dst ctx=");  debug.uint(ctx.index); debug.nl(); }
 	    }
 	    else
 		pfx = ipv6.LinkLocalPrefix[0:8];
-	    h1.dam, k = ib.UnicastAddrPack(ph6.dstaddr, pfx, cd[n:]);
+	    h1.dam, k = ib.UnicastPack(ph6.dstaddr, pfx, info.dstadr, cd[n:]);
 if db > 2 then { debug.str("dam="); debug.uint8(_uint8(h1.dam));
 debug.str(" k="); debug.uint(k); debug.nl(); }
 	    n += k;
@@ -1006,9 +1004,16 @@ debug.str(" grow="); debug.uint(n+2); debug.nl(); }
 	pb[0] = _uint8(DispHeader{.type=DISP, .dispatch=IPV6});
     }
 
+    proc (ib: pLPBlock) LSend(mb: pMBuf, info:@ieee802154.FrameInfo)
+    {
+	// flip local/univeral bits
+	info.srcadr[0] = info.srcadr[0] ^ 0x02;
+	info.dstadr[0] = info.dstadr[0] ^ 0x02;
+	ieee802154.Xmit(mb.Data(), mb.Size(), info);
+    }
 
-    proc (ib: pLPBlock) XmitFragmented(mb: pMBuf, oldlen: _uint, newlen: _uint,
-					maxlen: _uint)
+    proc (ib: pLPBlock) XmitFragmented(mb: pMBuf, pinfo:@ieee802154.FrameInfo,
+		oldlen: _uint, newlen: _uint, maxlen: _uint)
     {   var fraglen, fragmax, remain, offs, adj: _uint;
 	var fmb: pMBuf;
 	var fh1: pFragHdr1;
@@ -1028,7 +1033,7 @@ debug.str(" grow="); debug.uint(n+2); debug.nl(); }
 	fh1.tag = ib.fragtag;
 	fmb.GrowTail(FragHdr1?size);
 	fmb.CopyIn(mb.Data(), fraglen);
-	Xmit(fmb);
+	ib.LSend(fmb, pinfo);
 	fragmax = (maxlen - FragHdrN?size) & ~7;
 //debug.str(" fm="); debug.uint(fragmax);
 	remain = newlen - fraglen;
@@ -1045,7 +1050,7 @@ debug.str(" grow="); debug.uint(n+2); debug.nl(); }
 	    fraglen = _min(remain, fragmax);
 	    fmb.GrowTail(FragHdrN?size);
 	    fmb.CopyIn(mb.Offset(offs-adj), fraglen);
-	    Xmit(fmb);
+	    ib.LSend(fmb, pinfo);
 	    offs += fraglen;
 	    remain -= fraglen;
 	} while remain > 0;	
@@ -1059,8 +1064,7 @@ debug.str(" grow="); debug.uint(n+2); debug.nl(); }
      * If fragmented, then all compressed headers must fit in first fragment.
      * FIXME - have the dest link address prefixed to IPv6 header.
      */
-    proc (ib: pLPBlock) Send(mb: pMBuf, DstShortAddr: AddrShort,
-				SrcShortAddr: AddrShort)
+    proc (ib: pLPBlock) Send(mb: pMBuf, info:@ieee802154.FrameInfo)
     {   var maxlen, oldlen, newlen: _uint;
 	var fcf: mac.FrameCF;
 
@@ -1075,12 +1079,12 @@ debug.str(" grow="); debug.uint(n+2); debug.nl(); }
 if db > 1 then { debug.str("lowpan Send len="); debug.uint(oldlen);
 debug.str(" maxlen="); debug.uint(maxlen); debug.nl(); }
 	if oldlen >= MinCompress then
-	{   ib.HeaderPack(mb, DstShortAddr, SrcShortAddr);
+	{   ib.HeaderPack(mb, info);
 	    newlen = mb.Size();
 if db > 1 then {
 debug.str("\tnewlen="); debug.uint(newlen); debug.nl(); }
 	    if newlen > maxlen then
-	    {   ib.XmitFragmented(mb, oldlen, newlen, maxlen);
+	    {   ib.XmitFragmented(mb, info, oldlen, newlen, maxlen);
 		return;
 	    }
 	}
@@ -1088,18 +1092,24 @@ debug.str("\tnewlen="); debug.uint(newlen); debug.nl(); }
 	{
 	    ib.HeaderIPv6(mb);
 	}
-	Xmit(mb);
+	// FIXME - check if xmit already busy, if so queue this one
+	ib.LSend(mb, info);
     }
 
     proc (ib: pLPBlock) USend(mb: pMBuf)
-    {   var dstladdr:  pAddrLong;
+    {   var info: ieee802154.FrameInfo;
+	var ip: ipv6.pHeader;
 	var pb: @[]_byte;
 
 if db > 3 then { debug.dumpb("lowpan SEND", mb.Data(), mb.Size()); }
+	_zero(info);
 	pb = mb.Data();
-	dstladdr = pAddrLong(pb[0:8]);
-	mb.ShrinkHead(8);
-	ib.Send(mb, 0, 0);
+	info.dstadr = pb[0:8];
+	ip = ipv6.pHeader(mb.ShrinkHead(8));
+	info.srcadr = ip.srcaddr[8:8];
+	info.dstpan = MyPANId;	// FIXME
+	info.srcpan = MyPANId;	// FIXME
+	ib.Send(mb, info);
     }
 
     proc (ib: pLPBlock) NotifyLinkState(isup: boolean)

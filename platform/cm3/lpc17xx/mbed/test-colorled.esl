@@ -51,24 +51,15 @@ package app
 
     
     proc (ab: pAppBlock) SetTimer(seconds: _uint16)
-    {   var te: pTimerEvent;
-
+    {
 //debug.str("app.SetTimer: "); debug.uint16(seconds); debug.nl();
-	te = _new(TimerEvent);
-	te.code = TSTART;
-	te.tag  = ab.id;
-	te.ticks = timer.SecondsToTicks(seconds);
-	TimerID.Send(te);
+	timer.StartSeconds(ab.id, 0, seconds);
     }
 
     proc (ab: pAppBlock) CancelTimer()
-    {   var te: pTimerEvent;
-
-	te = _new(TimerEvent);
-	te.code = TSTOP;
-	te.tag  = ab.id;
-	TimerID.Send(pEvent(te));
-   }
+    {
+	timer.Stop(ab.id, 0);
+    }
 
 
     proc Run(b: pBlock, e: pEvent)
@@ -82,12 +73,11 @@ package app
 	is TSTOPPED then
 	{
 // debug.str("cancelled");
-	    event.Free(e);	
+	    event.Free(te);	
 	}
 	is TDONE then
 	{
 // debug.str("done");
-/*
 	    if ab.state
 	    is 0 then ledcoloron(RED);
 	    is 1 then ledcoloron(GREEN);
@@ -97,17 +87,15 @@ package app
 	    is 5 then ledcoloroff(GREEN);
 	    is 6 then ledcoloroff(RED);
 	    is 7 then ledcoloroff(BLUE);
-*/
+/*
 	    if ab.state
 	    is 0 then ledcoloron(RED);
 	    is 2 then { ledcoloroff(RED); ledcoloron(GREEN); }
 	    is 4 then { ledcoloroff(GREEN); ledcoloron(BLUE); }
 	    is 6 then ledcoloroff(BLUE);
+*/
 	    if ab.state == 7 then ab.state = 0; else ab.state += 1;
-	    te.ticks = timer.SecondsToTicks(2);
-	    te.code = TSTART;
-	    te.tag  = b.id;
-	    TimerID.Send(te);
+	    te.RestartSeconds(b.id, 0, 2);
 	}
 	else
 	{

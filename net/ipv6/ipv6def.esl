@@ -328,7 +328,7 @@ if _defined(debug) then {
 }
 
     // Replace with simple array compare when compiler handles it.
-    proc AddrSame(a1: @IPv6Addr, a2: @IPv6Addr): boolean
+    proc AddrSame(a1: @IPv6Addr, a2: @IPv6Addr): boolean: inline
     {
 	return a1@ == a2@;
     }

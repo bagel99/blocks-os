@@ -46,23 +46,14 @@ debug.str("Temp="); debug.int8(temp); debug.str("C\n");
     }
 
     proc (ab: pAppBlock) SetTimer(seconds: _uint16)
-    {   var te: pTimerEvent;
-
+    {
 //debug.str("app.SetTimer: "); debug.uint16(seconds); debug.nl();
-	te = _new(TimerEvent);
-	te.code = TSTART;
-	te.tag  = ab.id;
-	te.ticks = timer.SecondsToTicks(seconds);
-	TimerID.Send(te);
+	timer.StartSeconds(ab.id, 0, seconds);
     }
 
     proc (ab: pAppBlock) CancelTimer()
-    {   var te: pTimerEvent;
-
-	te = _new(TimerEvent);
-	te.code = TSTOP;
-	te.tag  = ab.id;
-	TimerID.Send(pEvent(te));
+    {
+	timer.Stop(ab.id, 0);
    }
 
 
@@ -83,10 +74,7 @@ debug.str("Temp="); debug.int8(temp); debug.str("C\n");
 	{
 // debug.str("done");
 	    ab.GetTemp();
-	    te.ticks = timer.SecondsToTicks(10);
-	    te.code = TSTART;
-	    te.tag  = b.id;
-	    TimerID.Send(te);
+	    te.RestartSeconds(b.id, 0, 10);
 	}
 	else
 	{

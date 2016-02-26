@@ -94,11 +94,12 @@ package ipv6	// extends the package
     {
 
 	ip.length = _uint16(mb.Size() - Header?size);
-	ip.vtf = { 0, 0, 0 };
+	ip.vtf = { 0, 0, 0 };		// for checksumming
 	ip.hops = _uint8(Proto.ICMPv6);	// for checksumming
-	ip.proto = Proto(0);
+	ip.proto = Proto(0);		// for checksumming
 	ic.chksum = 0;
 	ic.chksum = inet.Checksum(mb.Data(), mb.Size());
+	ip.vtf = {.version=6};
 	ip.proto = ICMPv6;
 	ip.hops = 255;
 if db > 3 then {debug.str("SendICMP: ifn="); debug.uint8(mb.tag);

@@ -48,7 +48,7 @@ LIB= 	../../lib/lib.a
 
 all:	test-timer.bin test-inet.bin \
 	test-udp.bin test-tcp.bin \
-	test-lcd.bin test-inet-lcd.bin \
+	test-lcd.bin test-inet-lcd.bin test-inet6-udp-lcd.bin \
 	test-colorled.bin test-adc.bin test-speaker.bin \
 	test-accel.bin test-usbhost.bin
 #	test-hid.out test-sdcard.out test-msc.out

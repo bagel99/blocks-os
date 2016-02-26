@@ -564,15 +564,11 @@ debug.nl();}
     const TimerSecs = 2;    // 2 second timeout  FIXME
 
     proc (ib: pIPv4Block) StartTimer()
-    {   var te: timer.pTimerEvent;
-
+    {
 if db > 1 then {debug.str("ipv4.StartTimer\n");}
 //	if ib.iftimer == NONE then
 //	{   ib.iftimer = RUN;
-	    te = timer.Alloc(TSTART);
-	    te.tag = ib.id;
-	    te.ticks = timer.SecondsToTicks(TimerSecs);
-	    TimerID.Send(te);
+	    timer.StartSeconds(ib.id, TimerSecs, 0);        
 //	}
     }
 
@@ -589,10 +585,7 @@ if db > 1 then {debug.str("ipv4.Timer\n");}
 		    intf.DHCPTimer(TimerSecs);
 	    }
 	}
-	te.code = TSTART;
-	te.tag = ib.id;
-	te.ticks = timer.SecondsToTicks(TimerSecs);
-	TimerID.Send(te);
+	te.RestartSeconds(ib.id, TimerSecs, 0);
     }
 
     proc Run(b: pBlock, e: pEvent)

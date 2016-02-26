@@ -438,10 +438,11 @@ package radio
     {   var i: _uint;
 
     	FlushTx();
-    	// FIXME - clear Tx done interrupt?
-    	rf.data = _uint8(len);    	// First comes the length byte
+	// FIXME - clear Tx done interrupt?
+	// First comes the length byte (+2 for FCS)
+	rf.data = _uint8(len+2);
 	for i from 0 to len-1 do
-	    rf.data = bp[i];    	
+	    rf.data = bp[i];
     }
 
     proc XmitStart(cca: boolean)
@@ -496,9 +497,7 @@ debug.str("lqi="); debug.hex8(lqi); debug.nl();
 	rf.agcctl1  = 0x15;
 	// analog trim
 
-	rf.frmctl0 = { .autocrc=true };
-	rf.frmctl0.autoack = true;
-//	rf.frmctl0 = { .autocrc=true, .autoack=true };
+	rf.frmctl0 = { .autocrc=true, .autoack=true };
 	rf.frmflt0 = { .enb=false, .pancoord=false, .maxfrmver=3 };
 	rf.srcmatch = { .enb=false };
 	rf.fifopctl = 127;	// max, so fifop intr is complete packet

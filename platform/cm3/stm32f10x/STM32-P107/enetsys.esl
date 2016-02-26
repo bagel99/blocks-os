@@ -19,18 +19,14 @@ package eth	// Extend the package
 
     proc (eb: pEthBlock) ContinuePolling(te: pTimerEvent)
     {
-	te.code = TSTART;
-	te.tag = eb.id;
-	te.ticks = timer.SecondsToTicks(2);	// 2 second polling interval
-	TimerID.Send(te);	
+	te.RestartSeconds(eb.id, 0, 2);		// 2 second polling interval
     }
 
     proc (eb: pEthBlock) EnablePolling()
     {   var te: timer.pTimerEvent;
 
 	phy.EnableIntr(enet);	// so the GPIO pin sees the status
-	te = _new(timer.TimerEvent);
-	eb.ContinuePolling(te);
+	timer.StartSeconds(eb.id, 0, 2);
     }
 
     proc (eb: pEthBlock) CheckLinkStatus(e: pEvent): boolean

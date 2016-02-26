@@ -63,10 +63,7 @@ package app
 
     	if on then sys.ledon(0); else sys.ledoff(0);
 	
-	te.code = TSTART;
-	te.tag  = ab.id;
-	te.ticks = timer.MilliSecondsToTicks(msec);
-	TimerID.Send(te);
+	te.RestartMilliSeconds(ab.id, 0, msec);
     }
 
     proc Run(b: pBlock, e: pEvent)
@@ -83,15 +80,11 @@ package app
     }
 
     proc (ab: pAppBlock) Init()
-    {   var te: pTimerEvent;
+    {
 
 debug.str("app.Init\n");
 	ab.state = 0;
-	te = _new(TimerEvent);
-	te.code = TSTART;
-	te.tag  = ab.id;
-	te.ticks = timer.SecondsToTicks(2);
-	TimerID.Send(te);
+	timer.StartSeconds(ab.id, 0, 2);
     }
 
     proc NewBlock(id: block.BlockID): pBlock

@@ -37,23 +37,14 @@ package app
     alias block.pBlock as pAppBlock;
 
     proc (ab: pAppBlock) SetTimer(seconds: _uint16)
-    {   var te: pTimerEvent;
-
+    {
 debug.str("app.SetTimer: "); debug.uint16(seconds); debug.nl();
-	te = _new(TimerEvent);
-	te.code = TSTART;
-	te.tag  = ab.id;
-	te.ticks = timer.SecondsToTicks(seconds);
-	TimerID.Send(te);
+	timer.StartSeconds(ab.id, 0, seconds);
     }
 
     proc (ab: pAppBlock) CancelTimer()
-    {   var te: pTimerEvent;
-
-	te = _new(TimerEvent);
-	te.code = TSTOP;
-	te.tag  = ab.id;
-	TimerID.Send(pEvent(te));
+    {
+	timer.Stop(ab.id, 0);
    }
 
 
@@ -76,10 +67,8 @@ debug.str("app.SetTimer: "); debug.uint16(seconds); debug.nl();
 	    debug.str("unknown event");
 	debug.nl();
 	if rearm then
-	{   te.ticks = timer.SecondsToTicks(2);
-	    te.code = TSTART;
-	    te.tag  = b.id;
-	    TimerID.Send(te);
+	{
+	    te.RestartSeconds(b.id, 0,2);   
 	}
 	else
 	    event.Free(e);	
