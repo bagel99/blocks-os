@@ -29,17 +29,25 @@ package event
 //    if _uint?size == 8 then
 //	type SizeT: _uint32;	// 64-bit machines
 //    else
-	type SizeT: _uint16;
+    type SizeT: _uint16;
+    type BlockID: _uint8;
 
     type EventTag: _uint8;
+    type EventFlags:
+    {	long: boolean;		// event has variable length
+    }: packed, bits(8);
+
+    // All events are build from this.
     type Event:
     {   next:  @Event;		// for linked lists
 	code:  Code: bits(8);
 	tag:   EventTag;	// source block, or protocol flow
-	xsize: SizeT;		// extended size, not including this header
+	from:  BlockID;
+	flags: EventFlags;
     };
     type pEvent: @Event;
 
+    // Connection events
     type ConnectT: (LOWER, UPPER);
     type ConnEvent(Event):
     {   info:  _uint16;
@@ -60,12 +68,13 @@ package event
 	e.next = nexte;
     }
 
+    // Allocate a event
     proc Alloc(code: Code): pEvent: inline
     {   var e: pEvent;
 
 	e = _new(Event);
 	e.code = code;
-	e.xsize = 0;
+	e.flags = {.long=false};
 	return e;
     }
 

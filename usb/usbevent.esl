@@ -20,6 +20,7 @@ package usbevent
     type InformEvent(Event):
     {	pipe:   Pipe;
 	mtu:   _uint16;
+	_:     _uint8;
 	speed: usb.Speeds;
     };
     type pInformEvent: @InformEvent;
@@ -40,7 +41,7 @@ package usbevent
 	    proto:  boolean;
 	    vid:    boolean;
 	    pid:    boolean;
-	}: packed, lsb, bits(8);
+	}: packed, lsb, bits(16);
 	class:  _uint8;
 	subcls: _uint8;
 	proto:  _uint8;
@@ -49,7 +50,8 @@ package usbevent
     };
 
     type RegisterEvent(Event):
-    {	data:   RegisterData;
+    {	pipe:   Pipe;
+	data:   RegisterData;
     };
     type pRegisterEvent: @RegisterEvent;
 
@@ -58,7 +60,6 @@ package usbevent
 
 	ie = _new(usbevent.InformEvent);
 	ie.code = INFORM;
-	ie.xsize = InformEvent?size - Event?size;
 	ie.tag = 0;
 	return ie;
     }
@@ -68,7 +69,6 @@ package usbevent
 
 	ae = _new(usbevent.ActivateEvent);
 	ae.code = ACTIVATE;
-	ae.xsize = ActivateEvent?size - Event?size;
 	ae.tag = 0;
 	return ae;
     }
@@ -78,7 +78,6 @@ package usbevent
 
 	re = _new(RegisterEvent);
 	re.code = OPEN;
-	re.xsize = RegisterEvent?size - Event?size;
 	re.tag = 0;
 	return re;
     }

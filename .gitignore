@@ -1,10 +1,11 @@
-/doc/
 Notes*
 *.s
 *.o
 *.a
 *.elf
+*.out
 *.bin
 *.map
+*.html
 *~
 

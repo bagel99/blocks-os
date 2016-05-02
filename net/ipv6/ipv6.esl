@@ -66,7 +66,7 @@ package ipv6	// continue with implementation
 	hdr:       _uint8;		// space for link level header(s)
 	trl:       _uint8;
 	iftimer:   (NONE, RUN);		// interface timer state
-	mybid:     BlockID;		// my block
+	block:     @IPv6Block;		// my block
 	prefixes:  @IntfAddrEntry;
 	multicast: @IntfAddrEntry;
 	neighbors: @NCacheEntry;	// forward
@@ -349,6 +349,41 @@ if db > 3 then {debug.str("ipv6.NCacheTimer should send NS\n");}
 	}
     }
 
+    /*
+     * Per interface timers
+     */
+    type TimerID:
+    (   NC,     // neighbor cache aging, initially used for DAD
+	RS,     // router solicitation
+    );
+
+    proc GetTimerID(tag: _uint8): TimerID: inline
+    {
+	return TimerID(tag >> 4);
+    }
+
+    // if te is 0 need new event, otherwise reuse te
+    proc (intf: pLower) TimerSeconds(te: timer.pTimerEvent,
+		tid: TimerID, sec: _uint)
+    {   var tag: _uint8;
+
+	if te == 0 then
+	    te = timer.Alloc();
+	tag = _uint8(tid) << 4 | intf.ifn;
+	te.RestartSeconds(tag, sec);
+    }
+
+    // if te is 0 need new event, otherwise reuse te
+    proc (intf: pLower) TimerMilliSeconds(te: timer.pTimerEvent,
+		tid: TimerID, msec: _uint)
+    {   var tag: _uint8;
+
+	if te == 0 then
+	    te = timer.Alloc();
+	tag = _uint8(tid) << 4 | intf.ifn;
+	te.RestartMilliSeconds(tag, msec);
+    }
+
     // Per interface timer, returns next timeout in seconds
     proc (intf: pLower) Timer(te: timer.pTimerEvent)
     {   var nexttime: _uint;
@@ -382,21 +417,11 @@ debug.str(" state="); debug.uint8(_uint8(intf.state)); debug.nl(); }
 	    intf.NCacheTimer();
 	}
 	if nexttime != 0 then
-	    te.RestartSeconds(intf.mybid, intf.ifn, nexttime);
+	    te.RestartSeconds(intf.ifn, nexttime);
 	else
 	{
 if db > 3 then {debug.str("ipv6.Timer deleted\n");}
 	    event.Free(te);
-	}
-    }
-
-    proc (intf: pLower) StartTimer()
-    {
-
-if db > 3 then {debug.str("ipv6.StartTimer\n");}
-	if intf.iftimer == NONE then
-	{   intf.iftimer = RUN;
-	    timer.StartSeconds(intf.mybid, intf.ifn, 5);
 	}
     }
 
@@ -815,7 +840,7 @@ debug.str("ipv6: Interface number out of range\n");
 
 	intf = ib.GetInterface(li.tag);
 	if intf == 0 then return;
-	intf.mybid = ib.id;
+	intf.block = ib;
 if db > 0 then {debug.str("ipv6.InterfaceUp: ifn=");
 debug.uint8(li.tag); debug.chr(':');
 debug.uint8(li.hdr); debug.chr(',');
@@ -842,7 +867,7 @@ debug.str( "\tlla="); AddrPrint(addr); debug.nl();}
 	addr[0:13] = SolicitedPrefix;
 	addr[13:3] = intf.iid[5:3];		// FIXME
 	intf.AddrAddMulticast(addr);		// multicast solicited-node
-	intf.StartTimer();
+	intf.TimerSeconds(0, NC, 5);   // really DAD timer
 	ib.ifcount += 1;
     }
 

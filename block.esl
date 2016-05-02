@@ -15,12 +15,12 @@ package block
     }
     else const db = 0;
     alias event.pEvent as pEvent;
+    alias event.BlockID as BlockID;
 
     // Blocks encapsulate event queue and state machine
     // Generic event service routine
     type Service: @_(b: @Block, e: pEvent);
 
-    type BlockID: _uint8;
     // Event tags are often BlockIDs, make sure they fit
     if event.EventTag?size < BlockID?size then error "BlockID size";
     type PendIntr: _uint8;      // bit map
@@ -38,7 +38,7 @@ package block
 //    if _defined(sys.MaxBlockID) then alias sys.MaxBlockID as MaxBlockID;
 //    else const MaxBlockID = 32;
     const MaxBlockID = 32;
-
+    var curbid: BlockID;	// current running block
     var Ready: _uint32;		// FIXME - limits # blocks to 32
     var Table: [MaxBlockID-1] pBlock;
 
@@ -65,12 +65,17 @@ package block
 
     proc (b: pBlock) IntrSet(n: IntrNum): :inline
     {
-	    b.pintr = b.pintr | (1<<n);
+	b.pintr = b.pintr | (1<<n);
     }
 
     proc (b: pBlock) IntrClr(n: IntrNum): :inline
     {
-	    b.pintr = b.pintr & ~(1<<n);
+	b.pintr = b.pintr & ~(1<<n);
+    }
+
+    proc SetContext(bid: BlockID): : inline
+    {
+	curbid = bid;
     }
 
     proc NextToRun(): BlockID
@@ -99,6 +104,7 @@ package block
 		    if b.pintr == 0 && b.head == 0 then
 			bid.MakeIdle();
 if db > 3 then {debug.str("RunI "); debug.uint8(bid); debug.nl();}
+		    curbid = bid;
 		    b.run@(b, 0);
 		}
 		else			// normal event
@@ -108,9 +114,11 @@ if db > 3 then {debug.str("RunI "); debug.uint8(bid); debug.nl();}
 		    if b.head == 0 then
 			bid.MakeIdle();
 if db > 1 then {debug.str("Run "); debug.uint8(bid); 
+debug.chr(':'); debug.uint8(e.from);
 debug.chr(':'); debug.uint8(e.tag);
 debug.chr(' '); debug.uint8(_uint8(e.code));
-debug.chr('('); debug.uint16(e.xsize); debug.str(")\n");}
+debug.nl();}
+		    curbid = bid;
 		    b.run@(b, e);
 		}
 		return true;
@@ -143,13 +151,15 @@ debug.chr('('); debug.uint16(e.xsize); debug.str(")\n");}
     proc (bid: BlockID) Send(e: pEvent)
     {   var b: pBlock;
 
+	e.from = curbid;
 	if bid != 0 && bid <= MaxBlockID then
 	{   b = Table[bid-1];
 	    // FIXME - unlock
 if db > 1 then {debug.str("Send "); debug.uint8(bid);
+debug.chr(':'); debug.uint8(e.from);
 debug.chr(':'); debug.uint8(e.tag);
 debug.chr(' '); debug.uint8(_uint8(e.code));
-debug.chr('('); debug.uint16(e.xsize); debug.str(")\n"); }
+debug.nl();}
 	    // FIXME - lock
 	    b.Enqueue(e);
 	    bid.MakeRunnable();
@@ -205,15 +215,14 @@ if db > 2 then {debug.str("\tr="); debug.hex32(Ready); debug.nl();}
     /*
      * The following are helper methods to send specific event packets
      */
+    alias event.pConnEvent as pConnEvent;
 
     proc (bid: BlockID) SendConnect(to: BlockID, type: event.ConnectT,
     				     chan: _uint8, info: _uint16)
-    {   var ce: event.pConnEvent;
+    {   var ce: pConnEvent;
 
-	ce = _new(event.ConnEvent);
-	ce.code = CONNECT;
+	ce = pConnEvent(event.Alloc(CONNECT));
 	ce.tag  = to;
-	ce.xsize = event.ConnEvent?size - event.Event?size;
 	ce.type = type;
 	ce.chan = chan;
 	ce.info = info;

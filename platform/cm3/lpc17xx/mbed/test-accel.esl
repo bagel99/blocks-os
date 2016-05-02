@@ -59,12 +59,12 @@ debug.str("Tilt="); debug.hex8(tilt); debug.chr(' ');
     proc (ab: pAppBlock) SetTimer(seconds: _uint16)
     {
 //debug.str("app.SetTimer: "); debug.uint16(seconds); debug.nl();
-	timer.StartSeconds(ab.id, 0, seconds);
+	timer.StartSeconds(0, seconds);
     }
 
     proc (ab: pAppBlock) CancelTimer()
     {
-	timer.Stop(ab.id, 0);
+	timer.Stop(0);
     }
 
 
@@ -85,7 +85,7 @@ debug.str("Tilt="); debug.hex8(tilt); debug.chr(' ');
 	{
 // debug.str("done");
 	    ab.GetTilt();
-	    te.RestartSeconds(b.id, 0, 5);
+	    te.RestartSeconds(0, 5);
 	}
 	else
 	{
@@ -97,6 +97,7 @@ debug.str("Tilt="); debug.hex8(tilt); debug.chr(' ');
     proc (ab: pAppBlock) Init()
     { 
 if db > 0 then debug.str("app.Init\n");
+	block.SetContext(ab.id);
 sys.ledon(2);
 	ab.ics.Init(2);		// initialize I2C2
 	ab.acs.Init(ab.ics);

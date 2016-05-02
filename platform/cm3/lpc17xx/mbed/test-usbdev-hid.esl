@@ -6,12 +6,18 @@
 
 // Board specific stuff
 import sys;
-import trace;
-import debug;
 package debug
 {
-    const db_usbdev = 0x0009030F;
+    const db_block   = 2;
+    const db_connect = 1;
+    const db_usbdev  = 0x00020000;
+    // works with no usbdev output
+//    const db_usbdev  = 0x000F0033;
 }
+import trace;
+import debug;
+import uart;
+var u: uart.Uart;				// for debug print
 
 // Cortex M3 stuff
 import fault;
@@ -42,15 +48,30 @@ proc EINT10_15_IRQ()
     }
 }
 */
+proc meminit(addr: _address, size: _uint, pool: _uint): : external;
+    
 
 proc main()
 {
-    sysctl.Init();
+    var c: _byte;				// for debug print
+
     sys.Init();
+    sysctl.Init();
+    fault.Init();
     debug.Init();
+    sys.ledon(0);
+debug.str("Starting test-usbdev-hid...\n");
+    meminit(0x2007C400, 0x7C00, 0);	// FIXME - space reserved for usbhost RAM
+    sys.ledon(1);
     usbdev.HIDInit();
+    sys.ledon(2);
+    u = uart.Init(sys.DebugPort);		// for debug print
     loop
-    {   if button1 then
+    {
+    	c = debug.Empty();			// for debug print
+    	if c != 0 then				// for debug print
+    	    u.Send(c);				// for debug print
+	if button1 then
     	{   button1 = false;
     	    usbdev.Button(1);
     	}

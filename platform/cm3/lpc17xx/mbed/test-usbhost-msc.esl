@@ -70,7 +70,7 @@ proc main(): _int
     fault.Init();
     debug.Init();
     sys.ledon(0);
-debug.str("Starting test-usbhost...\n");
+debug.str("Starting test-usbhost-msc...\n");
     meminit(0x2007C400, 0x7C00, 0);	// FIXME - space reserved for usbhost RAM
     sys.ledon(1);
 

@@ -39,12 +39,12 @@ package app
     proc (ab: pAppBlock) SetTimer(seconds: _uint16)
     {
 debug.str("app.SetTimer: "); debug.uint16(seconds); debug.nl();
-	timer.StartSeconds(ab.id, 0, seconds);
+	timer.StartSeconds(0, seconds);
     }
 
     proc (ab: pAppBlock) CancelTimer()
     {
-	timer.Stop(ab.id, 0);
+	timer.Stop(0);
    }
 
 
@@ -68,7 +68,7 @@ debug.str("app.SetTimer: "); debug.uint16(seconds); debug.nl();
 	debug.nl();
 	if rearm then
 	{
-	    te.RestartSeconds(b.id, 0,2);   
+	    te.RestartSeconds(0,2);
 	}
 	else
 	    event.Free(e);	
@@ -77,6 +77,7 @@ debug.str("app.SetTimer: "); debug.uint16(seconds); debug.nl();
     proc (ab: pAppBlock) Init()
     {
 if db > 0 then debug.str("app.Init\n");
+	block.SetContext(ab.id);
 	ab.SetTimer(9);
 	ab.CancelTimer();		// cancel first in queue
 	ab.SetTimer(2);

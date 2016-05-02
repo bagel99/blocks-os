@@ -18,12 +18,12 @@ package eth	// Extend the package
 
     proc (eb: pEthBlock) ContinuePolling(te: pTimerEvent)
     {
-	te.RestartSeconds(eb.id, 0, 2);		// 2 second polling interval
+	te.RestartSeconds(0, 2);		// 2 second polling interval
     }
 
     proc (eb: pEthBlock) EnablePolling()
     {
-	timer.StartSeconds(eb.id, 0, 2);
+	timer.StartSeconds(0, 2);
     }
 
     proc (eb: pEthBlock) CheckLinkStatus(e: pEvent): boolean

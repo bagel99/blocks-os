@@ -63,7 +63,7 @@ package app
 
     	if on then sys.ledon(0); else sys.ledoff(0);
 
-	te.RestartMilliSeconds(ab.id, 0, msec);
+	te.RestartMilliSeconds(0, msec);
     }
 
     proc Run(b: pBlock, e: pEvent)
@@ -83,8 +83,9 @@ package app
     {
 
 debug.str("app.Init\n");
+	block.SetContext(ab.id);
 	ab.state = 0;
-	timer.StartSeconds(ab.id, 0, 2);
+	timer.StartSeconds(0, 2);
     }
 
     proc NewBlock(id: block.BlockID): pBlock

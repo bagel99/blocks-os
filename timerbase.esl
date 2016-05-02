@@ -27,11 +27,9 @@ package timer
     alias block.pBlock  as pBlock;
     alias block.BlockID as BlockID;
 
-    // Because the timer doesn't have connections, we have to have
-    // the sender's BlockID, so we can reply.
-    type TimerEvent(Event):
-    {   bid:     BlockID;
-	ticks:   _uint32;
+    // Timer events are the same size as short events.
+    type TimerEvent(event.Event):
+    {   ticks:   _uint32;
     };
     type pTimerEvent: @TimerEvent;
 
@@ -39,7 +37,7 @@ package timer
     {   var te: pTimerEvent;
 
 	te = _new(TimerEvent);
-	te.xsize = TimerEvent?size - Event?size;
+	te.flags = {.long=false};
 	return te;
     }
 
@@ -59,49 +57,47 @@ package timer
 	return ms * sys.TicksPerSecond / 1000;	
     }
 
-    proc (te: pTimerEvent) Start(bid: BlockID, tag: _uint8, ticks: _uint32)
+    proc (te: pTimerEvent) Start(tag: _uint8, ticks: _uint32)
     {
 	te.code = TSTART;
 	te.tag = tag;
-	te.bid = bid;
 	te.ticks = ticks;
 	TimerID.Send(te);	
     }
 
-    proc StartTicks(bid: BlockID, tag: _uint8, ticks: _uint32)
+    proc StartTicks(tag: _uint8, ticks: _uint32)
     {   var te: pTimerEvent;
 
 	te = Alloc();
-	te.Start(bid, tag, ticks);
+	te.Start(tag, ticks);
     }
 
-    proc StartSeconds(bid: BlockID, tag: _uint8, secs: _uint32)
+    proc StartSeconds(tag: _uint8, secs: _uint32)
     {
-	StartTicks(bid, tag, SecondsToTicks(secs));
+	StartTicks(tag, SecondsToTicks(secs));
     }
     
-    proc (te: pTimerEvent) RestartSeconds(bid: BlockID, tag: _uint8, secs: _uint32)
+    proc (te: pTimerEvent) RestartSeconds(tag: _uint8, secs: _uint32)
     {
-	te.Start(bid, tag, SecondsToTicks(secs));
+	te.Start(tag, SecondsToTicks(secs));
     }
        
-    proc StartMilliSeconds(bid: BlockID, tag: _uint8, msecs: _uint32)
+    proc StartMilliSeconds(tag: _uint8, msecs: _uint32)
     {
-	StartTicks(bid, tag, MilliSecondsToTicks(msecs));
+	StartTicks(tag, MilliSecondsToTicks(msecs));
     }
 
-    proc (te: pTimerEvent) RestartMilliSeconds(bid: BlockID, tag: _uint8, msecs: _uint32)
+    proc (te: pTimerEvent) RestartMilliSeconds(tag: _uint8, msecs: _uint32)
     {
-	te.Start(bid, tag, MilliSecondsToTicks(msecs));
+	te.Start(tag, MilliSecondsToTicks(msecs));
     }
        
-    proc Stop(bid: BlockID, tag: _uint8)
+    proc Stop(tag: _uint8)
     {   var te: pTimerEvent;
 
 	te = Alloc();
 	te.code = TSTOP;
 	te.tag = tag;
-	te.bid = bid;
 	TimerID.Send(te);
     }
 
@@ -124,7 +120,7 @@ package timer
 	debug.str("tmr.Dump:\n");
 	i = 0;
 	while te != 0 && i < 10 do
-	{   debug.chr('\t'); debug.uint8(te.bid);
+	{   debug.chr('\t'); debug.uint8(te.from);
 	    debug.chr(':');  debug.uint8(te.tag);
 	    debug.chr(' '); debug.uint32(te.ticks);
 	    debug.nl();
@@ -152,7 +148,7 @@ package timer
     {   var tep, ten: pTimerEvent;
 	var remain: _uint32;
 
-if db > 2 then {debug.str("tmr.Enq "); debug.uint8(te.bid);
+if db > 2 then {debug.str("tmr.Enq "); debug.uint8(te.from);
 debug.chr(':'); debug.uint8(te.tag);
 debug.chr(' '); debug.uint32(te.ticks); debug.nl();}
 	ten = tb.list;
@@ -192,7 +188,7 @@ if db > 4 then tb.Dump(tb.list);
 if db > 2 then {debug.str("tmr.Deq "); debug.uint8(bid); debug.nl();}
 	tep = 0;
 	tet = tb.list;
-	while tet != 0 && tet.bid != bid && tet.tag != tag do
+	while tet != 0 && tet.from != bid && tet.tag != tag do
 	{   tep = tet;
 	    tet = pTimerEvent(tet.next);
 	}
@@ -220,7 +216,7 @@ if db > 4 then tb.Dump(tb.list);
     {   var bid: BlockID;
 
 	te.code = TDONE;
-	bid = BlockID(te.bid);
+	bid = BlockID(te.from);
 	bid.Send(te);
     }
 
@@ -271,10 +267,10 @@ debug.chr(','); debug.uint8(e.tag); debug.nl();}
 	    }
 	    is TSTOP then
 	    {
-	   	ste = tb.Deq(te.bid, te.tag);
+	   	ste = tb.Deq(te.from, te.tag);
 	   	if ste != 0 then
 	   	{   ste.code = TSTOPPED;
-	   	    bid = BlockID(ste.bid);
+	   	    bid = ste.from;
 		    bid.Send(ste);
 	   	}
 		_delete(te);

@@ -10,6 +10,7 @@ import usb;
 
 package usbdev
 {
+    // debug uses bit mask rather than level
     if _defined(debug.db_usbdev) then
 	alias debug.db_usbdev as db;
     else
@@ -46,14 +47,14 @@ package usbdev
      *
      * There are 32 device endpoints with fixed functionality.
      * Even endpoints are OUT, odd are IN.
-     * These map directly into 16 endpoint addresses.
+     * These correspond to 16 endpoint addresses (endpoint numbers).
      * CTRL and BULK packet sizes are 8,16,32,64 bytes.
      * INTR packet sizes are 1..64.
      * ISOC packet sizes are 1..1023.
      * ISOC and BULK endpoints are double buffered.
      */
     const NumEP = 32;
-    type EPnum: 0..NumEP-1;
+    type EPinx: 0..NumEP-1;
     const EP0Rx = 0;
     const EP0Tx = 1;
     type EPadr: 0..15;
@@ -64,6 +65,7 @@ package usbdev
         type:  EPType: bits(8);
         maxpkt:_uint16;
     }: packed;
+
     const EPUse: [EPadr]EPType =
     {   CTRL,	INTR,	BULK,	ISOC,	INTR,	BULK,	ISOC,	INTR,
 	BULK,	ISOC,   INTR,	BULK,	ISOC,	INTR,	BULK,	BULK
@@ -232,12 +234,12 @@ package usbdev
 	rv = 0;
 	ud.intclr = { .ccempty=true };
 	ud.cmdcode = { .phase=COMD, .data=comd.cmd };
-if db > 7 then { debug.chr('c'); debug.hex8(_uint8(comd.cmd)); }
+if db & 0x80 != 0 then { debug.chr('c'); debug.hex8(_uint8(comd.cmd)); }
 	while !ud.intsts.ccempty do {};		// spin until true
 	ud.intclr = { .ccempty=true };
 	if comd.dir == WR then
 	{
-if db > 7 then { debug.chr('<'); debug.hex8(data); debug.nl(); }
+if db & 0x80 != 0 then { debug.chr('<'); debug.hex8(data); debug.nl(); }
 	    ud.cmdcode = { .phase=WRITE, .data=data };
 	    while !ud.intsts.ccempty do {};	// spin until true
 	    ud.intclr = { .ccempty=true };
@@ -257,7 +259,7 @@ if db > 7 then { debug.chr('<'); debug.hex8(data); debug.nl(); }
 		    ud.intclr = {.cdfull = true };
 		    rv = (_uint8(ud.cmddata) << 8) | rv;
 		}
-if db > 7 then { debug.chr('>'); debug.hex16(rv); debug.nl(); }
+if db & 0x80 != 0 then { debug.chr('>'); debug.hex16(rv); debug.nl(); }
 	    }
 	}
 	return rv;
@@ -268,11 +270,11 @@ if db > 7 then { debug.chr('>'); debug.hex16(rv); debug.nl(); }
 
 	while !ud.intsts.cdfull do {};	// spin until true
 	rv = _uint8(ud.cmddata);
-if db > 7 then { debug.chr('s'); debug.hex8(rv); debug.nl(); }
+if db & 0x80 != 0 then { debug.chr('s'); debug.hex8(rv); debug.nl(); }
 	return SIESelect(rv);
     }
 
-    proc (ud: usbd) Read(epn: EPnum,
+    proc (ud: usbd) Read(epn: EPinx,
     			   bb: @[]_byte /*align(4)*/, nb: _uint)
     {   var nw, i, len: _uint;
 	type pwa: @[]_uint32;
@@ -284,7 +286,7 @@ if db > 7 then { debug.chr('s'); debug.hex8(rv); debug.nl(); }
     	while !ud.rxplen.rdy do
     	    {}
     	len = ud.rxplen.len;
-if db > 6 then { debug.chr('r'); debug.uint(len); debug.nl(); }
+if db & 0x40 != 0 then { debug.chr('r'); debug.uint(len); debug.nl(); }
     	// Copy in the data
 	bw = pwa(bb);
 	i = 0;
@@ -299,7 +301,7 @@ if db > 6 then { debug.chr('r'); debug.uint(len); debug.nl(); }
 	ud.Command(SIEClearBuf, 0);    	
     }
 
-    proc (ud: usbd) Write(epn: EPnum,
+    proc (ud: usbd) Write(epn: EPinx,
     			   bb: @[]_byte /*align(4)*/, nb: _uint)
     {   var nw, i: _uint;
 	type pwa: @[]_uint32;
@@ -309,7 +311,7 @@ if db > 6 then { debug.chr('r'); debug.uint(len); debug.nl(); }
     	ud.ctl = {.wren=true, .epnum=_uint8(epn)>>1};
     	// Set packet length
     	ud.txplen = {.len=nb};
-if db > 6 then { debug.chr('w'); debug.uint(nb); debug.nl(); }
+if db & 0x40 != 0 then { debug.chr('w'); debug.uint(nb); debug.nl(); }
     	// Copy out the data
 	bw = pwa(bb);
 	i = 0;
@@ -332,8 +334,10 @@ if db > 6 then { debug.chr('w'); debug.uint(nb); debug.nl(); }
 
     const MaxEP = 3;	// FIXME - only implement 4 endpoints
     type EPRange: 0..(MaxEP*2)+1;
+
     type EPState:
-    {   num:     EPnum;
+    {   epi:    EPinx;		// hardware index into endpoint array
+	num:	_uint8;		// the USB endpoint number
 	t:
 	{   isconf:  boolean;	// used in current configuration
 	    isin:    boolean;
@@ -348,6 +352,7 @@ if db > 6 then { debug.chr('w'); debug.uint(nb); debug.nl(); }
 	xferbuf: _address;
     };
     type eps: @EPState;
+
     type DeviceState:       // generic device state
     {   ep:      [EPRange]EPState;
 	buf:     [8]_byte: align(4);    // for receiving setup
@@ -369,7 +374,7 @@ if db > 6 then { debug.chr('w'); debug.uint(nb); debug.nl(); }
      */
     proc (ep: eps) Dump()
     {
-debug.str("EP"); debug.uint8(_uint(ep.num));
+debug.str("EP"); debug.uint8(_uint(ep.epi));
 debug.str(" max="); debug.uint16(ep.maxpkt);
 debug.str(" len="); debug.uint16(ep.xferlen);
 debug.str(" cnt="); debug.uint16(ep.xfercnt);
@@ -380,7 +385,6 @@ debug.nl();
     {   var ud: usbd = usbda;
 	var len: _uint;
 
-if db > 4 then debug.str("Ix\n");
 	if ep.xfercnt == ep.xferlen then	// then we are done
 	    DataSent(ep);
 	else
@@ -388,7 +392,7 @@ if db > 4 then debug.str("Ix\n");
 	    if len == 0 then	
 	    {   if ep.t.zlp then
 		{   ep.t.zlp = false;
-		    ud.Write(ep.num, 0, 0);
+		    ud.Write(ep.epi, 0, 0);
 		}
 	    }
 	    else
@@ -396,7 +400,7 @@ if db > 4 then debug.str("Ix\n");
 		{   ep.t.zlp = len == ep.maxpkt;
 		    len = ep.maxpkt;
 		}
-		ud.Write(ep.num, ep.xferbuf[ep.xfercnt:len], len);
+		ud.Write(ep.epi, ep.xferbuf[ep.xfercnt:len], len);
 		ep.xfercnt += len;
 	    }
 	}	
@@ -406,11 +410,10 @@ if db > 4 then debug.str("Ix\n");
     {   var ud: usbd = usbda;
 	var len: _uint;
 
-if db > 4 then debug.str("Ox\n");
 	// FIXME - make sure this endpoint is "busy"
 	len = ep.xferlen - ep.xfercnt;
 	len = _min(len, ep.maxpkt);
-	ud.Read(ep.num, ep.xferbuf, len);
+	ud.Read(ep.epi, ep.xferbuf, len);
 	ep.xfercnt += len;
 	if ep.xferlen == ep.xfercnt then
 	    DataRcvd(ep);
@@ -419,18 +422,18 @@ if db > 4 then debug.str("Ox\n");
     proc (ep: eps) StartIn(buf: _address, len: _uint)
     {   var ud: usbd = usbda;
 
-if db > 4 then debug.str("Si\n");
+if db & 0x40 != 0 then debug.str("Si\n");
 	ep.xferbuf = buf;
 	ep.xferlen = len;
 	ep.xfercnt = 0;
 	len = _min(len, ep.maxpkt);
-	ud.Write(ep.num, ep.xferbuf[0: len], len);	
+	ud.Write(ep.epi, ep.xferbuf[0: len], len);
 	ep.xfercnt += len;
     }
 
     proc (ep: eps) StartOut(buf: _address, len: _uint)
     {
-if db > 4 then debug.str("So\n");
+if db & 0x40 != 0 then debug.str("So\n");
 	ep.xferbuf = buf;
 	ep.xferlen = len;
 	ep.xfercnt = 0;
@@ -438,18 +441,18 @@ if db > 4 then debug.str("So\n");
 
     proc (ep: eps) EPInit()
     {   var ud: usbd = usbda;
-	var epn: EPnum;
+	var epi: EPinx;
 
-	epn = ep.num;
-if db > 4 then { debug.chr('e'); debug.uint(_uint8(epn)); debug.nl(); }
+	epi = ep.epi;
+if db & 0x01 != 0 then { debug.chr('e'); debug.uint(_uint8(epi)); debug.nl(); }
 	ud.intclr = {.epreal=true};
-	ud.epreal[epn] = true;
-	ud.epindx = epn;
+	ud.epreal[epi] = true;
+	ud.epindx = epi;
 	ud.maxpkt = ep.maxpkt;		// Set max packet size
 	while !ud.intsts.epreal do	// Wait for hardware to do its thing
 	    {}
 	ud.intclr = {.epreal=true};
-	ud.epienb[epn] = true;		// enable EP interrupt
+	ud.epienb[epi] = true;		// enable EP interrupt
     }
 
     /*
@@ -458,7 +461,6 @@ if db > 4 then { debug.chr('e'); debug.uint(_uint8(epn)); debug.nl(); }
     proc (ep: eps) EP0StartIn()
     {   var len: _uint;
 
-if db > 4 then debug.str("Si0\n");
 	len = ep.xferlen - ep.xfercnt;
 	if len == 0 then
 	{   if ep.t.zlp then
@@ -476,13 +478,11 @@ if db > 4 then debug.str("Si0\n");
 
     proc (ep: eps) EP0StartOut()
     {
-if db > 4 then debug.str("So0\n");
 //	usbda.EPWrite(EP0Tx, ep.xferbuf, ep.xferlen);
     }
 
     proc (ep: eps) EP0In()
     {
-if db > 4 then debug.str("I0\n");
 	if ep.xfercnt < ep.xferlen then
 	    ep.EP0StartIn();	// continue transfer
 	else
@@ -492,7 +492,6 @@ if db > 4 then debug.str("I0\n");
 
     proc (ep: eps) EP0Out()
     {
-if db > 4 then debug.str("O0\n");
     }
 
     proc (ep: eps) EP0Setup()
@@ -502,9 +501,10 @@ if db > 4 then debug.str("O0\n");
 	var adr: _address;
 	var len: _uint;
 
-if db > 4 then debug.str("SU\n");
 	ud.Read(EP0Rx, buf, buf?size);
 	rqst = usb.pSetupPkt(buf[0:usb.SetupPkt?size]);
+if db & 0x02 != 0 then { debug.str("SU ");
+debug.hex8(_uint8(rqst.type)); debug.hex8(rqst.request); debug.nl(); }
 	if rqst.type.dir == IN then
 	{   // switch to IN endpoint
 	    ep = usbds.ep[EP0Tx];
@@ -537,7 +537,7 @@ if db > 4 then debug.str("SU\n");
     proc (ud: usbd) DeviceReset()
     {   var uds: udevst;
 
-if db > 4 then debug.str("R\n");
+if db & 0x01 != 0 then debug.str("RS\n");
 	ud.epienb = {[0..31]=false};
 	ud.epiclr = {[0..31]=true};
 	ud.intclr = {.frame=true, .epfast=true, .epslow=true,
@@ -555,42 +555,43 @@ if db > 4 then debug.str("R\n");
     proc (uds: udevst) EPInit0()
     {
 
-	uds.ep[0].num = 0;
+	uds.ep[0].epi = 0;
 	uds.ep[0].t = {.isconf = true, .isin=false, .type=CTRL };
 	uds.ep[0].maxpkt = 64;
-	uds.ep[1].num = 1;
+	uds.ep[1].epi = 1;
 	uds.ep[1].t = {.isconf = true, .isin=true,  .type=CTRL };
 	uds.ep[1].maxpkt = 64;
     }
 
     proc (ep: eps) Activate()
     {   var ud: usbd = usbda;
-	var epn: EPnum;
+	var epi: EPinx;
 
-if db > 4 then debug.str("A\n");
-	epn = ep.num;
+	epi = ep.epi;
+if db & 0x01 != 0 then { debug.str("AC "); debug.uint8(epi); debug.nl(); }
 	ep.EPInit();
 	// must issue set EP status twice to initialize it
-	ud.Command({.cmd=_uint8(epn)+0x40, .dir=WR, .siz=1}, 0);
-	ud.Command({.cmd=_uint8(epn)+0x40, .dir=WR, .siz=1}, 0);
+	ud.Command({.cmd=_uint8(epi)+0x40, .dir=WR, .siz=1}, 0);
+	ud.Command({.cmd=_uint8(epi)+0x40, .dir=WR, .siz=1}, 0);
 	ud.Command(SIEConfigDevice, 1);	// this just turns on an indicator
 //DumpRegs();
     }
 
     proc EPAllocate(epd: EPDescriptor): eps
     {   var ep: eps;
-	var epn: EPnum;
-	var epa: EPadr;
+	var epi: EPinx;
+	var epa: _uint8;
 	var isin: boolean;
 
 	isin = (epd.num & 0x80) != 0;
 	epa =   epd.num & 0x7F;
 	if epa == 0 || epa > MaxEP then return 0;
 	if EPUse[epa] != epd.type then return 0;
-	epn = epa * 2;
-	if isin then epn += 1;		// IN endpoints are odd numbers
-	ep = usbds.ep[epn];
-	ep.num = epn;
+	epi = epa * 2;
+	if isin then epi += 1;		// IN endpoints are odd indexes
+	ep = usbds.ep[epi];
+	ep.epi = epi;
+	ep.num = epd.num;
 	ep.t.isin = isin;
 	ep.t.type = epd.type;
 	ep.maxpkt = epd.maxpkt;
@@ -647,7 +648,7 @@ if db > 4 then debug.str("A\n");
 	gsts = ui@;
 	if gsts.lp || gsts.hp then
 	{   sts = ud.intsts;
-if db > 4 then
+if db & 0x10 != 0 then
 {   debug.str("I "); debug.hex16(_uint32(sts)); debug.nl();
 }
 	    if sts.frame then
@@ -660,19 +661,19 @@ if db > 4 then
 	    }
 	    if sts.epslow then
 	    {   var eps: EPArray;
-	    	var epn: EPnum;
+		var epi: EPinx;
 	    	ud.intclr = { .epslow=true };
 	    	eps = ud.epists;
-if db > 4 then
+if db & 0x20 != 0 then
 {  debug.str("EP "); debug.hex32(_uint32(eps)); debug.nl();
 }
 	    	// FIXME: loop twice, once for high priority, again for low
-	    	epn = 0;
-	    	while epn < 31 do
-	    	{   if eps[epn] then
-	    	    {   ud.epiclr[epn] = true;
-	    	    	ep = usbds.ep[epn];
-	    	    	if epn == 0 then
+		epi = 0;
+		while epi < 31 do
+		{   if eps[epi] then
+		    {   ud.epiclr[epi] = true;
+			ep = usbds.ep[epi];
+			if epi == 0 then
 	    	    	{   var es: SIESelect;
 	    	    	    es = ud.Status();
 	    	    	    if es.stp then
@@ -683,22 +684,22 @@ if db > 4 then
 	    	    	else
 	    	    	    ep.Out();
 	    	    }
-	    	    if eps[epn+1] then
-	    	    {   ud.epiclr[epn+1] = true;
-	    	    	ep = usbds.ep[epn+1];
-	    	    	if epn == 0 then
+		    if eps[epi+1] then
+		    {   ud.epiclr[epi+1] = true;
+			ep = usbds.ep[epi+1];
+			if epi == 0 then
 	    	    	    ep.EP0In();
 	    	    	else
 	    	    	    ep.In();
 	    	    }
-	    	    epn += 2;
+		    epi += 2;
 	    	}
 	    }
 	    if sts.devstat then
 	    {   var ds: SIEDevStatus;
 	    	ud.intclr = { .devstat=true };
 	    	ds = SIEDevStatus(_uint8(ud.Command(SIEGetDevStatus, 0)));
-if db > 4 then
+if db & 0x20 != 0 then
 {  debug.str("DS "); debug.hex8(_uint8(ds)); debug.nl();
 }
 	    	if ds.conchg then	// connection status change
@@ -736,7 +737,7 @@ if db > 4 then
 	    {   var errcode: _uint8;
 	    	ud.intclr = { .error=true };
 	    	errcode = ud.Command(SIEReadErrStatus,0) & 0xF;
-if db > 4 then
+if db & 0x20 != 0 then
 {  debug.str("ER "); debug.hex8(errcode); debug.nl();
 }
 	    }

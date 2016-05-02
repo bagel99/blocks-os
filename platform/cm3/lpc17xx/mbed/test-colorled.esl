@@ -53,12 +53,12 @@ package app
     proc (ab: pAppBlock) SetTimer(seconds: _uint16)
     {
 //debug.str("app.SetTimer: "); debug.uint16(seconds); debug.nl();
-	timer.StartSeconds(ab.id, 0, seconds);
+	timer.StartSeconds(0, seconds);
     }
 
     proc (ab: pAppBlock) CancelTimer()
     {
-	timer.Stop(ab.id, 0);
+	timer.Stop(0);
     }
 
 
@@ -95,7 +95,7 @@ package app
 	    is 6 then ledcoloroff(BLUE);
 */
 	    if ab.state == 7 then ab.state = 0; else ab.state += 1;
-	    te.RestartSeconds(b.id, 0, 2);
+	    te.RestartSeconds(0, 2);
 	}
 	else
 	{
@@ -107,6 +107,7 @@ package app
     proc (ab: pAppBlock) Init()
     { 
 if db > 0 then debug.str("app.Init\n");
+	block.SetContext(ab.id);
 	ab.state = 0;
 	ab.SetTimer(2);
 

@@ -339,7 +339,7 @@ if db & db_hiddata != 0 then {debug.str("RPT "); debug.hex8(n); debug.nl();}
 
     proc DataRcvd(ep: usbdev.eps)
     {
-if db & db_hiddata != 0 then {debug.str("DR\n");}
+if db & db_hiddata != 0 then {debug.str("DR "); debug.uint8(ep.num); debug.nl();}
 	if ep.num == 1 then
 	    ReportRcvd();
     	ep.StartOut(hs.dataout, hs.dataout?len);

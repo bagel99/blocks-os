@@ -1,0 +1,347 @@
+// Asciidoc format
+
+The Blocks Operating System
+===========================
+
+Blocks is an "operating system" for embedded systems.
+
+A "block" is a container for state variables and code that operates on the state.
+Blocks communicate with other blocks by sending "events".
+The number of active blocks in a system is fixed at compile time.  Each block is
+given a "block identifier (BlockID)" which is a unique small positive number.
+The value of the BlockID is also the priority of the block, thus no two blocks
+have the same priority.
+
+Although the number of blocks is fixed at compile time, they are activated at
+run time.
+When they are activated, they generally allocate memory for their state variables.
+This is done by the following call, which also registers the block with the scheduler:
+
+	<package>.NewBlock(<BlockID>);
+
+In protocol stacks, it is convenient to think of blocks having an "upper" and
+"lower" side.
+
+An event is a packet of memory that is "sent" from the sending block to the
+receiving block.
+After being sent, the event memory becomes the exclusive property of the
+receiving block -- it no longer belongs to
+the sending block and must not be further modified by it.  
+An event is send by the following call:
+
+	<Destination-BlockID>.Send(<event>);
+
+In some cases, a block knows at compile-time the BlockID of the destination block.
+For example, the system should define a constant named "TimerID"
+with the BlockID of the timer block as its value.
+Other blocks can then send events to the timer block.
+
+But in many cases, a block A needs to "connect" with another block B
+but doesn't know its BlockID.
+In these cases, the system must tell block A and block B about
+each other's BlockID.
+A connection event is used to deliver that information.
+
+Events are delivered to a destination block in FIFO order.  If more than one
+block has an event queued, the highest priority block will be run first.
+
+When a block is created it registers a procedure (typically called "Run")
+with the scheduler.
+When an event arrives at the block, the Run routine is called:
+
+	Run(<event>);
+
+[[eventpacket]]
+== Event Packets ==
+
+[[baseevent]]
+=== Base Event Packet ===
+
+Every event packet has the same information at the beginning of the packet.
+All events are an extension of this.
+The event code determines the type of event, see <<event-codes>>.
+-------------
+     3 3 2                 2 1                 1 0                 0
+     1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+00  |                       next (for linked lists)                 |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+04  |     code      |      tag      |     from      |    flags      |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+next  - @Event, used to create lists of events.
+        This can be used internally by the owning block.
+code  - Event code.
+tag   - Use to distinguish between multiple uses by the same sender.
+from  - Sender's BlockID.
+flags - long - true if event packet is of variable size.
+-------------
+
+[[timerevent]]
+=== Timer Event Packet
+
+The timer event packet is an extension of the <<baseevent>> and is
+a variation of a simple event.
+-------------
+     3 3 2                 2 1                 1 0                 0
+     1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+00  |                       next (for linked lists)                 |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+04  |     code      |      tag      |     from      |    flags      |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+08  |                            ticks                              |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+next, code, tag, from, flags - defined in base event packet (flags.long = false).
+ticks - the number of ticks before a TDONE event is sent.  The duration
+        of a tick is system configurable.
+-------------
+
+
+[[connevent]]
+=== Connection Event Packet
+
+The connection event packet is an extension of the <<baseevent>> and is
+a variation of a simple event.
+-------------
+     3 3 2                 2 1                 1 0                 0
+     1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+00  |                       next (for linked lists)                 |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+04  |     code      |      tag      |     from      |    flags      |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+08  |             info              |     chan      |    type       |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+next, code, tag, from, flags - defined in base event packet (flags.long = false).
+info - information about the connection
+chan - used to distinguish among multiple connections between two blocks
+type - UPPER, LOWER
+
+-------------
+[[mbuf]]
+=== MBuf Packet ===
+
+The MBuf packet is an extension of the <<baseevent>> and has a variable size.
+It is used to send data between blocks.
+The MBuf is especially useful in protocol stacks in that
+headers and trailers are easily deleted or added.
+-------------
+     3 3 2                 2 1                 1 0                 0
+     1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+00  |                       next (for linked lists)                 |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+04  |     code      |      tag      |     from      |    flags      |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+08  |             size              |            info               |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+0C  |             head              |            tail               |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+10  |                                                               |
+    .                                                               .
+    .                             data                              .
+    .                                                               .
+    |                                                               |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+next, code, tag, from, flags - defined in base event packet (flags.long = true).
+size  - The size of the event packet beyound the base event.
+info  - This is application dependent.
+head  - The byte offset in data to start of "current" data.
+tail  - The byte offset in data to end of "current" data.
+data  - Variable sized data.
+-------------
+[[linkevent]]
+=== Link Event Packet ===
+
+The link event packet is an extension of the <<baseevent>> with a fixed size.
+
+-------------
+     3 3 2                 2 1                 1 0                 0
+     1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+00  |                       next (for linked lists)                 |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+04  |     code      |      tag      |     from      |    flags      |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+08  |            info               |     type      |               |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+0C  |      hdr      |     trl       |              mtu              |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+10  |                                                               |
+    +                          iid (8-bytes)                        +
+14  |                                                               |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+next, code, tag, from, flags - defined in base event packet (flags.long = false).
+info - (currently not used)
+type - UNKN, ENET, PPP, WPAN
+hdr  - header offset
+trl  - trailer offset
+mtu  - maximum transmission unit
+iid  - interface id (typically 64-bit EUID or 48-bid MAC)
+
+-------------
+[[openevent]]
+=== Open Event Packet ===
+
+The open event packet is an extension of the <<baseevent>> with a fixed size.
+
+-------------
+     3 3 2                 2 1                 1 0                 0
+     1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+00  |                       next (for linked lists)                 |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+04  |     code      |      tag      |     from      |    flags      |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+08  |                                                               |
+    +                                                               +			
+0C  |                                                               |
+    +                                                               +			
+10  |                                                               |
+    +                       data (32-bytes)                         +
+14  |                                                               |
+    +                                                               +
+18  |                                                               |
+    +                                                               +
+1C  |                                                               |
+    +                                                               +
+20  |                                                               |
+    +                                                               +
+24  |                                                               |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+next, code, tag, from, flags - defined in base event packet (flags.long = false).
+data - protocol dependent
+
+-------------
+[[informevent]]
+=== Inform Event Packet ===
+
+The inform event packet is an extension of the <<baseevent>> with a fixed size.
+This event is used by the USB subsystem.
+
+-------------
+     3 3 2                 2 1                 1 0                 0
+     1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+00  |                       next (for linked lists)                 |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+04  |     code      |      tag      |     from      |    flags      |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+08  |             pipe              |              mtu              |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+0C  |               |     speed     |               |               |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+next, code, tag, from, flags - defined in base event packet (flags.long = false).
+size - excess size of packet (NOT NEEDED?)
+pipe - USB pipe descriptor
+mtu  - maximum transmission unit
+speed - UNKN, LOW, FULL, HIGH
+
+-------------
+[[activateevent]]
+=== Activate Event Packet ===
+
+The activate event packet is an extension of the <<baseevent>> with a fixed size.
+This event is used by the USB subsystem.
+
+-------------
+     3 3 2                 2 1                 1 0                 0
+     1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+00  |                       next (for linked lists)                 |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+04  |     code      |      tag      |     from      |    flags      |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+08  |             pipe              |              mtu              |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+0C  |      type     |    speed      |     inter     |               |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+next, code, tag, from, flags - defined in base event packet (flags.long = false).
+size - excess size of packet (NOT NEEDED?)
+pipe - USB pipe descriptor
+mtu  - maximum transmission unit
+speed - UNKN, LOW, FULL, HIGH
+type - CNTL, ISOC, BULK, INTR
+inter -
+
+-------------
+[[registerevent]]
+=== Register Event Packet ===
+
+The register event packet is an extension of the <<baseevent>> with a fixed size.
+This event is used by the USB subsystem.
+
+-------------
+     3 3 2                 2 1                 1 0                 0
+     1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+00  |                       next (for linked lists)                 |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+04  |     code      |      tag      |     from      |    flags      |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+08  |             pipe              |             mask              |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+0C  |     class     |     subcls    |    proto      |               |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+10  |              vid              |              pid              |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+next, code, tag, from, flags - defined in base event packet (flags.long = false).
+size - excess size of packet (NOT NEEDED?)
+pipe - USB pipe descriptor
+mask -
+class -
+subcls -
+proto -
+vid - vendor identification code
+pid - product indentification code
+
+-------------
+[[event-codes]]
+== Event Codes
+
+.The event codes defined in Blocks are:
+. CONNECT
+. START - request a block start its activity. +
+     The event packet is <<baseevent>>.
+. STOP - request a block stop its activity. +
+     The event packet is <<baseevent>>.
+. TSTART - start timer. +
+     The event packet is <<timerevent>>.
+. TDONE - timer has completed. +
+     The event packet is <<timerevent>>.
+. TSTOP - stop timer previously started. +
+     The event packet is <<baseevent>>.
+. TSTOPPED - timer has stopped. +
+     The event packet is <<baseevent>>.
+. OPEN - from top to bottom requesting a new communication path. +
+     The event packet is <<openevent>> for internet protocols or
+     <<registerevent>> for USB protocols.
+. CLOSE - from top to bottom requesting a communication path be terminated. +
+     The event packet is <<baseevent>>.
+. UP - from bottom to top indicating, e.g., link is up +
+     The event packet is <<linkevent>>.
+. DOWN - from bottom to top indicating e.g., link is down +
+     The event packet is <<baseevent>>.
+. SEND - from top to bottom requesting data transmission. +
+    The event packet is <<mbuf>>.
+. RCVD - from bottom to top indicating data received. +
+    The event packet is <<mbuf>>.
+. INFORM - from bottom to top indicating +
+    The event packet is <<informevent>>.
+. ACTIVATE - from top to bottom requesting some activation +
+    The event packet is <<activateevent>>.
+
+Events are sent with the method: 
+
+  <BlockID>.Send(<event>)
+
+
