@@ -124,7 +124,7 @@ if _defined(UserButtonPressed) then {
 	// configure GPIO pins
 	for i from 0 to PinOut?len-1 do
 	    gpio.Init(PinOut[i]);
-	exti.GPIOEnable(BUT1.port, BTNIntr);
+	exti.GPIOEnable(BUT1, BTNIntr);
 	nvic.SetPriority(6, 0b00_000000);
 	nvic.Enable(6);
 	exti.Enable(18, L18Intr);

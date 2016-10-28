@@ -76,7 +76,7 @@ package ipv4	// continue with implementation
 	trl:       _uint8;
 	mtu:       _uint16;		// e.g, 1500 for ethernet
 	IDSeqno:   _uint16;		// header sequence number
-    }: align(4);
+    };
     type pLower: @Lower;
 
     type IPv4Block(Block):
@@ -468,8 +468,8 @@ debug.nl();}
     {   var intf: pLower;
 	var ifz: _uint;     // 0-based
 
-if db > 0 then {debug.str("ipv4.NewInterface: "); debug.uint8(ifn);
-debug.nl();}
+if db > 0 then {debug.str("ipv4.NewInterface: ifn="); debug.uint8(ifn);
+debug.str(" bid="); debug.uint8(to); debug.nl();}
 	ifz = ifn - 1;
 	if ifz < NIPv4Lower then
 	{   intf = _new(Lower);  _zero(intf);
@@ -552,8 +552,7 @@ debug.nl();}
 		up.bid.Send(li);
 	    }
 	    else
-	    {   e = _new(Event);
-		e.code = DOWN;
+	    {   e = event.New(DOWN);
 		e.tag = up.tag;
 		up.bid.Send(e);
 	    }
@@ -633,18 +632,16 @@ if db > 1 then {debug.str("ipv4.Timer\n");}
 	{   var ce: event.pConnEvent;
 	    ce = event.pConnEvent(e);
 	    if ce.type == LOWER then
-	    {
-if db > 0 then {debug.str("ipv4.Connect lower: intf="); debug.uint8(ce.chan); debug.nl();}
 		ib.NewInterface(ce.chan, ce.tag);
-	    }
 	    else
 	    {   var up: pUpper;
-if db > 0 then {debug.str("ipv4.Connect upper: intf="); debug.uint8(ce.chan); debug.nl();}
 		up = _new(Upper);
 		up.proto = Proto(ce.info);
 		up.tag   = ce.chan;
 		up.bid   = ce.tag;
 		up.next  = ib.upper;
+if db > 0 then {debug.str("ipv4.Connect upper: chan="); debug.uint8(up.tag);
+debug.str(" bid="); debug.uint8(up.bid); debug.nl();}
 		ib.upper = up;
 	    }
 	    _delete(ce);
@@ -655,8 +652,7 @@ if db > 0 then {debug.str("ipv4.Connect upper: intf="); debug.uint8(ce.chan); de
 	    var ifz: _uint;     // 0-based
 	    for ifz from 0 to NIPv4Lower-1 do
 	    {   if ib.lower[ifz] != 0 then
-		{   oe = _new(Event);
-		    oe.code = OPEN;
+		{   oe = event.New(OPEN);
 		    oe.tag  = ifz+1;
 		    ib.lower[ifz].bid.Send(oe);
 		}

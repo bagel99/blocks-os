@@ -24,6 +24,10 @@ package ipv6	// continue with implementation
 	else
 	    const db = 0;
     }
+    if _defined(config.ipv6_promiscuous) then
+	alias config.ipv6_promiscuous as promiscuous;
+    else
+	const promiscuous: boolean = false;
 
     type Upper:
     {   next:    @Upper;
@@ -132,6 +136,7 @@ package ipv6	// continue with implementation
 	debug.str("\n\tfm="); AddrPrint(ip.srcaddr);
 	debug.str("\n\tto="); AddrPrint(ip.dstaddr);
 	debug.nl();
+if db > 4 then debug.dumpb("data", mb.Data(), mb.Size());
     }
 //END DEBUG
 
@@ -800,7 +805,7 @@ package ipv6
 if db > 1 then DumpPacket("ipv6.Recv", mb, ip, 0);
 	    intf = ib.GetInterface(mb.tag);
 	    if intf != 0 then   // valid interface
-	    {   if intf.ToUs(ip.dstaddr) then
+	    {   if promiscuous || intf.ToUs(ip.dstaddr) then
 		{   ib.Deliver(mb, ip);
 		    return;
 		}
@@ -910,8 +915,7 @@ debug.nl();}
 		up.bid.Send(li);
 	    }
 	    else
-	    {   e = _new(Event);
-		e.code = DOWN;
+	    {   e = event.New(DOWN);
 		e.tag = up.tag;
 		up.bid.Send(e);
 	    }
@@ -987,8 +991,7 @@ if db > 0 then {debug.str("ipv6.Connect upper: intf="); debug.uint8(ce.chan); de
 	    var ifn: _uint;
 	    for ifn from 0 to NIPv6Lower-1 do
 	    {   if ib.lower[ifn] != 0 then
-		{   oe = _new(Event);
-		    oe.code = OPEN;
+		{   oe = event.New(OPEN);
 		    oe.tag  = ifn;
 		    ib.lower[ifn].bid.Send(oe);
 		}

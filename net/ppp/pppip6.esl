@@ -115,8 +115,7 @@ debug.uint8(_uint8(isup)); debug.nl(); }
 	}
 	else
 	{   var e: pEvent;
-	    e = _new(Event);
-	    e.code = DOWN;
+	    e = event.New(DOWN);
 	    e.tag = pb.upper.tag;
 	    pb.upper.bid.Send(e);
 	}
@@ -127,8 +126,7 @@ debug.uint8(_uint8(isup)); debug.nl(); }
 
 if db > 1 then { debug.str("pppip6.InformLower ");
 debug.uint8(_uint8(isup)); debug.nl(); }
-	e = _new(Event);
-	if isup then e.code = OPEN; else e.code = CLOSE;
+	if isup then e = event.New(OPEN); else e = event.New(CLOSE);
 	e.tag = pb.id;
 	pb.lower.Send(e);
     }

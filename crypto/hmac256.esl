@@ -1,0 +1,74 @@
+/*
+ * Keyed-hash message authentication code (HMAC) using sha256 as hash.
+ *
+ * Copyright Brian G. Lucas, 2016
+ * License: New BSD.
+ */
+
+import sha256;
+
+package hmac256
+{
+    alias sha256.BlockSize as BlockSize;
+    alias sha256.DigestSize as DigestSize;
+
+    type Context:
+    {   sha:   sha256.Context;
+	key:   [BlockSize * 2]_uint8;
+    };
+    type pContext: @Context;
+
+    proc (ctx: pContext) KeySub(key: @[]_byte, len: _uint)
+    {   const ipad: _uint8 = 0x36;
+	const opad: _uint8 = 0x5c;
+	var i: _uint;
+
+	for i from 0 to len-1 do
+	{   ctx.key[i]             = key[i] ^ ipad;
+	    ctx.key[i + BlockSize] = key[i] ^ opad;
+	}
+	for i from len to BlockSize-1 do
+	{   ctx.key[i]             = ipad;
+	    ctx.key[i + BlockSize] = opad;
+	}
+    }
+
+    proc (ctx: pContext) SetKey(key: @[]_byte, len: _uint)
+    {
+	if len <= BlockSize then
+	{
+	    // FIXME - do fake stuff to fool timing attacks
+	    ctx.KeySub(key, len);
+	}
+	else
+	{   ctx.sha.Start();
+	    ctx.sha.Update(key, len);
+	    ctx.sha.Finish(ctx.key[DigestSize:DigestSize]);
+	    ctx.KeySub(ctx.key[DigestSize:], DigestSize);
+	}
+    }
+
+    proc (ctx: pContext) Start()
+    {
+	ctx.sha.Start();
+	ctx.sha.Update(ctx.key, BlockSize);
+    }
+
+    proc (ctx: pContext) Update(data: @[]_byte, len: _uint)
+    {
+	ctx.sha.Update(data, len);
+    }
+
+    proc (ctx: pContext) Finish(tag: @[32]_byte)
+    {
+	ctx.sha.Finish(tag);
+
+	ctx.sha.Start();
+	ctx.sha.Update(ctx.key[BlockSize:], BlockSize);
+	ctx.sha.Update(tag, DigestSize);
+	ctx.sha.Finish(tag);
+	// FIXME - zero ctx?
+    }
+}
+
+

@@ -102,7 +102,7 @@ package lcd
     }
 
     proc (ds: DS) Refresh()
-    {   var page: 0..3;
+    {   var page: _uint;
 	var i, k: _uint;
 
 	k = 0;
@@ -113,7 +113,7 @@ package lcd
 	    for i from 0 to 127 do
 	    	ds.Data(ds.buf[k+i]);
 	    k += 128;
-	}	    
+	}
     }
 
     proc (ds: DS) Clear()

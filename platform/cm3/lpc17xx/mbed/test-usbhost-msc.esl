@@ -4,6 +4,7 @@ package debug
     const db_block   = 2;
     const db_connect = 1;
     const db_usbhost = 3;
+    const db_usbenum = 2;
     const NoWrap = false;
     const BufSiz = 24576;
 }
@@ -80,9 +81,9 @@ debug.str("Starting test-usbhost-msc...\n");
     sys.ledon(2);
 
     var e: event.pEvent;
-    e = event.Alloc(START);
+    e = event.New(START);
     USBENUMID.Send(e);
-    e = event.Alloc(START);
+    e = event.New(START);
     USBHOSTMSC.Send(e);
 
     sys.ledon(3);

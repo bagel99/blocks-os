@@ -86,7 +86,7 @@ package ieee802154
     type FrameType: ( Beacon, Data, Ack, Comd ): bits(3);
     type AddrMode:  ( None, _, Short, Long );
     type FrameCF0:	// 1st octet of FCF
-    {	type:	FrameType;	// .00-02
+    {	ft:	FrameType;	// .00-02
 	se:	boolean;	// .03 security enabled
 	fp:	boolean;	// .04 frame pending
 	ar:	boolean;	// .05 ACK request
@@ -104,25 +104,47 @@ package ieee802154
 	f1:	FrameCF1;
     };
     type  Header:
-    {	fcf:	FrameCF;
+    {	f0:	FrameCF0;
+	f1:	FrameCF1;
 	seqno:  0..255;
 	addr:   []_byte;
     };
     type pHeader: @Header;
 
     // Security Header
-    type SecLevel:
-	(NONE, MIC32, MIC64, MIC128, ENC, ENC_MIC32, ENC_MIC64, ENC_MIC128);
+    type SecLevel:	// encypt auth algorithm
+    (	NONE,		//    n    n
+	MIC32,		//    n    y   AES-CBC-MAC-32
+	MIC64,		//    n    y   AES-CBC-MAC-64
+	MIC128,		//    n    y   AES-CBC-MAC-128
+	ENC,		//    y    n   AES-CTR
+	ENC_MIC32,      //    y    y   AES-CCM-32
+	ENC_MIC64,      //    y    y   AES-CCM-64
+	ENC_MIC128      //    y    y   AES-CCM-128
+    );
+    type KeyMode:	// keyindex keyidlen
+    (   IMPLICIT,	//    n        0
+	KEY0,		//    y        0
+	KEY1,		//    y        4
+	KEY2		//    y        8
+    );
+    const HasKeyIndex: [KeyMode]boolean = { false, true, true, true };
+    const KeyIDLength: [KeyMode]_uint8  = { 0, 0, 4, 8 };
+    const TagLength:   [SecLevel]_uint8 = { 0, 4, 8, 16, 0, 4, 8, 16 };
+    type CryptoAlg:    (NONE, CBC, CTR, CCM);
+    const Algorithm:   [SecLevel]CryptoAlg =
+	{ NONE, CBC, CBC, CBC, CTR, CCM, CCM, CCM };
+
     type SecHeader:
     {   cntl:
-	{   lvl:     SecLevel;	// .00-02
-	    keymode: 0..3;	// .03-04
+	{   level:   SecLevel;	// .00-02
+	    keymode: KeyMode;	// .03-04
 	    rsvd:    0..0b111;	// .05-07
 	}:packed, lsb;
-	frmcnt: _uint32: align(1);
+	frmctr: _uint32: align(1);
 	keyid: []_byte;
     };
-    	
+    type pSecHeader: @SecHeader;
 
     /*
      * Type Intra Dst  Src | Dst Dst Src Src  Tot
@@ -151,6 +173,7 @@ package ieee802154
 	var n: 0..255;
 	var h: pHeader;
 	var srcpan, dstpan: _uint16;
+	var sh: pSecHeader;
 
 	info.datlen = 0;	// default for errors
 	info.flags = {};
@@ -165,20 +188,24 @@ debug.str("fcs error="); debug.hex16(fcs); debug.nl();
 	    }
 	}
 	h = pHeader(frame);
-if db > 1 then {debug.str("seqno="); debug.uint8(h.seqno);
-debug.str(" dm="); debug.uint8(_uint8(h.fcf.f1.dm));
-debug.str(" sm="); debug.uint8(_uint8(h.fcf.f1.sm));
-debug.str(" ip="); debug.uint8(_uint8(h.fcf.f0.ip));
+if db > 1 then {
+debug.str("ft="); debug.uint8(_uint8(h.f0.ft));
+debug.str(" ar="); debug.uint8(_uint8(h.f0.ar));
+debug.str(" se="); debug.uint8(_uint8(h.f0.se));
+debug.str(" ip="); debug.uint8(_uint8(h.f0.ip));
+debug.str(" dm="); debug.uint8(_uint8(h.f1.dm));
+debug.str(" sm="); debug.uint8(_uint8(h.f1.sm));
+debug.str(" seqno="); debug.uint8(h.seqno);
 debug.nl(); }
-	if h.fcf.f0.type == Ack then
+	if h.f0.ft == Ack then
 	{   info.flags = {.ack = true};
 	    return;
 	}
 	n = 0;		// offset to data from start of address fields
-	if h.fcf.f1.dm != None then
+	if h.f1.dm != None then
 	{   dstpan = _unpkle(h.addr[n:2]);
 	    n += 2;
-	    if h.fcf.f1.dm == AddrMode.Short then
+	    if h.f1.dm == AddrMode.Short then
 	    {   AddrLongFromShort(info.dstadr, h.addr[n:2]);
 		n += 2;
 	    } else	// assume Long
@@ -186,31 +213,51 @@ debug.nl(); }
 		n += 8;
 	    }
 	}
-	if h.fcf.f1.sm == None then
-	{   // assert h.fcf.dm != None
+	if h.f1.sm == None then
+	{   // assert h.f1.dm != None
 	    srcpan = dstpan;		// From PAN coordinator
 	}
 	else
-	{   if h.fcf.f0.ip then
-	    {   // assert h.fcf.dm != None
+	{   if h.f0.ip then
+	    {   // assert h.f1.dm != None
 		srcpan = dstpan;
 	    }
 	    else
 	    {   srcpan = _unpkle(h.addr[n:2]);
 		n += 2;
 	    }
-	    if h.fcf.f1.sm == AddrMode.Short then
+	    if h.f1.sm == AddrMode.Short then
 	    {   AddrLongFromShort(info.srcadr, h.addr[n:2]);
 	        n += 2;
 	    } else	// assume Long
 	    {   RevAddrLong(info.srcadr, h.addr[n:8]);
 		n += 8;
 	    }
-	    if h.fcf.f1.dm == None then
+	    if h.f1.dm == None then
 	    	dstpan = srcpan;	// To PAN coordinator
 	}
-	info.datoff = n + 3;
-	info.datlen = len - n - 5;
+	n += 3;		// basic header
+	if h.f0.se then
+	{
+	    sh = pSecHeader(frame[n:5]);
+if db > 1 then {
+debug.dumpb("secure", frame, len);
+debug.str("secure n="); debug.uint(n);
+debug.str(" lvl="); debug.uint8(_uint8(sh.cntl.level));
+debug.str(" keymode="); debug.uint8(_uint8(sh.cntl.keymode));
+debug.str(" frmctr="); debug.uint32(sh.frmctr); }
+	    n += 5;
+	    if HasKeyIndex[sh.cntl.keymode] then
+	    {
+if db > 1 then {
+debug.str(" keyidx="); debug.uint8(frame[n]); }
+		n += 1;
+	    }
+	    n += KeyIDLength[sh.cntl.keymode];
+if db > 1 then debug.nl();
+	}
+	info.datoff = n;
+	info.datlen = len - n - 2;
 	info.dstpan = dstpan;
 	info.srcpan = srcpan;
     }
@@ -222,7 +269,7 @@ debug.nl(); }
 	var frame: [128]_byte;
 	var n: _uint;
 
-	h0 = {.type=Data, .ar=true};
+	h0 = {.ft=Data, .ar=true};
 	h1 = {.vers=1};
 	n = 3;
 	if info.dstpan != 0 then
@@ -318,7 +365,7 @@ debug.nl(); }
     proc SendBeaconRequest(seqno: _uint8)
     {   var frame: [8]_uint8;
 
-	frame[0] = _uint8(FrameCF0{.type=Comd, .fp=false});
+	frame[0] = _uint8(FrameCF0{.ft=Comd, .fp=false});
 	frame[1] = _uint8(FrameCF1{.dm=Short, .sm=None, .vers=1});
 	frame[2] = seqno;
 	_packle(frame[3:2], BroadcastPAN);

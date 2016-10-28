@@ -68,12 +68,13 @@ package event
 	e.next = nexte;
     }
 
-    // Allocate a event
-    proc Alloc(code: Code): pEvent: inline
+    // Allocate a new event
+    proc New(code: Code): pEvent
     {   var e: pEvent;
 
 	e = _new(Event);
 	e.code = code;
+	e.tag = 0;
 	e.flags = {.long=false};
 	return e;
     }

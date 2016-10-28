@@ -91,12 +91,11 @@ debug.str("Starting test-inet...\n");
     ipv6.NewBlock(IPv6ID);
     block.InitConnections(Connections, Connections?len);
     sys.ledon(2);							// 0111
+debug.str("send START to IP\n");
     {   var e: pEvent;
-	e = _new(Event);
-	e.code = START;
+	e = event.New(START);
 	IPv4ID.Send(e);
-	e = _new(Event);
-	e.code = START;
+	e = event.New(START);
 	IPv6ID.Send(e);
     }
 

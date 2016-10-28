@@ -217,8 +217,7 @@ if db > 1 then debug.str("eth.Prime\n");
 		up.bid.Send(li);
 	    }
 	    else
-	    {   e = _new(Event);
-		e.code = DOWN;
+	    {   e = event.New(DOWN);
 		e.tag = up.tag;
 		up.bid.Send(e);
 	    }

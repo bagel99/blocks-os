@@ -64,9 +64,9 @@ debug.str("Starting test-usbhost...\n");
     sys.ledon(0);
 
     var e: event.pEvent;
-    e = event.Alloc(START);
+    e = event.New(START);
     USBENUMID.Send(e);
-    e = event.Alloc(START);
+    e = event.New(START);
     USBHOSTMSC.Send(e);
 
     loop

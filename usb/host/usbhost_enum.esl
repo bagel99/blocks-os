@@ -333,6 +333,7 @@ debug.str(" type="); debug.uint8(_uint8(ep[n].Attr.Type));
 debug.str(" maxpkt="); debug.uint16(ep[n].MaxSize);
 debug.str(" itvl="); debug.uint8(ep[n].Interval);
 debug.nl(); }
+	    pipe.bus = 0;		// FIXME
 	    pipe.dev = d.devadr;	// FIXME
 
 	    pipe.epn = ep[n].Address.Num;
@@ -602,7 +603,7 @@ if db > 1 then {
 debug.str("ConfN="); debug.uint8(cd.ConfigN);
 debug.str(" NumInt="); debug.uint8(cd.NIntf); debug.nl();
 debug.str("Intf="); debug.uint8(id.IntfN);
-debug.str(" Class=0x"); debug.hex8(id.Class);
+debug.str(" Class=0x"); debug.hex8(_uint8(id.Class));
 debug.str(" SubCls=0x"); debug.hex8(id.SubClass);
 debug.str(" Proto=0x"); debug.hex8(id.Protocol);
 debug.str(" NEP="); debug.uint8(id.NEP);

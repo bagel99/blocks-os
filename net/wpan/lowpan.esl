@@ -831,7 +831,7 @@ debug.str(" dt="); debug.hex8(_uint8(dt)); debug.nl(); }
     	}
     	if dt.type == DISP then
     	{   if dt.dispatch >= IPHC then
-	    {   newmb = mbuf.Alloc(mtu, 8); // allow 8 bytes for UUID
+	    {   newmb = mbuf.Alloc(mtu+8, 8); // allow 8 bytes for UUID
 		newmb.GrowTail(mtu);
 		len = ib.HeaderUnpack(mb, newmb, 0, info);
 		newmb.ShrinkTail(mtu - len);

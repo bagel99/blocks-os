@@ -89,11 +89,9 @@ debug.str("Starting test-dhcp...\n");
     ipv6.NewBlock(IPv6ID);
     block.InitConnections(Connections, Connections?len);
     {   var e: pEvent;
-	e = _new(Event);
-	e.code = START;
+	e = event.New(START);
 	IPv4ID.Send(e);
-	e = _new(Event);
-	e.code = START;
+	e = event.New(START);
 	IPv6ID.Send(e);
     }
 

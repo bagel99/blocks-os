@@ -114,9 +114,8 @@ if db > 3 then {debug.str("RunI "); debug.uint8(bid); debug.nl();}
 		    if b.head == 0 then
 			bid.MakeIdle();
 if db > 1 then {debug.str("Run "); debug.uint8(bid); 
-debug.chr(':'); debug.uint8(e.from);
-debug.chr(':'); debug.uint8(e.tag);
 debug.chr(' '); debug.uint8(_uint8(e.code));
+debug.chr(','); debug.uint8(e.tag);
 debug.nl();}
 		    curbid = bid;
 		    b.run@(b, e);
@@ -156,9 +155,9 @@ debug.nl();}
 	{   b = Table[bid-1];
 	    // FIXME - unlock
 if db > 1 then {debug.str("Send "); debug.uint8(bid);
-debug.chr(':'); debug.uint8(e.from);
-debug.chr(':'); debug.uint8(e.tag);
+debug.chr('<'); debug.uint8(e.from);
 debug.chr(' '); debug.uint8(_uint8(e.code));
+debug.chr(','); debug.uint8(e.tag);
 debug.nl();}
 	    // FIXME - lock
 	    b.Enqueue(e);
@@ -215,13 +214,16 @@ if db > 2 then {debug.str("\tr="); debug.hex32(Ready); debug.nl();}
     /*
      * The following are helper methods to send specific event packets
      */
+    alias event.ConnEvent as ConnEvent;
     alias event.pConnEvent as pConnEvent;
 
     proc (bid: BlockID) SendConnect(to: BlockID, type: event.ConnectT,
     				     chan: _uint8, info: _uint16)
     {   var ce: pConnEvent;
 
-	ce = pConnEvent(event.Alloc(CONNECT));
+	ce = _new(ConnEvent);
+	ce.code = CONNECT;
+	ce.flags = {.long=false};
 	ce.tag  = to;
 	ce.type = type;
 	ce.chan = chan;
