@@ -2,7 +2,7 @@
  * AES CCM mode
  * References:
  *  1. RFC 3610
- *  2. FIPS 800-38C
+ *  2. NIST FIPS 800-38C
  * Notation:
  *  1. nonce
  *  2. mdata - message data to encrypt and authenticate (aka "payload")
@@ -19,14 +19,14 @@
 
 import aes;
 
-package aes     // extends aes
+package aesccm
 {
-    package ccm
-    {
 	const AesBlockSize = 16;	// must be 16, i.e. 128 bits
 
 	type State:
-	{   block:  [AesBlockSize]_byte;
+	{   aes:    aes.Context;    // AES expanded key
+	    B:      [AesBlockSize]_byte;    // current block
+	    X:      [AesBlockSize]_byte;    // previous block
 	    ctr:    [AesBlockSize]_byte;
 	    ctrpad: [AesBlockSize]_byte;
 	    alen:   _uint16;	    // length of adata
@@ -36,30 +36,38 @@ package aes     // extends aes
 	    nlen:   _uint8;	    // length of nonce
 	    blklen: _uint8;
 	    ctrlen: _uint8;
-	    taglen: _uint8;
+	    tlen:   _uint8;	    // length of tag (MAC)
 	};
 	type pState: @State;
 
-	proc (s: pState) SetKey(key: @[]_byte, len: _uint)
-	{   var ks: KeySize;
+	proc (s: pState) DoBlock()
+	{   var i: _uint;
 
-	    if len == 128 then ks = KEY128;
-	    elif len == 192 then ks = KEY192;
-	    elif len == 256 then ks = KEY256;
-	    else
-		return;     // invalid keysize
-	    LoadKey(ks, key);
+	    if s.blklen < AesBlockSize then
+		_zero(s.B[s.blklen:AesBlockSize-s.blklen]);
+//debug.dumpb("Bi: ", s.B, AesBlockSize);
+	    for i from 0 to AesBlockSize-1 do
+		s.B[i] = s.B[i] ^ s.X[i];
+	    s.aes.Encrypt(s.B, s.X);
+	    
+	}
+	
+	proc (s: pState) SetKey(key: @[]_byte, ks: aes.KeySize)
+	{
+	    s.aes.LoadKey(ks, key);
 	}
 
-	proc (s: pState) Init(alen: _uint, mlen: _uint, taglen: _uint,
-				nonce: @[]_byte, noncelen: _uint)
+	proc (s: pState) Start(alen: _uint,
+			       mlen: _uint,
+			       tlen: _uint,
+			       nonce: @[]_byte,
+			       nlen: _uint)
 	{
-	    var L: _uint8;
+	    var L: _uint;       // number of octets needed for payload length
 	    var len, i: _uint;
 
-//debug.str("Init:\n");
-	    taglen = taglen & ~1;		    // tag length must be even
-	    taglen = _min(taglen, AesBlockSize);    // and not larger than block
+	    tlen = tlen & ~1;		    // tag length must be even
+	    tlen = _min(tlen, AesBlockSize);    // and not larger than block
 
 	    L = 0;
 	    len = mlen;
@@ -68,94 +76,80 @@ package aes     // extends aes
 		len = len / 256;
 	    }
 	    L = _max(L, 2);			    // L must be at least 2
+	    if 15 - nlen < L then       // nonce too long
+		return;     // FIXME - error
+	    L = 15 - nlen;
 
-	    noncelen = _max(noncelen, 13);
-	    L = _min(L, 15 - noncelen);
-	    noncelen = _max(noncelen, 15 - L);
-
-	    s.block[0] = (_uint8(alen != 0) << 6) |
-			_uint8(((taglen -2 ) >> 1) << 3) |
-			_uint8(L - 1);
-	    s.block[1:noncelen] = nonce[0:noncelen];
+	    s.B[0] = (_uint8(alen != 0) << 6) |	    // adata present
+			_uint8(((tlen -2 ) >> 1) << 3) |    // tag length
+			_uint8(L - 1);			    // mlen octets
+	    s.B[1:nlen] = nonce[0:nlen];
 
 	    len = mlen;
 	    i = AesBlockSize-1;
-	    while i > noncelen do
-	    {   s.block[i] = _uint(len);
+	    while i > nlen do
+	    {   s.B[i] = _uint(len);
 		len = len / 256;
 		i -= 1;
 	    }
-	    Encrypt(s.block, s.block);
+//debug.dumpb("B0: ", s.B, AesBlockSize);
+	    s.aes.Encrypt(s.B, s.X);
 
 	    if alen > 0 then
 	    {   if alen < 65536 - 256 then
-		{   s.block[0] = s.block[0] ^ (alen >> 8);
-		    s.block[1] = s.block[1] ^ _byte(alen);
+		{   _packbe(s.B[0:2], _uint16(alen));
 		    s.blklen = 2;
 		}
 		else
-		{   s.block[0] = s.block[0] ^ 0xFF;
-		    s.block[1] = s.block[1] ^ 0xFE;
-		    s.block[2] = s.block[2] ^ (alen >> 24);
-		    s.block[3] = s.block[2] ^ (alen >> 16);
-		    s.block[4] = s.block[2] ^ (alen >> 8);
-		    s.block[5] = s.block[2] ^ _byte(alen);
+		{   s.B[0] = 0xFF;
+		    s.B[1] = 0xFE;
+		    _packbe(s.B[2:4], _uint32(alen));
 		    s.blklen = 6;
 		}
 	    }
 
 	    s.ctr[0] = L - 1;
-	    s.ctr[1:noncelen] = nonce[0:noncelen];
-	    _zero(s.ctr[noncelen+1:AesBlockSize-noncelen+1]);
+	    s.ctr[1:nlen] = nonce[0:nlen];
+	    _zero(s.ctr[nlen+1:AesBlockSize-nlen+1]);
 
-	    s.nlen = noncelen;
+	    s.nlen = nlen;
 	    s.alen = alen;
 	    s.acur = 0;
 	    s.mlen = mlen;
 	    s.mcur = 0;
 	    s.ctrlen = AesBlockSize;
-	    s.taglen = taglen;
-//debug.str("blk: "); print16x(s.block);
-//debug.str("ctr: "); print16x(s.ctr);
+	    s.tlen = tlen;
 	}
 
 	proc (s: pState) Header(hdr: @[]_byte, len: _uint)
 	{   var i: _uint;
 
-//debug.str("Header: blklen="); debug.uint8(s.blklen);
-//debug.str(" acur="); debug.uint16(s.acur); debug.nl();
 	    if s.acur + len > s.alen then   // overflow
 		return;     // FIXME - what should we do?
-
 	    for i from 0 to len-1 do
 	    {   if s.blklen == AesBlockSize then   // block buffer full
-		{   Encrypt(s.block, s.block);
+		{   s.DoBlock();
 		    s.blklen = 0;
 		}
-		s.block[s.blklen] = s.block[s.blklen] ^ hdr[i];
+		s.B[s.blklen] = hdr[i];
 		s.blklen += 1;
 	    }
 
 	    s.acur += len;
 	    if s.acur == s.alen then    // done header, process
 	    {   if s.blklen != 0 then
-		    Encrypt(s.block, s.block);
+		{   s.DoBlock();
+		}
 		s.blklen = 0;
 	    }
-//debug.str("hdr: "); print16x(s.block);
 	}
 
-	proc (s: pState) Payload(in: @[]_byte, out: @[]_byte, len: _uint)
+	proc (s: pState) Payload(in: @[]_byte, out: @[]_byte, len: _uint, decrypt: boolean)
 	{   var i, j: _uint;
 	    var t: _byte;
 
 	    if s.mcur + len > s.mlen then       // overflow
 		return;     // FIXME - what should we do?
-
-//debug.str("Payload: len="); debug.uint(len);
-//debug.str(" ctrlen="); debug.uint8(s.ctrlen); debug.nl();
-
-//debug.str("py1: "); print16x(s.block);
 	    for i from 0 to len-1 do
 	    {   if s.ctrlen == 16 then
 		{   j = AesBlockSize - 1;
@@ -165,53 +159,54 @@ package aes     // extends aes
 			j -= 1;
 		      exit j == s.nlen;
 		    }
-//debug.str("py2: "); print16x(s.ctr);
-		    Encrypt(s.ctr, s.ctrpad);
+		    s.aes.Encrypt(s.ctr, s.ctrpad);
 		    s.ctrlen = 0;
 		}
-		out[i] = in[i] ^ s.ctrpad[s.ctrlen];
+		t = in[i];
+		out[i] = t ^ s.ctrpad[s.ctrlen];
+		if decrypt then t = out[i];
 		s.ctrlen += 1;
 		if s.blklen == AesBlockSize then
-		{
-//debug.str("py3: "); print16x(s.block);
-		    Encrypt(s.block, s.block);
+		{   s.DoBlock();
 		    s.blklen = 0;
 		}
-		s.block[s.blklen] = s.block[s.blklen] ^ in[i];
+		s.B[s.blklen] = t;
 		s.blklen += 1;
 	    }
 
 	    s.mcur += len;
 	    if s.mcur >= s.mlen then    // done text
 	    {   if s.blklen != 0 then
-{
-//debug.str("py4: "); print16x(s.block);
-		    aes.Encrypt(s.block, s.block);
-}
+		{   s.DoBlock();
+		}
 		// FIXME - replace by _zero
 		for i from s.nlen+1 to AesBlockSize-1 do
 		    s.ctr[i] = 0;
 	    }        
-//debug.str("py9: "); print16x(s.block);
         }
+
+	proc (s: pState) Encrypt(in: @[]_byte, out: @[]_byte, len: _uint)
+	{
+	    s.Payload(in, out, len, false);
+	}
+
+	proc (s: pState) Decrypt(in: @[]_byte, out: @[]_byte, len: _uint)
+	{
+	    s.Payload(in, out, len, true);
+	}
 
 	proc (s: pState) Finish(tag: @[]_byte, len: _uint): _uint
 	{   var i: _uint;
 
 	    if s.mcur != s.mlen then		// wrong size text
 		return 0;     // FIXME - what should we do?
-
-//debug.str("Finish: len="); debug.uint(len); debug.nl();
-//debug.str("blk: "); print16x(s.block);
-//debug.str("ctr: "); print16x(s.ctr);
-
-	    if s.taglen > 0 then
-	    {   Encrypt(s.ctr, s.ctrpad);
+	    if s.tlen > 0 then
+	    {   s.aes.Encrypt(s.ctr, s.ctrpad);
 		for i from 0 to len-1 do
-		    tag[i] = s.block[i] ^ s.ctrpad[i];
+		    tag[i] = s.X[i] ^ s.ctrpad[i];
 	    }
-	    return s.taglen;
+	    return s.tlen;
 	}
-    }
+
 }
 // vim: ts=8 sw=4 noet nowrap

@@ -1,6 +1,9 @@
 /*
  * Keyed-hash message authentication code (HMAC) using sha256 as hash.
  *
+ * References:
+ * 1. NIST FIPS 198-1
+ *
  * Copyright Brian G. Lucas, 2016
  * License: New BSD.
  */
@@ -33,7 +36,7 @@ package hmac256
 	}
     }
 
-    proc (ctx: pContext) SetKey(key: @[]_byte, len: _uint)
+    proc (ctx: pContext) Start(key: @[]_byte, len: _uint)
     {
 	if len <= BlockSize then
 	{
@@ -46,11 +49,7 @@ package hmac256
 	    ctx.sha.Finish(ctx.key[DigestSize:DigestSize]);
 	    ctx.KeySub(ctx.key[DigestSize:], DigestSize);
 	}
-    }
-
-    proc (ctx: pContext) Start()
-    {
-	ctx.sha.Start();
+ 	ctx.sha.Start();
 	ctx.sha.Update(ctx.key, BlockSize);
     }
 

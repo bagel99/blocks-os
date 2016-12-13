@@ -75,26 +75,26 @@ package sha256
 	return z ^ (x & (y ^ z));
     }
 
-    proc (pc: pContext) Start()
+    proc (ctx: pContext) Start()
     {
-	pc.total = 0;
-        pc.state[0] = 0x6A09E667;
-        pc.state[1] = 0xBB67AE85;
-        pc.state[2] = 0x3C6EF372;
-        pc.state[3] = 0xA54FF53A;
-        pc.state[4] = 0x510E527F;
-        pc.state[5] = 0x9B05688C;
-        pc.state[6] = 0x1F83D9AB;
-        pc.state[7] = 0x5BE0CD19;
+	ctx.total = 0;
+        ctx.state[0] = 0x6A09E667;
+        ctx.state[1] = 0xBB67AE85;
+        ctx.state[2] = 0x3C6EF372;
+        ctx.state[3] = 0xA54FF53A;
+        ctx.state[4] = 0x510E527F;
+        ctx.state[5] = 0x9B05688C;
+        ctx.state[6] = 0x1F83D9AB;
+        ctx.state[7] = 0x5BE0CD19;
     }
 
-    proc (pc: pContext) Process(data: @[64]_byte)
+    proc (ctx: pContext) Process(data: @[64]_byte)
     {   var i: _uint;
 	var tmp1, tmp2: _uint32;
 	var A: [8]_uint32;
 	var W: [64]_uint32;
 
-	A = pc.state;			// array copy
+	A = ctx.state;			// array copy
 
 	for i from 0 to 63 do
 	{   if i < 16 then
@@ -116,56 +116,64 @@ package sha256
 	    A[0] = tmp1;
 	}
 	for i from 0 to 7 do
-	    pc.state[i] += A[i];
+	    ctx.state[i] += A[i];
     }
 
-    proc (pc: pContext) Update(data: @[]_byte, len: _uint)
+    proc (ctx: pContext) Update(data: @[]_byte, len: _uint)
     {   var i: _uint;
 	var left, fill: _uint;
 
 	if len == 0 then
 	    return;
-	left = pc.total & 0x3F;
+	left = ctx.total & 0x3F;
 	fill = 64 - left;
-	pc.total += len;
+	ctx.total += len;
 	i = 0;
 	// if any leftovers and we can fill it, then process
 	if left != 0 && len >= fill then
-	{   pc.leftover[left:fill] = data[0:fill];
+	{   ctx.leftover[left:fill] = data[0:fill];
 	    left = 0;
-	    pc.Process(pc.leftover);
+	    ctx.Process(ctx.leftover);
 	    i = fill;
 	    len -= fill;
 	}
 	// process any complete blocks
 	while len >= 64 do
-	{   pc.Process(data[i:64]);
+	{   ctx.Process(data[i:64]);
 	    i += 64;
 	    len -= 64;
 	}
 	// if any left, then save
 	if len > 0 then
-	    pc.leftover[left:len] = data[i:len];
+	    ctx.leftover[left:len] = data[i:len];
     }
 
-    proc (pc: pContext) Finish(out: @[DigestSize]_byte)
+    proc (ctx: pContext) Finish(out: @[DigestSize]_byte)
     {   var i: _uint;
 	var left, npad: _uint;
 	var tmp: [8]_byte;
 
-	_packbe(tmp[0:8], pc.total<<3);
-	left = pc.total & 0x3F;
+	_packbe(tmp[0:8], ctx.total<<3);
+	left = ctx.total & 0x3F;
 	if left < 56 then
 	    npad = 56 - left;		// npad in 1..56
 	else
 	    npad = 120 - left;		// npad in 57..64
-	pc.Update(padding, npad);	// padding
+	ctx.Update(padding, npad);	// padding
 	
-	pc.Update(tmp, 8);		// message length
+	ctx.Update(tmp, 8);		// message length
 	
 
 	for i from 0 to 7 do
-	    _packbe(out[i*4:4], pc.state[i]);
+	    _packbe(out[i*4:4], ctx.state[i]);
+    }
+
+    // This is like Finish, but leaves context unchanged
+    proc (ctx: pContext) Snapshot(out: @[]_byte)
+    {   var tmp: Context;
+
+	tmp = ctx@;
+	tmp.Finish(out);
     }
 
     proc Hash(in: @[]_byte, len: _uint, out: @[32]_byte)

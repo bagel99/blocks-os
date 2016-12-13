@@ -26,16 +26,16 @@ package aes
      * It takes a lot of space though.
      */
     type ExpandedKey: [Nb*(MaxNr+1)]Word;
-    var KeyX: ExpandedKey;
-    var Nk: _uint8;		// number of words in current key
+    type Context:
+    {   w:   ExpandedKey;
+	Nk: _uint8;		// number of words in current key
+    };
 
     // State is sometimes accessed as bytes and sometimes as 32-bit words.
     type State: [16]_uint8;
 
     const Rcon: [MaxNr]_uint8 =
     { 0x01,0x02,0x04,0x08,0x10,0x20,0x40,0x80,0x1b,0x36,0x6c,0xd8,0xab,0x4d };
-
-
 
     // S-box, see pg 16 of FIPS-197
     const sbox: [256]_uint8 = {
@@ -121,43 +121,36 @@ package aes
     const SR: [4*Nb]_uint8 =
     {  0, 1, 2, 3, 5, 6, 7, 4,10,11, 8, 9,15,12,13,14 };
 
-    proc AddRoundKey(x: @State, w: @[Nb]Word)
+
+    proc (x: @State) AddRoundKey(w: @[Nb]Word)
     {   type pwb: @[4*Nb]_uint8;
 	var i, j: _uint;
 	var wb: pwb;
 
 	wb = pwb(w);
-	i = 0;
-	while i < 16 do
+	for i from 0 to 15 by 4 do
 	{   x[i] = x[i] ^ wb[i];
-		x[i+1] = x[i+1] ^ wb[i+1];
-		x[i+2] = x[i+2] ^ wb[i+2];
-		x[i+3] = x[i+3] ^ wb[i+3];
-		i += 4;
+	    x[i+1] = x[i+1] ^ wb[i+1];
+	    x[i+2] = x[i+2] ^ wb[i+2];
+	    x[i+3] = x[i+3] ^ wb[i+3];
 	}
     }
 
-    proc SubBytes(x: @State)
+    proc (x: @State) SubBytes()
     {   var i: _uint;
 
-	i = 0;
-	while i < 4*Nb do
-	{   x[i] = sbox[x[i]];
-		i += 1;
-	}
+	for i from 0 to 4*Nb-1 do
+	    x[i] = sbox[x[i]];
     }
 
-    proc InvSubBytes(x: @State)
+    proc (x: @State) InvSubBytes()
     {   var i: _uint;
 
-	i = 0;
-	while i < 4*Nb do
-	{   x[i] = invsbox[x[i]];
-		i += 1;
-	}
+	for i from 0 to 4*Nb-1 do
+	    x[i] = invsbox[x[i]];
     }
 
-    proc ShiftRows(x: @State)
+    proc (x: @State) ShiftRows()
     {   var t: _uint8;
 	// rotate second row by 1 left
 	t = x[1]; x[1] = x[5]; x[5] = x[9]; x[9] = x[13]; x[13] = t;
@@ -168,7 +161,7 @@ package aes
 	t = x[3]; x[3] = x[15]; x[15] = x[11]; x[11] = x[7]; x[7] = t;
     }
 
-    proc InvShiftRows(x: @State)
+    proc (x: @State) InvShiftRows()
     {   var t: _uint8;
 
 	t = x[1]; x[1] = x[13]; x[13] = x[9]; x[9] = x[5]; x[5] = t;
@@ -176,7 +169,6 @@ package aes
 	t = x[6]; x[6] = x[14]; x[14] = t;
 	t = x[3]; x[3] = x[7]; x[7] = x[11]; x[11] = x[15]; x[15] = t;
     }
-
 
     proc G(x: _uint8, y: _uint8):_uint8
     {   var z, hi: _uint8;
@@ -195,86 +187,76 @@ package aes
 	return z;
     }
        
-    proc MixColumns(x: @State)
+    proc (x: @State) MixColumns()
     {   var i: _uint;
 	var t: [4]_uint8;
 
-	i = 0;
-	while i < 16 do
+	for i from 0 to 15 by 4 do
 	{   //t = x[4*i:4];	// local copy
 	    t[0] = x[i]; t[1] = x[i+1]; t[2] = x[i+2]; t[3] = x[i+3];
-    /*
-	    x[i]   = G(2, t[0]) ^ G(3, t[1]) ^ t[2]       ^ t[3];
-	    x[i+1] = t[0]       ^ G(2, t[1]) ^ G(3, t[2]) ^ t[3];
-	    x[i+2] = t[0]       ^ t[1]       ^ G(2, t[2]) ^ G(3, t[3]);
-	    x[i+3] = G(3, t[0]) ^ t[1]       ^ t[2]       ^ G(2, t[3]);
-    */
 	    x[i]   = G2[t[0]] ^ G3[t[1]] ^    t[2]  ^    t[3];
 	    x[i+1] =    t[0]  ^ G2[t[1]] ^ G3[t[2]] ^    t[3];
 	    x[i+2] =    t[0]  ^    t[1]  ^ G2[t[2]] ^ G3[t[3]];
 	    x[i+3] = G3[t[0]] ^    t[1]  ^     t[2] ^ G2[t[3]];
-	    i += 4;
 	}
     }
 
-    proc InvMixColumns(x: @State)
+    proc (x: @State) InvMixColumns()
     {   var i: _uint;
 	var t: [4]_uint8;
 
-	i = 0;
-	while i < 16 do
+	for i from 0 to 15 by 4 do
 	{   //t = x[4*i:4];	// local copy
 	    t[0] = x[i]; t[1] = x[i+1]; t[2] = x[i+2]; t[3] = x[i+3];
 	    x[i]   = G(0xe, t[0]) ^ G(0xb, t[1]) ^ G(0xd, t[2]) ^ G(0x9, t[3]);
 	    x[i+1] = G(0x9, t[0]) ^ G(0xe, t[1]) ^ G(0xb, t[2]) ^ G(0xd, t[3]);
 	    x[i+2] = G(0xd, t[0]) ^ G(0x9, t[1]) ^ G(0xe, t[2]) ^ G(0xb, t[3]);
 	    x[i+3] = G(0xb, t[0]) ^ G(0xd, t[1]) ^ G(0x9, t[2]) ^ G(0xe, t[3]);
-	    i += 4;
 	}
     }
 
-    proc Cipher(in: @[4*Nb]_uint8, out: @[4*Nb]_uint8, w: @ExpandedKey)
+    proc (ctx: @Context) Cipher(in: @[4*Nb]_uint8, out: @[4*Nb]_uint8)
     {   var round, Nr: _uint;
 	var state: State;
 
-	Nr = Nk + 6;    // number of rounds
+	Nr = ctx.Nk + 6;    // number of rounds
 	state = in@;
-	AddRoundKey(state, w[0:Nb]);
+	state.AddRoundKey(ctx.w[0:Nb]);
 	round = 1;
 	while round < Nr do
 	{
-		SubBytes(state);
-		ShiftRows(state);
-		MixColumns(state);
-		AddRoundKey(state, w[round*Nb:Nb]);
-		round += 1;
+	    state.SubBytes();
+	    state.ShiftRows();
+	    state.MixColumns();
+	    state.AddRoundKey(ctx.w[round*Nb:Nb]);
+	    round += 1;
 	}
-	SubBytes(state);
-	ShiftRows(state);
-	AddRoundKey(state, w[Nr*Nb:Nb]);
+	state.SubBytes();
+	state.ShiftRows();
+	state.AddRoundKey(ctx.w[Nr*Nb:Nb]);
 	out@ = state;
     }
 
 
-    proc InvCipher(in: @[4*Nb]_uint8, out: @[4*Nb]_uint8, w: @ExpandedKey)
+    proc (ctx: @Context) InvCipher(in: @[4*Nb]_uint8, out: @[4*Nb]_uint8)
     {   var round, Nr: _uint;
 	var state: State;
 
-	Nr = Nk + 6;    // number of rounds
+	Nr = ctx.Nk + 6;    // number of rounds
 	state = in@;
-	AddRoundKey(state, w[Nr*Nb:Nb]);
+	state.AddRoundKey(ctx.w[Nr*Nb:Nb]);
 	round = Nr - 1;
 	while round > 0 do
 	{
-	    InvShiftRows(state);
-	    InvSubBytes(state);
-	    AddRoundKey(state,  w[round*Nb:Nb]);
-	    InvMixColumns(state);
-		round -= 1;
+	    state.InvShiftRows();
+	    state.InvSubBytes();
+	    state.AddRoundKey(ctx.w[round*Nb:Nb]);
+	    state.InvMixColumns();
+	    round -= 1;
 	}
-	InvShiftRows(state);
-	InvSubBytes(state);
-	AddRoundKey(state,  w[round*Nb:Nb]);
+	state.InvShiftRows();
+	state.InvSubBytes();
+	state.AddRoundKey(ctx.w[round*Nb:Nb]);
 	out@ = state;
     }
 
@@ -288,6 +270,7 @@ package aes
 
     proc SubWord(x: Word): Word
     {   var rv: Word;
+
 	rv = sbox[_uint8(x)];
 	rv = rv | (_uint32(sbox[_uint8(x>>8)]) << 8);
 	rv = rv | (_uint32(sbox[_uint8(x>>16)]) << 16);
@@ -295,10 +278,10 @@ package aes
 	return rv;
     }
 
-    proc ExpandKey(keysz: KeySize, key: @[]_uint8, w: @ExpandedKey)
+    proc (ctx: @Context) ExpandKey(keysz: KeySize, key: @[]_uint8)
     {
 	var temp: Word;
-	var i, j, k, Nx: _uint;
+	var i, j, k, Nx, Nk: _uint;
 
 	if keysz
 	is KEY128 then Nk = 4;
@@ -308,54 +291,52 @@ package aes
 	{
 	    // error "invalid keylength"
 	}
+	ctx.Nk = Nk;
 	// Nr=Nk+6, the number of rounds    
 	Nx = Nb*((Nk+6)+1);	// number of 32-bit words in key expansion
 	i = 0;
 	while i < Nk do
 	{
     /*
-	    // This just packs a big-endian 32-bit word
+	    // This just builds a big-endian 32-bit word
 	    w[i] = (_uint32(key[4*i]) << 24) |
 		   (_uint32(key[4*i+1]) << 16) |
 		   (_uint32(key[4*i+2]) << 8) |
 		   (_uint32(key[4*i+3]));
     */
-	    // This just packs a little-endian 32-bit word
-	    w[i] = (_uint32(key[4*i+3]) << 24) |
-		   (_uint32(key[4*i+2]) << 16) |
-		   (_uint32(key[4*i+1]) << 8) |
-		   (_uint32(key[4*i]));
+	    // This just builds a little-endian 32-bit word
+	    ctx.w[i] = _unpkle(key[4*i:4]);
 	    i += 1;
 	}
 	j = Nk; k = 0;
 	while i < Nx do
-	{   temp = w[i-1];
-		if j == Nk then
-		{   temp = SubWord(RotWord(temp)) ^ (_uint32(Rcon[k]));
-		    j = 0;
-		    k += 1;
-		}
-		else if Nk > 6 && i&3 == 0 then
-		    temp = SubWord(temp);
-		w[i] = w[i-Nk] ^ temp;
-		i += 1;
-		j += 1;
+	{   temp = ctx.w[i-1];
+	    if j == Nk then
+	    {   temp = SubWord(RotWord(temp)) ^ (_uint32(Rcon[k]));
+		j = 0;
+		k += 1;
+	    }
+	    else if Nk > 6 && i&3 == 0 then
+		temp = SubWord(temp);
+	    ctx.w[i] = ctx.w[i-Nk] ^ temp;
+	    i += 1;
+	    j += 1;
 	}
     }   
 
-    proc LoadKey(keysz: KeySize, key: @[]_uint8)
+    proc (ctx: @Context) LoadKey(keysz: KeySize, key: @[]_uint8)
     {
-	ExpandKey(keysz, key, KeyX);
+	ctx.ExpandKey(keysz, key);
     }
 
-    proc Encrypt(in: @[4*Nb]_uint8, out: @[4*Nb]_uint8)
+    proc (ctx: @Context) Encrypt(in: @[4*Nb]_uint8, out: @[4*Nb]_uint8)
     {
-	Cipher(in, out, KeyX);
+	ctx.Cipher(in, out);
     }
 
-    proc Decrypt(in: @[4*Nb]_uint8, out: @[4*Nb]_uint8)
+    proc (ctx: @Context) Decrypt(in: @[4*Nb]_uint8, out: @[4*Nb]_uint8)
     {
-	InvCipher(in, out, KeyX);
+	ctx.InvCipher(in, out);
     }
 }
 // vim: ts=8 sw=4 noet nowrap
