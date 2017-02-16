@@ -1,0 +1,204 @@
+import sys;
+
+package debug
+{
+    const hexdigit: [16]_byte =
+	{'0','1','2','3','4','5','6','7','8','9','A','B','C','D','E','F'};
+
+    proc nl()
+    {
+	sys.write(sys.fderr, "\n", 1);
+    }
+
+    proc chr(c: _byte)
+    {   var buf: [1]_byte;
+	buf[0] = c;
+	sys.write(sys.fderr, buf, 1);
+    }
+
+    proc str(s: @[]_byte)
+    {   var i: _uint;
+
+	i = 0;
+	while s[i] != 0 do
+	    i += 1;
+	sys.write(sys.fderr, s, i);
+    }
+
+    proc strn(s:@[]_byte, len:_uint)
+    {
+	sys.write(sys.fderr, s, len);
+    }
+
+    proc hex8(in: _uint8)
+    {   var buf: [2]_byte;
+
+	buf[0] = hexdigit[(in>>4)&0xF];
+	buf[1] = hexdigit[in&0xF];
+	sys.write(sys.fderr, buf, 2);
+    }
+
+    proc hex16(in: _uint16)
+    {   var buf: [4]_byte;
+
+	buf[0] = hexdigit[(in>>12)&0xF];
+	buf[1] = hexdigit[(in>>8)&0xF];
+	buf[2] = hexdigit[(in>>4)&0xF];
+	buf[3] = hexdigit[in&0xF];
+	sys.write(sys.fderr, buf, 4);
+    }
+
+    proc hex32(in: _uint32)
+    {   var buf: [8]_byte;
+
+	buf[0] = hexdigit[(in>>28)&0xF];
+	buf[1] = hexdigit[(in>>24)&0xF];
+	buf[2] = hexdigit[(in>>20)&0xF];
+	buf[3] = hexdigit[(in>>16)&0xF];
+	buf[4] = hexdigit[(in>>12)&0xF];
+	buf[5] = hexdigit[(in>>8)&0xF];
+	buf[6] = hexdigit[(in>>4)&0xF];
+	buf[7] = hexdigit[in&0xF];
+	sys.write(sys.fderr, buf, 8);
+    }
+
+    proc hex64(in: _uint64)
+    {   var buf: [16]_byte;
+
+	buf[0] = hexdigit[(in>>60)&0xF];
+	buf[1] = hexdigit[(in>>56)&0xF];
+	buf[2] = hexdigit[(in>>52)&0xF];
+	buf[3] = hexdigit[(in>>48)&0xF];
+	buf[4] = hexdigit[(in>>44)&0xF];
+	buf[5] = hexdigit[(in>>40)&0xF];
+	buf[6] = hexdigit[(in>>36)&0xF];
+	buf[7] = hexdigit[(in>>32)&0xF];
+	buf[8] = hexdigit[(in>>28)&0xF];
+	buf[9] = hexdigit[(in>>24)&0xF];
+	buf[10] = hexdigit[(in>>20)&0xF];
+	buf[11] = hexdigit[(in>>16)&0xF];
+	buf[12] = hexdigit[(in>>12)&0xF];
+	buf[13] = hexdigit[(in>>8)&0xF];
+	buf[14] = hexdigit[(in>>4)&0xF];
+	buf[15] = hexdigit[in&0xF];
+	sys.write(sys.fderr, buf, 16);
+    }
+
+    proc hex(in: _uint):: inline
+    {
+	if _int?size == 64 then
+	    hex64(in);
+	else
+	    hex32(_uint32(in));
+    }
+
+    // FIXME: this doesn't work
+    proc uint32(in: _uint32)
+    {   var buf: [10]_byte;
+	var tmp: _uint32;
+	var i: _uint;
+
+	i = 10;
+	if in != 0 then
+	{   while in != 0 do
+	    {   tmp = in / 10;
+		i -= 1;
+		buf[i] = in - (tmp * 10) + '0';
+		in = tmp;
+	    }
+	}
+	else
+	{   i -= 1;
+	    buf[i] = '0';
+	}
+	sys.write(sys.fderr, buf[i:10-i], 10-i);
+    }
+
+    proc uint16(in: _uint16): : inline
+    {
+	uint32(_uint32(in));
+    }
+
+    proc uint8(in: _uint8): : inline
+    {
+	uint32(_uint32(in));
+    }
+
+    proc uint64(in: _uint64)
+    {   var buf: [20]_byte;
+	var i: 0..19;
+
+	i = 20;
+	if in == 0 then
+	{   i -= 1;
+	    buf[i] = '0';
+	}
+	else
+	{   while in != 0 do
+	    {   i -= 1;
+		buf[i] = (in % 10) + '0';
+	        in = in / 10;
+	    }
+	}
+	sys.write(sys.fderr, buf[i:], 20-i);
+    }
+
+    proc int64(in: _int64)
+    {   var ui: _uint64;
+
+	if in < 0 then
+	{   sys.write(sys.fderr, "-", 1);
+	    ui = -in;
+	}
+	else
+	    ui = in;
+	uint64(ui);
+    }	
+
+    proc int32(in: _int32)
+    {
+	if in < 0 then
+	{   sys.write(sys.fderr, "-", 1);
+	    in = -in;
+	}
+	uint32(_uint32(in));
+    }
+
+    proc uint(in: _uint): : inline
+    {
+	if _uint?size == 64 then
+	    uint64(in);
+	else
+	    uint32(_uint32(in));
+    }
+
+    proc int(in: _int):: inline
+    {
+	if _int?size == 64 then
+	    int64(in);
+	else
+	    int32(_int32(in));
+    }
+
+    proc dumpb(msg:@[]_byte, adr:@_memory, len: _uint)
+    {   var i: _uint32;
+
+	str(msg);
+	i = 0;
+	while i < len do
+	{   hex8(adr@[i]);
+	    i += 1;
+	    if i&0xF == 0 && i < len then
+		chr('\n');
+	    else
+		chr(' ');
+	}
+	chr('\n');
+    }
+
+    proc dumpstack(msg: @[]_byte)
+    {
+	str("No dumpstack available\n");
+    }
+}
+
