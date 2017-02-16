@@ -1,0 +1,253 @@
+/*
+ * Multiprecision arithmetic
+ *
+ * Copyright Brian G. Lucas, 2017
+ * License: New BSD.
+ */
+
+package bignum
+{
+    type Base: _uint32;
+    type Basex2: _uint64;
+    type BigNum: []Base;
+
+    proc Import(key: @[]_byte, out: @BigNum, len: _uint)
+    {	var i, j: _uint;
+
+	j = 0;
+	i = len;
+	while i > 0 do
+	{   i -= Base?size;
+	    out[j] = _unpkbe(key[i:Base?size]);
+	    j += 1;
+	}
+    }
+
+    proc Export(key: @BigNum, out: @[]_byte, len: _uint)
+    {	var i, j: _uint;
+
+	j = 0;
+	i = len;
+	while i > 0 do
+	{   i -= Base?size;
+	    _packbe(out[i:Base?size], key[j]);
+	    j += 1;
+	}
+    }
+
+    proc ImportHexStr(s: @[]_byte, r: @BigNum, n: _uint)
+    {	var i: _uint;	// index into s
+	var j: _uint;	// index into r
+	var k: _uint;	// index into hex digits in BigBase
+	var p: _uint;	// number of leading zero pads
+	var h: _uint;	// number of hex digits in BigBase
+	var tmp: Base;
+
+	h = 2 * Base?size;
+	i = _zlen(s@);
+	p = 0;
+	if (n * h) > i then p = (n * h) - i;	// need 0 padding
+	i = 0;
+	j = n;	
+	do
+	{   tmp = 0;
+	    for k from 0 to h-1 do
+	    {   tmp = tmp << 4;
+		if p > 0 then
+		    p -= 1;
+		else
+		{   if s[i]
+		    is '0'..'9' then tmp |= s[i] - '0';
+		    is 'A'..'F' then tmp |= s[i] - 'A' + 10;
+		    is 'a'..'f' then tmp |= s[i] - 'a' + 10;
+		    i += 1;
+		}
+	    }
+	    j -= 1;
+	    r[j] = tmp;
+	} while j > 0;	
+    }
+
+    // s.len must be >= 8*n + 1;
+    proc ExportHexStr(s: @[]_byte, x: @BigNum, n: _uint)
+    {	var i: _uint;
+	var j: _uint;
+	var k: _uint;
+	var h: _uint;
+	var d: _uint8;
+	var tmp: Base;
+
+	h = 2 * Base?size;
+	i = 0;
+	j = n;
+	do
+	{   j -= 1;
+	    tmp = x[j];
+	    k = h;
+	    do
+	    {	k -= 1;
+		d = (tmp >> (4*k)) & 0xF;
+		if d > 9 then d += 'A' - 10; else d += '0';
+		s[i] = d;
+		i += 1;
+	    } while k > 0;
+	} while j > 0;
+	s[i] = 0;	// nul terminate
+    }
+
+const USE32: boolean = false;
+if USE32 then {
+    // FIXME - these don't work
+    proc Add(r: @BigNum, x: @BigNum, y: @BigNum, n: _uint): Base
+    {   var i: _uint;
+	var c: Base;		// carry
+	var tmp, lhs: Base;
+
+	c = 0;
+	for i from 0 to n-1 do
+	{   lhs = x[i];
+	    tmp = lhs + y[i] + c;
+	    if tmp != lhs then
+	    {	if tmp < lhs then c = 1; else c = 0;
+	    }
+	    r[i] = tmp;
+	}
+	return c;
+    }
+
+    proc Sub(r: @BigNum, x: @BigNum, y: @BigNum, n: _uint): Base
+    {   var i: _uint;
+	var c: Base;		// carry
+	var tmp, lhs: Base;
+
+	c = 0;
+	for i from 0 to n-1 do
+	{   lhs = x[i];
+	    tmp = x[i] - y[i] - c;
+	    if tmp != lhs then
+	    {	if tmp > lhs then c = 1; else c = 0;
+	    }
+	    r[i] = tmp;
+	}
+	return c;
+    }
+} else {
+    proc Add(r: @BigNum, x: @BigNum, y: @BigNum, n: _uint): Base
+    {   var i: _uint;
+	var c: Basex2;		// carry
+
+	c = 0;
+	for i from 0 to n-1 do
+	{
+	    c += _uint64(x[i]) + _uint64(y[i]);
+	    r[i] = _uint32(c);	// low 32 bits
+	    c = c >> 32;
+	}
+	return _uint32(c);
+    }
+
+    proc Sub(r: @BigNum, x: @BigNum, y: @BigNum, n: _uint): Base
+    {   var i: _uint;
+	var c: Basex2;		// carry
+
+	c = 0;
+	for i from 0 to n-1 do
+	{   c = _uint64(x[i]) - _uint64(y[i]) - c;
+	    r[i] = _uint32(c);	// low 32 bits
+	    c = (c >> 32) & 1;
+	}
+	return _uint32(c);
+    }
+}
+
+    proc RShf(r: @BigNum, x: @BigNum, ilen: _uint, olen: _uint, shf: _uint)
+    {   var i: _uint;
+
+	i = 0;
+	while i < ilen-shf && i < olen do
+	{   r[i] = x[i+shf];		// FIXME - array copy
+	    i += 1;
+	}
+	while i < olen do
+	{   r[i] = 0;			// FIXME - array set
+	    i += 1;
+	}
+	// if olen > i then _zero(out[i:olen-i];
+    }
+
+    // Right shift by one, in place
+    proc RShf1(x: @BigNum, n: _uint)
+    {   var i: _uint;
+	var c, t: Base;
+
+	c = 0;
+	i = n;
+	do
+	{   i -= 1;
+	    t = x[i] & 1;
+	    x[i] = (x[i] >> 1) | (c << 31);
+	    c = t;
+	} while i > 0;
+    }
+
+    proc isEven(x: @BigNum): boolean: inline
+    {
+	return (x[0] & 1) == 0;
+    }
+
+    proc isOdd(x: @BigNum): boolean: inline
+    {
+	return (x[0] & 1) != 0;
+    }
+
+    proc isZero(x: @BigNum, n: _uint): boolean
+    {   var i: _uint;
+
+	for i from 0 to n-1 do
+	{   if x[i] != 0 then return false;
+	}
+	return true;
+    }
+
+    proc Cmp(x: @BigNum, y: @BigNum, n: _uint): _int
+    {   var i: _uint;
+
+	i = n;
+	do
+	{   i -= 1;
+	    if x[i] > y[i] then return +1;
+	    if x[i] < y[i] then return -1;
+	} while i > 0;
+	return 0;	// they were equal
+    }
+
+    proc isGT(x: @BigNum, y: @BigNum, n: _uint): boolean
+    {   var i: _uint;
+
+	i = n;
+	do
+	{   i -= 1;
+	    if x[i] > y[i] then return true;
+	    if x[i] < y[i] then return false;
+	} while i > 0;
+	return false;	// they were equal
+    }
+
+    proc isLT(x: @BigNum, y: @BigNum, n: _uint): boolean
+    {   var i: _uint;
+
+	i = n;
+	do
+	{   i -= 1;
+	    if x[i] < y[i] then return true;
+	    if x[i] > y[i] then return false;
+	} while i > 0;
+	return false;	// they were equal
+    }
+
+    proc isGE(x: @BigNum, y: @BigNum, n: _uint): boolean
+    {
+	return !isLT(x, y, n);
+    }
+}
+

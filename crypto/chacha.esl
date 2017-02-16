@@ -1,0 +1,177 @@
+/*
+ * References:
+ * 1. chacha-ref.c version 20080118
+ *    D. J. Bernstein
+ *    Public domain.
+ * 2. RFC 7539
+ *
+ * Warnings:
+ * 1. This is really a block cipher used as a stream cipher.
+ *    The Encrypt procedure must be called with lengths that are
+ *    multiples of blocks, except for the last call.
+ * 2. The original djb implementation use an IV (nonce) length of 8
+ *    with an 8-byte counter.  RFC7539 uses a 12-byte IV, with only
+ *    a 4-byte counter.
+ */
+
+
+
+package chacha
+{
+    const BlockSize = 64;			// in bytes
+    const WordSize = BlockSize/_uint32?size;	// 16 _uint32s, 64 bytes total
+    const IVSize = 12;		// to match RFC 7539
+    const NumRounds = 20;
+
+    type Context:
+    {   input: [WordSize]_uint32;
+    };
+
+proc (ctx: @Context) Dump(s: @[]_byte)
+{   var i: _uint;
+    debug.str(s);
+    for i from 0 to WordSize-1 do
+    {	debug.hex32(ctx.input[i]);
+    	if (i & 3) == 3 then debug.chr('\n'); else debug.chr(' ');
+    }
+}
+proc DumpX(s: @[]_byte, x: @[16]_uint32)
+{   var i: _uint;
+    debug.str(s);
+    for i from 0 to 15 do
+    {	debug.hex32(x[i]);
+    	if (i & 3) == 3 then debug.chr('\n'); else debug.chr(' ');
+    }
+}
+    proc WordToByte(in: @[WordSize]_uint32, out: @[BlockSize]_uint8)
+    {   var i: _uint;
+	var x: [16]_uint32 /*:mod*/;
+
+	x = in@;		// copy the array
+	for i from 0 to 9 do	// 20 rounds
+	{
+	    // QUARTERROUND( 0, 4, 8,12)
+	    x[ 0] += x[ 4]; x[12] = _rol(x[12] ^ x[ 0], 16);
+	    x[ 8] += x[12]; x[ 4] = _rol(x[ 4] ^ x[ 8], 12);
+	    x[ 0] += x[ 4]; x[12] = _rol(x[12] ^ x[ 0],  8);
+	    x[ 8] += x[12]; x[ 4] = _rol(x[ 4] ^ x[ 8],  7);
+	    // QUARTERROUND( 1, 5, 9,13)
+	    x[ 1] += x[ 5]; x[13] = _rol(x[13] ^ x[ 1], 16);
+	    x[ 9] += x[13]; x[ 5] = _rol(x[ 5] ^ x[ 9], 12);
+	    x[ 1] += x[ 5]; x[13] = _rol(x[13] ^ x[ 1],  8);
+	    x[ 9] += x[13]; x[ 5] = _rol(x[ 5] ^ x[ 9],  7);
+	    // QUARTERROUND( 2, 6,10,14)
+	    x[ 2] += x[ 6]; x[14] = _rol(x[14] ^ x[ 2], 16);
+	    x[10] += x[14]; x[ 6] = _rol(x[ 6] ^ x[10], 12);
+	    x[ 2] += x[ 6]; x[14] = _rol(x[14] ^ x[ 2],  8);
+	    x[10] += x[14]; x[ 6] = _rol(x[ 6] ^ x[10],  7);
+	    // QUARTERROUND( 3, 7,11,15)
+	    x[ 3] += x[ 7]; x[15] = _rol(x[15] ^ x[ 3], 16);
+	    x[11] += x[15]; x[ 7] = _rol(x[ 7] ^ x[11], 12);
+	    x[ 3] += x[ 7]; x[15] = _rol(x[15] ^ x[ 3],  8);
+	    x[11] += x[15]; x[ 7] = _rol(x[ 7] ^ x[11],  7);
+	    // QUARTERROUND( 0, 5,10,15)
+	    x[ 0] += x[ 5]; x[15] = _rol(x[15] ^ x[ 0], 16);
+	    x[10] += x[15]; x[ 5] = _rol(x[ 5] ^ x[10], 12);
+	    x[ 0] += x[ 5]; x[15] = _rol(x[15] ^ x[ 0],  8);
+	    x[10] += x[15]; x[ 5] = _rol(x[ 5] ^ x[10],  7);
+	    // QUARTERROUND( 1, 6,11,12)
+	    x[ 1] += x[ 6]; x[12] = _rol(x[12] ^ x[ 1], 16);
+	    x[11] += x[12]; x[ 6] = _rol(x[ 6] ^ x[11], 12);
+	    x[ 1] += x[ 6]; x[12] = _rol(x[12] ^ x[ 1],  8);
+	    x[11] += x[12]; x[ 6] = _rol(x[ 6] ^ x[11],  7);
+	    // QUARTERROUND( 2, 7, 8,13)
+	    x[ 2] += x[ 7]; x[13] = _rol(x[13] ^ x[ 2], 16);
+	    x[ 8] += x[13]; x[ 7] = _rol(x[ 7] ^ x[ 8], 12);
+	    x[ 2] += x[ 7]; x[13] = _rol(x[13] ^ x[ 2],  8);
+	    x[ 8] += x[13]; x[ 7] = _rol(x[ 7] ^ x[ 8],  7);
+	    // QUARTERROUND( 3, 4, 9,14)
+	    x[ 3] += x[ 4]; x[14] = _rol(x[14] ^ x[ 3], 16);
+	    x[ 9] += x[14]; x[ 4] = _rol(x[ 4] ^ x[ 9], 12);
+	    x[ 3] += x[ 4]; x[14] = _rol(x[14] ^ x[ 3],  8);
+	    x[ 9] += x[14]; x[ 4] = _rol(x[ 4] ^ x[ 9],  7);
+	}
+	for i from 0 to WordSize-1 do
+	    x[i] += in[i];
+	for i from 0 to WordSize-1 do
+	    _packle(out[i*4:4], x[i]);
+    }
+
+    proc (ctx: @Context) SetKey(key: @[]_byte, klen: _uint)
+    {   var constants: @[16]_byte;
+	var k: _uint;
+	const sigma: [16]_byte = "expand 32-byte k";
+	const tau:   [16]_byte = "expand 16-byte k";
+
+	if klen == 32 then	// in bytes, recommended 256 bits
+	{   constants = sigma;
+	    k = 16;
+	}
+	else			// klen == 128 bits
+	{   constants = tau;
+	    k = 0;
+	}
+	ctx.input[0]  = _unpkle(constants[0:4]);
+	ctx.input[1]  = _unpkle(constants[4:4]);
+	ctx.input[2]  = _unpkle(constants[8:4]);
+	ctx.input[3]  = _unpkle(constants[12:4]);
+	ctx.input[4]  = _unpkle(key[0:4]);
+ 	ctx.input[5]  = _unpkle(key[4:4]);
+	ctx.input[6]  = _unpkle(key[8:4]);
+	ctx.input[7]  = _unpkle(key[12:4]);
+	ctx.input[8]  = _unpkle(key[k:4]);
+ 	ctx.input[9]  = _unpkle(key[k+4:4]);
+	ctx.input[10] = _unpkle(key[k+8:4]);
+	ctx.input[11] = _unpkle(key[k+12:4]);
+    }
+
+if IVSize == 12 then {
+    proc (ctx: @Context) SetIV(iv: @[12]_byte)
+    {
+	ctx.input[12] = 0;
+	ctx.input[13] = _unpkle(iv[0:4]);
+	ctx.input[14] = _unpkle(iv[4:4]);
+	ctx.input[15] = _unpkle(iv[8:4]);
+    }
+
+    proc (ctx: @Context) SetCounter(n: _uint32)
+    {
+    	ctx.input[12] = n;
+    }
+} else {
+    proc (ctx: @Context) SetIV(iv: @[8]_byte)	// See RFC 7539 section 2.3
+    {
+	ctx.input[12] = 0;
+	ctx.input[13] = 0;
+	ctx.input[14] = _unpkle(iv[0:4]);
+	ctx.input[15] = _unpkle(iv[4:4]);
+    }
+
+    proc (ctx: @Context) SetCounter(n: _uint64)
+    {
+    	ctx.input[12] = _uint32(n);
+    	ctx.input[13] = _uint32(n>>32);
+    }
+}
+
+    proc (ctx: @Context) Encrypt(in: @[]_byte, out: @[]_byte, len: _uint)
+    {   var i,j,n: _uint;
+	var output: [BlockSize]_byte;
+
+	if len == 0 then return;
+	j = 0;
+	loop
+	{   WordToByte(ctx.input, output);
+	    // increment counter
+	    ctx.input[12] += 1;
+	    if ctx.input[12] == 0 then
+	    	ctx.input[13] += 1;
+	    n = _min(len, BlockSize);
+	    for i from 0 to n-1 do
+	    	out[j+i] = in[j+i] ^ output[i];
+	    len -= n;
+	  exit len == 0;
+	    j += BlockSize;
+	}
+    }
+}

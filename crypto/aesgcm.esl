@@ -1,0 +1,212 @@
+/*
+ * AES GCM mode
+ * References:
+ *  1. RFC 5288
+ *  2. NIST SP 800-38D
+ * Implementation limitations:
+ *  1. nonce (IV) length - other than 12 is untested
+ *  2. adata length - _uint16?max
+ *  3. mdata length - _uint16?max
+ *  4. tag length   - 4,6,8,10,12,14,16
+ * Copyright Brian G. Lucas, 2016
+ * License: New BSD.
+ */
+
+import aes;
+
+package aesgcm
+{
+	const AesBlockSize = 16;	// must be 16, i.e. 128 bits
+	type HiLo:
+	    {   hi: _uint64;
+		lo: _uint64;
+	    };
+
+	type State:
+	{   aes:    aes.Context;    // AES expanded key
+	    alen:   _uint16;	    // length of adata
+	    mlen:   _uint16;	    // length of payload
+	    H:      [16] HiLo;
+	    Yi:     [16]_byte;
+	    E:      [16]_byte;
+	    buf:    [16]_byte;
+	};
+	type pState: @State;
+
+	proc (s: pState) GenTable(h: @[16]_byte)
+	{   var v: HiLo;
+	    var t: _uint32;
+	    var i, j: _uint;
+
+	    s.H[0] = {0,0};
+
+	    v.hi = _unpkbe(h[0:8]);
+	    v.lo = _unpkbe(h[8:8]);
+	    s.H[8].hi = v.hi;
+	    s.H[8].lo = v.lo;
+
+	    i = 4;
+	    do
+	    {   t = _uint32(v.lo & 1) * 0xE100_0000;
+		v.lo = (v.hi << 63) | (v.lo >> 1);
+		v.hi = (v.hi >> 1)  ^ (_uint64(t) << 32);
+		s.H[i].hi = v.hi;
+		s.H[i].lo = v.lo;
+		i = i / 2;
+	    }
+	    while i > 0;
+	    i = 2;
+	    do
+	    {   v.hi = s.H[i].hi;
+		v.lo = s.H[i].lo;
+		j = 1;
+		while j < i do
+		{   s.H[i+j].hi = v.hi ^ s.H[j].hi;
+		    s.H[i+j].lo = v.lo ^ s.H[j].lo;
+		    j += 1;
+		}
+		i = i * 2;
+	    } while i <= 8;
+/*for i from 0 to 15 do
+{ err.hex64(s.H[i].hi); err.chr(' '); err.hex64(s.H[i].lo); err.nl();
+}*/	    
+	}
+
+	proc (s: pState) SetKey(key: @[]_byte, ks: aes.KeySize)
+	{
+	    var h: [16]_byte;
+
+	    s.aes.LoadKey(ks, key);
+	    _zero(h);
+	    s.aes.Encrypt(h, h);
+//debug.dumpb("h=\n", h, h?len);
+	    s.GenTable(h);
+	}
+
+	// Using Shoup's method for multiplication, 4-bit chunks
+        proc (s: pState) Mul(x: @[16]_byte, out: @[16]_byte)
+        {   var i: _uint;
+	    var z: HiLo;
+	    var lo4, hi4, rem: _uint8;
+	    const last4: [16]_uint16 =
+	    {   0x0000, 0x1c20, 0x3840, 0x2460, 0x7080, 0x6ca0, 0x48c0, 0x54e0,
+		0xe100, 0xfd20, 0xd940, 0xc560, 0x9180, 0x8da0, 0xa9c0, 0xb5e0
+	    };
+
+	    lo4 = x[15] & 0xF;
+	    z = s.H[lo4];
+	    i = 15;
+	    loop
+	    {   lo4 = x[i] & 0xF;
+		hi4 = x[i] >> 4;
+		if i != 15 then
+		{   rem = _uint8(z.lo) & 0xF;
+		    z.lo = (z.hi << 60) | (z.lo >> 4);
+		    z.hi = z.hi >> 4;
+		    z.hi = z.hi ^ _uint64(last4[rem]) << 48;
+		    z.hi = z.hi ^ s.H[lo4].hi;
+		    z.lo = z.lo ^ s.H[lo4].lo;
+		}
+		rem = _uint8(z.lo) & 0xF;
+		z.lo = (z.hi << 60) | (z.lo >> 4);
+		z.hi = z.hi >> 4;
+		z.hi = z.hi ^ _uint64(last4[rem]) << 48;
+		z.hi = z.hi ^ s.H[hi4].hi;
+		z.lo = z.lo ^ s.H[hi4].lo;
+	      exit i == 0;
+		i -= 1;
+	    }
+	    _packbe(out[0:8], z.hi);
+	    _packbe(out[8:8], z.lo);        
+	}
+
+	proc (s: pState) Start(iv: @[]_byte, ivlen: _uint,
+			       adata: @[]_byte, alen: _uint)
+	{   var i, j, n: _uint;
+
+	    _zero(s.buf);
+	    _zero(s.Yi);
+	    s.mlen = 0;
+	    if ivlen == 12 then     // this is the recommended length
+	    {   s.Yi[0:12] = iv[0:12];
+		s.Yi[15] = 1;
+	    }
+	    else
+	    {
+debug.str("Unsupported IV length="); debug.uint(ivlen); debug.nl();
+	    }
+	    s.aes.Encrypt(s.Yi, s.E);
+	    s.alen = alen;
+	    j = 0;
+	    while alen > 0 do
+	    {   n = _min(alen, 16);
+		for i from 0 to n-1 do
+		    s.buf[i] = s.buf[i] ^ adata[j+i];
+		// FIXME - what if n < 16, trailing garbage in buf?
+		s.Mul(s.buf, s.buf);
+		alen -= n;
+		j += n;
+	    }                
+	}
+
+	proc (s: pState) Payload(in: @[]_byte, out: @[]_byte, len: _uint, decrypt: boolean)
+	{   var i, j, n: _uint;
+	    var ctr: [16]_byte;     // encrypted IV||counter
+
+	    s.mlen += len;
+	    j = 0;
+	    while len > 0 do
+	    {   n = _min(len, 16);
+		// increment counter
+		i = 15;
+		loop
+		{   s.Yi[i] += 1;
+		  exit s.Yi[i] != 0;     // no carry
+		    i -= 1;
+		  exit i < 12;
+		}
+//debug.dumpb("CB=  ", s.Yi, 16);
+		s.aes.Encrypt(s.Yi, ctr);
+//debug.dumpb("CT=  ", ctr, 16);
+		for i from 0 to n-1 do
+		{   if decrypt then
+			s.buf[i] = s.buf[i] ^ in[j+i];
+		    out[j+i] = ctr[i] ^ in[j+i];
+		    if !decrypt then
+			s.buf[i] = s.buf[i] ^ out[j+i];
+		}
+		s.Mul(s.buf, s.buf);
+//debug.dumpb("Ep=  ", s.buf, 16);
+		len -= n;
+		j += n;
+	    }
+	}
+
+	proc (s: pState) Encrypt(in: @[]_byte, out: @[]_byte, len: _uint)
+	{
+	    s.Payload(in, out, len, false);
+	}
+
+	proc (s: pState) Decrypt(in: @[]_byte, out: @[]_byte, len: _uint)
+	{
+	    s.Payload(in, out, len, true);
+	}
+
+ 	proc (s: pState) Finish(tag: @[]_byte, tlen: _uint): _uint
+ 	{   var i: _uint;
+	    var buf: [16]_byte;
+	
+ 	    // assert tlen >= 4 && tlen <=16;
+ 	    tag[0:tlen] = s.E[0:tlen];
+ 	    if s.mlen > 0 || s.alen > 0 then
+ 	    {   _packbe(buf[0:8], _uint64(s.alen * 8));
+		_packbe(buf[8:8], _uint64(s.mlen * 8));
+		for i from 0 to 15 do
+		    s.buf[i] = s.buf[i] ^ buf[i];
+		s.Mul(s.buf, s.buf);
+		for i from 0 to 15 do
+		    tag[i] = tag[i] ^ s.buf[i];
+ 	    }
+	}
+}
+// vim: ts=8 sw=4 noet nowrap
