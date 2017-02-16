@@ -74,7 +74,8 @@ package dma
     proc ChanMaskClr(chan: _uint)
     {
 	if chan <= MaxDMA then
-	    dma.reqmaskclr = { [chan]=true };
+	    dma.reqmaskclr[chan] = true;
+//	    dma.reqmaskclr = { [chan]=true };
     }
 
     proc SetChanSrc(chan: _uint, src: _address)

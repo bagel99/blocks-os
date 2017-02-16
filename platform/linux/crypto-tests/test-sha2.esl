@@ -1,0 +1,158 @@
+// TEST - SHA256, SHA384, SHA512
+import debug;
+alias debug as err;
+
+import sha224;
+import sha256;
+import sha384;
+import sha512;
+
+
+type Test:
+{   msg: @[]_byte;		// text
+    h224: [28*2+1]_byte;	// hex
+    h256: [32*2+1]_byte;	// hex
+    h384: [48*2+1]_byte;	// hex
+    h512: [64*2+1]_byte;	// hex
+};
+
+const tests: []Test =
+{ {
+	"abc",
+  .h224="23097D223405D8228642A477BDA255B32AADBCE4BDA0B3F7E36C9DA7",
+  .h256="BA7816BF8F01CFEA414140DE5DAE2223B00361A396177A9CB410FF61F20015AD",
+  .h384="CB00753F45A35E8BB5A03D699AC65007272C32AB0EDED1631A8B605A43FF5BED"
+	"8086072BA1E7CC2358BAECA134C825A7",
+  .h512="DDAF35A193617ABACC417349AE20413112E6FA4E89A97EA20A9EEEE64B55D39A"
+	"2192992A274FC1A836BA3C23A3FEEBBD454D4423643CE80E2A9AC94FA54CA49F"
+  },{
+  "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq",
+  .h224="75388B16512776CC5DBA5DA1FD890150B0C6455CB4F58B1952522525",
+  .h256="248D6A61D20638B8E5C026930C3E6039A33CE45964FF2167F6ECEDD419DB06C1",
+  .h384="3391FDDDFC8DC7393707A65B1B4709397CF8B1D162AF05ABFE8F450DE5F36BC6"
+	"B0455A8520BC4E6F5FE95B1FE3C8452B",
+  .h512="204A8FC6DDA82F0A0CED7BEB8E08A41657C16EF468B228A8279BE331A703C335"
+	"96FD15C13B1B07F9AA1D3BEA57789CA031AD85C7A71DD70354EC631238CA3445"
+  },{
+  "abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmno"
+  "ijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu",
+  .h224="C97CA9A559850CE97A04A96DEF6D99A9E0E0E2AB14E6B8DF265FC0B3",
+  .h256="CF5B16A778AF8380036CE59E7B0492370B249B11E8F07A51AFAC45037AFEE9D1",
+  .h384="09330C33F71147E83D192FC782CD1B4753111B173B3B05D22FA08086E3B0F712"
+	"FCC7C71A557E2DB966C3E9FA91746039",
+  .h512="8E959B75DAE313DA8CF4F72814FC143F8F7779C6EB9F7FA17299AEADB6889018"
+	"501D289E4900F7E4331B99DEC4B5433AC7D329EEB6DD26545E96E55B874BE909"
+  },{
+  "This is exactly 64 bytes long, not counting the terminating byte",
+  .h224="D92622D56F83D869A884F6CC0763E90C4520A21E1CC429841E4584D2",
+  .h256="AB64EFF7E88E2E46165E29F2BCE41826BD4C7B3552F6B382A9E7D3AF47C245F8",
+  .h384="E28E35E25A1874908BF0958BB088B69F3D742A753C86993E9F4B1C4C21988F95"
+	"8BD1FE0315B195ACA7B061213AC2A9BD",
+  .h512="70AEFEAA0E7AC4F8FE17532D7185A289BEE3B428D950C14FA8B713CA09814A38"
+	"7D245870E007A80AD97C369D193E41701AA07F3221D15F0E65A1FF970CEDF030"
+  },{
+  "For this sample, this 63-byte string will be used as input data",
+  .h224="0873433E1C8749DAD0E34F92AFF11C4B2CA310356283817747AA6940",
+  .h256="F08A78CBBAEE082B052AE0708F32FA1E50C5C421AA772BA5DBB406A2EA6BE342",
+  .h384="37B49EF3D08DE53E9BD018B0630067BD43D09C427D06B05812F48531BCE7D2A6"
+	"98EE2D1ED1FFED46FD4C3B9F38A8A557",
+  .h512="B3DE4AFBC516D2478FE9B518D063BDA6C8DD65FC38402DD81D1EB7364E72FB6E"
+	"6663CF6D2771C8F5A6DA09601712FB3D2A36C6FFEA3E28B0818B05B0A8660766"
+  },{
+  "And this textual data, astonishing as it may appear, is exactly "
+  "128 bytes in length, as are both SHA-384 and SHA-512 block sizes",
+  .h224="5A69CCCA0B5E7F84EFDA7C026D010FA46569C03F97B4440EBA32B941",
+  .h256="0AB803344830F92089494FB635AD00D76164AD6E57012B237722DF0D7AD26896",
+  .h384="E3E3602F4D90C935321D788F722071A8809F4F09366F2825CD85DA97CCD2955E"
+	"B6B8245974402AA64789ED45293E94BA",
+  .h512="97FB4EC472F3CB698B9C3C12A12768483E5B62BCDAD934280750B4FA4701E5E0"
+	"550A80BB0828342C19631BA55A55E1CEE5DE2FDA91FC5D40E7BEE1D4E6D415B3"
+  },{
+  "By hashing data that is one byte less than a multiple of a hash "
+  "block length (like this 127-byte string), bugs may be revealed.",
+  .h224="49E54148D21D457F2FFE28532543D91DA98724C9883E67682301DEC4",
+  .h256="E4326D0459653D7D3514674D713E74DC3DF11ED4D30B4013FD327FDB9E394C26",
+  .h384="1CA650F38480FA9DFB5729636BEC4A935EBC1CD4C0055EE50CAD2AA627E06687"
+	"1044FD8E6FDB80EDF10B85DF15BA7AAB",
+  .h512="D399507BBF5F2D0DA51DB1FF1FC51C1C9FF1DE0937E00D01693B240E84FCC340"
+	"0601429F45C297ACC6E8FCF1E4E4ABE9FF21A54A0D3D88888F298971BD206CD5"
+  }
+};
+
+proc PrintHex(s: @[]_byte, x: @[]_byte, n: _uint)
+{   var i: _uint;
+
+    err.str(s);
+    for i from 0 to n-1 do
+    	err.hex8(x[i]);
+    err.nl();
+}
+
+proc Hex1(x: _byte): _byte
+{
+    if x
+    is '0'..'9' then return x-'0';
+    is 'A'..'F' then return x-'A'+10;
+    is 'a'..'f' then return x-'a'+10;
+    return 0;	// error
+}
+
+proc FromHex(x: @[]_byte, n: _uint, b: @[]_byte)
+{   var i: _uint;
+
+    for i from 0 to n-1 do
+    {   b[i] = (Hex1(x[2*i]) << 4) | (Hex1(x[2*i+1]));
+    }
+}
+
+var nerr: _uint = 0;
+
+proc Check(test: boolean, which: @[]_byte, num: _uint): boolean
+{
+    if !test then
+    {   err.str("Test failed: ");
+    	err.str(which);
+    	err.str(" #");
+	err.uint(num);
+	err.nl();
+	nerr += 1;
+    }
+    return test;
+}
+
+var hash, good: [64]_byte;
+
+proc main(): _int
+{   var i, n: _uint;
+
+    for i from 0 to tests?len-1 do
+    {
+	n = _zlen(tests[i].msg@);
+//err.str("n="); err.uint(n); err.nl();
+	sha224.Hash(tests[i].msg, n, hash);
+	FromHex(tests[i].h224, 28, good);
+	if !Check(hash[0:28] == good[0:28], "sha256", i+1) then
+	{   PrintHex("bad =", hash, 28);
+	    PrintHex("good=", good, 28);
+	}
+	sha256.Hash(tests[i].msg, n, hash);
+	FromHex(tests[i].h256, 32, good);
+	if !Check(hash[0:32] == good[0:32], "sha256", i+1) then
+	{   PrintHex("bad =", hash, 32);
+	    PrintHex("good=", good, 32);
+	}
+	sha384.Hash(tests[i].msg, n, hash);
+	FromHex(tests[i].h384, 48, good);
+	if !Check(hash[0:48] == good[0:48], "sha384", i+1) then
+	{   PrintHex("bad =", hash, 48);
+	    PrintHex("good=", good, 48);
+	}
+	sha512.Hash(tests[i].msg, n, hash);	
+	FromHex(tests[i].h512, 64, good);
+	if !Check(hash[0:64] == good[0:64], "sha512", i+1) then
+	{   PrintHex("bad =", hash, 64);
+	    PrintHex("good=", good, 64);
+	}
+    }
+    return 0;
+}

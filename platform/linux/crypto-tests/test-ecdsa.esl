@@ -1,0 +1,797 @@
+/*
+ * The NIST CAVS tests for Eliptic Curve Digital Signature Algorith
+ *
+ * Only the first three tests that pass for each curve are implemented.
+ */
+
+import debug;
+alias debug as err;
+
+proc PrintN(msg: @[]_byte, x: @[]_uint32, n: _uint)
+{   var i: _uint;
+
+    err.str(msg); err.chr('=');
+    for i from 0 to n-1 do
+    {   err.str("0x");
+    	err.hex32(x[i]);
+    	if i < n-1 then
+    	{   err.chr(',');
+	    if (i&3) == 3 then err.str("\n\t");
+    	}
+    }
+    err.nl();
+}
+
+proc PrintHex(x: @[]_byte, n: _uint)
+{   var i: _uint;
+
+    for i from 0 to n-1 do
+    	err.hex8(x[i]);
+    err.nl();
+}
+
+proc Hex1(x: _byte): _byte
+{
+    if x
+    is '0'..'9' then return x-'0';
+    is 'A'..'F' then return x-'A'+10;
+    is 'a'..'f' then return x-'a'+10;
+    return 0;	// error
+}
+
+proc FromHex(x: @[]_byte, n: _uint, b: @[]_byte)
+{   var i: _uint;
+
+    for i from 0 to n-1 do
+    {   b[i] = (Hex1(x[2*i]) << 4) | (Hex1(x[2*i+1]));
+    }
+}
+
+var nerr: _uint = 0;
+
+proc Check(test: boolean, which: @[]_byte, msg: @[]_byte): boolean
+{
+    if !test then
+    {   err.str("Test failed: ");
+	err.str(which); err.chr(' ');
+	err.str(msg);
+	err.nl();
+	nerr += 1;
+    }
+    return test;
+}
+
+type TestS:
+{   Msg:@[]_byte;	// message
+    d:  @[]_byte;	// private key
+    Qx: @[]_byte;	// public key x
+    Qy: @[]_byte;	// public key y
+    k:  @[]_byte;	// random value
+    R:  @[]_byte;	// signature x
+    S:  @[]_byte;	// signature y
+};
+
+type TestV:
+{   Msg:@[]_byte;	// message
+    Qx: @[]_byte;	// public key x
+    Qy: @[]_byte;	// public key y
+    R:  @[]_byte;	// signature x
+    S:  @[]_byte;	// signature y
+    ok: boolean;	// true if this should validate
+};
+
+var msg: [2049]_uint32;
+
+
+import sha224;
+import secp192r1;
+package secp192r1
+{
+  const name = "secp192r1";
+/*
+  const tests: []TestS =
+  {
+  };
+*/
+  const testv: []TestV =
+  {
+    {
+    .Msg="c249c142ec49d38fdedc33cfaa58b025c0ab36329794d8db65bb9ccbaffb930a"
+	 "9003ba70d07dd2d96b9e263c002013a34bdf02884e40267c07b2a6203374eab0"
+	 "4182b57d19885b193be288cb3394b2be1d13fe3a613c3ad5e4dc15503573bce0"
+	 "ade1637fa7f60c72e90e399ecde75492774366a68451f8d65b9a2c37d3a7e74c",
+    .Qx ="d1648aa094db4f1549561dffa7215007bf81739581fbfa46",
+    .Qy ="44d9f9bb70ff41d86d474ee1e5c6bc561632bf082c0be9cf",
+    .R  ="d20dab7444a2066aa93815217ea0b0d0c2558680e77829b3",
+    .S  ="f635ffac94144753fa062ec393a795cc9323c4914a3023e5",
+    true
+    },{
+    .Msg="3b36a25d15c00bd3258f33bc9f5929524a2f5de3cdc2108d56caea9274e7b780"
+	 "36d34a198139f267a34b7997842e65a348cc5127bc3190944932e9c50559779b"
+	 "b2acb82645a9c29b044971b0a7245e4588db5e4f6e07e803ea5d7156a4445f6a"
+	 "26e625fcb55bd3dbd63d00cf9808ab601b8caaa5691bd254319433cc2381d66d",
+    .Qx ="7d0149399a41cbe032c352be3e4cd24ca8d2490abb5c6934",
+    .Qy ="e59a784d4037fc756921c23a9ceeefeb8b086fcd5086fd81",
+    .R  ="07e94f8f3b21196d18037d66d62ba58d821a02ebc00bc900",
+    .S  ="a54e5eaf65479dd8d2d670ae46be3a985b6c6882d990bf1d",
+    false	// S changed
+    },{
+    .Msg="89a613bc3e8e534327db9b89d42137bd95175dde5f967e53398dbd98997455e8"
+	 "82c3c9188927ecfd41a2d5b7863e18c24cbabb102164dc6077224938dfb3f15a"
+	 "cbeaa254b0e537032d48d015c01689b47bf5305034838cf3d233c9adbc41316e"
+	 "d0f1ea56fe8605351e49ee87a2fb5f5a0e94fadccf0e153b2ec24346723aed44",
+    .Qx ="0e141cd6d7a5b34e58a264e465d135172075ce18fb5fc3e7",
+    .Qy ="dc96df20da2666987038615d6e83bcdf0d3dba1fb81f8f5d",
+    .R  ="a2648400ebda75a7c5887e2470da675949a6a953f403f0da",
+    .S  ="50b64dda591105085f1261af389165929ff83d8e0b353260",
+    true
+    }
+  };
+
+     proc TestVerify()
+     {	var i, n: _uint;
+	var ok: boolean;
+	var R, S: Vect;
+	var pub: Point;
+	var hash: [sha224.DigestSize]_byte;	// hash is longer than curve
+	var h: [sha224.DigestSize/bignum.Base?size]bignum.Base;
+
+	for i from 0 to testv?len-1 do
+	{
+	    // convert messages from hex to bytes
+	    n = _zlen(testv[i].Msg@) / 2;	// assume no nibble stragler
+	    FromHex(testv[i].Msg, n, msg);
+	    sha224.Hash(msg, n, hash);
+	    bignum.Import(hash, h, sha224.DigestSize);
+	    bignum.ImportHexStr(testv[i].Qx, pub.x, K);
+	    bignum.ImportHexStr(testv[i].Qy, pub.y, K);
+	    bignum.ImportHexStr(testv[i].R,  R, K);
+	    bignum.ImportHexStr(testv[i].S,  S, K);
+	    ok = Validate(pub, h[1:K], R, S);
+	    Check(ok == testv[i].ok, name, "bad validate");
+	}
+    }
+}
+
+
+
+import sha224;
+import secp224r1;
+package secp224r1
+{
+  const name = "secp224r1/sha224";
+
+  const tests: []TestS =
+  {
+    {
+    .Msg="699325d6fc8fbbb4981a6ded3c3a54ad2e4e3db8a5669201912064c64e700c13"
+	 "9248cdc19495df081c3fc60245b9f25fc9e301b845b3d703a694986e4641ae3c"
+	 "7e5a19e6d6edbf1d61e535f49a8fad5f4ac26397cfec682f161a5fcd32c5e780"
+	 "668b0181a91955157635536a22367308036e2070f544ad4fff3d5122c76fad5d",
+    .d  ="16797b5c0c7ed5461e2ff1b88e6eafa03c0f46bf072000dfc830d615",
+    .Qx ="605495756e6e88f1d07ae5f98787af9b4da8a641d1a9492a12174eab",
+    .Qy ="f5cc733b17decc806ef1df861a42505d0af9ef7c3df3959b8dfc6669",
+    .k  ="d9a5a7328117f48b4b8dd8c17dae722e756b3ff64bd29a527137eec0",
+    .R  ="2fc2cff8cdd4866b1d74e45b07d333af46b7af0888049d0fdbc7b0d6",
+    .S  ="8d9cc4c8ea93e0fd9d6431b9a1fd99b88f281793396321b11dac41eb"
+    },{
+    .Msg="7de42b44db0aa8bfdcdac9add227e8f0cc7ad1d94693beb5e1d325e5f3f85b3b"
+	 "d033fc25e9469a89733a65d1fa641f7e67d668e7c71d736233c4cba20eb83c36"
+	 "8c506affe77946b5e2ec693798aecd7ff943cd8fab90affddf5ad5b8d1af332e"
+	 "6c5fe4a2df16837700b2781e08821d4fbdd8373517f5b19f9e63b89cfeeeef6f",
+    .d  ="cf020a1ff36c28511191482ed1e5259c60d383606c581948c3fbe2c5",
+    .Qx ="fa21f85b99d3dc18c6d53351fbcb1e2d029c00fa7d1663a3dd94695e",
+    .Qy ="e9e79578f8988b168edff1a8b34a5ed9598cc20acd1f0aed36715d88",
+    .k  ="c780d047454824af98677cf310117e5f9e99627d02414f136aed8e83",
+    .R  ="45145f06b566ec9fd0fee1b6c6551a4535c7a3bbfc0fede45f4f5038",
+    .S  ="7302dff12545b069cf27df49b26e4781270585463656f2834917c3ca"
+    },{
+    .Msg="af0da3adab82784909e2b3dadcecba21eced3c60d7572023dea171044d9a10e8"
+	 "ba67d31b04904541b87fff32a10ccc6580869055fec6216a00320a28899859a6"
+	 "b61faba58a0bc10c2ba07ea16f214c3ddcc9fc5622ad1253b63fe7e95227ae3c"
+	 "9caa9962cffc8b1c4e8260036469d25ab0c8e3643a820b8b3a4d8d43e4b728f9",
+    .d  ="dde6f173fa9f307d206ce46b4f02851ebce9638a989330249fd30b73",
+    .Qx ="fc21a99b060afb0d9dbf3250ea3c4da10be94ce627a65874d8e4a630",
+    .Qy ="e8373ab7190890326aac4aacca3eba89e15d1086a05434dd033fd3f3",
+    .k  ="6629366a156840477df4875cfba4f8faa809e394893e1f5525326d07",
+    .R  ="41f8e2b1ae5add7c24da8725a067585a3ad6d5a9ed9580beb226f23a",
+    .S  ="a5d71bff02dce997305dd337128046f36714398f4ef6647599712fae"
+    }
+  };
+
+  const testv: []TestV =
+  {
+    {	// NIST CAVS P-224,SHA-224 test 1
+    .Msg="2dad0fdc03e9617e0de30b3108e0ef155e4e6c3169cec76622c16dc55fcac39a"
+	 "5fb002472072754e7885cac0e318b3ce0588559152a37e6e55effb6b8e19c45a"
+	 "c8aaa91fbd8cad41fd2a2d5af03841ba13f405b20a04585ac0e456502b9686e7"
+	 "2e87e8ad7257d3d65781766c3752c6aa9a24d6f49052e753e2e31e155a35b7ec",
+    .Qx ="f1eb36b3e1c96a18d87878d5fa8b79d77afce9d2ce40d26199f33482",
+    .Qy ="ae819af474f3efbd62401a407036505c5a2d60449274593865de3374",
+    .R  ="003122e976bac378c06ec95fd73290b067e7ff022d23493c40663ec9",
+    .S  ="b99eb4220146a282c7a34f98a9a4fa38ed3f48ca2c7983cde2d3235f",
+    true
+    },{
+    .Msg="26b7a6da0a0099c0ed3b297e994765cee13a77fbb5ac13c5cf3cea4ea7bb66dd"
+	 "cc58f85e7b65787a40df26a475f9e47b1ef92db42afdb3ad37a52d773c90f2f0"
+	 "d6e0d2549a2ad5de26bcedcbe6b7629d727216b89928b873841d31c7ffcbda4b"
+	 "d3055eba8e66416c3601eab01e3ae8cffa20d9a9e79eb31cf1084354f0a25f25",
+    .Qx ="3bdcc7c6112cde3c0522f1a4863f1d7b6727c5bff67598ba2f1bafc1",
+    .Qy ="47acb6b254e0e8747e0039de471d0dda443cb09a592c678717d83200",
+    .R  ="a5aab7768f549f8fe3c7e650154c865b71ea5089bd6303bfdfd19316",
+    .S  ="ee4989c4b96bcc802464fe44b2adeb1b3506755a3f4fb3f9252bf21b",
+    false	// R changed
+    },{
+    .Msg="e9859a4fb2fe008ef14e8eb68dd00e06eb458483e54c3206385faabcc036f6e5"
+	 "aa5e0f28c0fb8a6cc345a0842e4cfb3240e9880d40665ddb75e893e9148cd0c1"
+	 "1667f6abcbab2abfa63dbbc32dceba439a36bbefb12a5b242bda3ed58b7f0010"
+	 "0fa4e0f8012f7d17d3e4d3210f0685817cd5584de4ae43655d9389bd70ace150",
+    .Qx ="7f9789c729355516588a5c75cb2cbcf85a14c35e14a5d03b4ef920d7",
+    .Qy ="49e95c49e62dd20f02ed16594f35ebf3415ed50e6efdc0c548101a9d",
+    .R  ="3c7b664413c2a0e4682a9d1c88243a96196fbd03f72cb873b9bee8b9",
+    .S  ="8f7f81ee9d3a2660ab1d666bac6cc434143ca9b04ff638ca7b4aa1ea",
+    true
+    }
+  };
+
+    proc TestSign()
+    {   var i, n: _uint;
+	var ok: boolean;
+	var priv, rand, R, S, myR, myS, h: Vect;
+	var pub: Point;
+	var r, s: [K*8+1]_byte;
+	var hash: [sha224.DigestSize]_byte;
+
+	for i from 0 to tests?len-1 do
+	{
+	    // convert messages from hex to bytes
+	    n = _zlen(tests[i].Msg@) / 2;	// assume no nibble stragler
+	    FromHex(tests[i].Msg, n, msg);
+	    sha224.Hash(msg, n, hash);
+	    bignum.Import(hash, h, sha224.DigestSize);
+	    bignum.ImportHexStr(tests[i].d,  priv, K);
+	    bignum.ImportHexStr(tests[i].Qx, pub.x, K);
+	    bignum.ImportHexStr(tests[i].Qy, pub.y, K);
+	    bignum.ImportHexStr(tests[i].k,  rand, K);
+	    bignum.ImportHexStr(tests[i].R,  R, K);
+	    bignum.ImportHexStr(tests[i].S,  S, K);
+	    ok = Sign(priv, h, rand, myR, myS);
+	    if Check(ok, name, "bad sign") then
+	    {
+		if !Check(myR == R, name, "bad R") then
+		{   PrintN("got ", myR, K);
+		}
+		if !Check(myS == S, name, "bad S") then
+		{   PrintN("got ", myS, K);
+		}
+		ok = Validate(pub, h, myR, myS);
+		Check(ok, name, "bad validate");
+	    }
+	}
+    }
+
+     proc TestVerify()
+     {	var i, n: _uint;
+	var ok: boolean;
+	var R, S, h: Vect;
+	var pub: Point;
+	var hash: [sha224.DigestSize]_byte;
+
+	for i from 0 to testv?len-1 do
+	{
+	    // convert messages from hex to bytes
+	    n = _zlen(testv[i].Msg@) / 2;	// assume no nibble stragler
+	    FromHex(testv[i].Msg, n, msg);
+	    sha224.Hash(msg, n, hash);
+	    bignum.Import(hash, h, sha224.DigestSize);
+	    bignum.ImportHexStr(testv[i].Qx, pub.x, K);
+	    bignum.ImportHexStr(testv[i].Qy, pub.y, K);
+	    bignum.ImportHexStr(testv[i].R,  R, K);
+	    bignum.ImportHexStr(testv[i].S,  S, K);
+	    ok = Validate(pub, h, R, S);
+	    Check(ok == testv[i].ok, name, "bad validate");
+	}
+    }
+}
+
+
+import sha256;
+import secp256r1;
+package secp256r1
+{
+  const name = "secp256r1/sha256";
+
+  const tests: []TestS =
+  {
+    {	// NIST CAVS P-256,SHA-256 test 1
+    .Msg="5905238877c77421f73e43ee3da6f2d9e2ccad5fc942dcec0cbd25482935faaf"
+	 "416983fe165b1a045ee2bcd2e6dca3bdf46c4310a7461f9a37960ca672d3feb5"
+	 "473e253605fb1ddfd28065b53cb5858a8ad28175bf9bd386a5e471ea7a65c17c"
+	 "c934a9d791e91491eb3754d03799790fe2d308d16146d5c9b0d0debd97d79ce8",
+    .d  ="519b423d715f8b581f4fa8ee59f4771a5b44c8130b4e3eacca54a56dda72b464",
+    .Qx ="1ccbe91c075fc7f4f033bfa248db8fccd3565de94bbfb12f3c59ff46c271bf83",
+    .Qy ="ce4014c68811f9a21a1fdb2c0e6113e06db7ca93b7404e78dc7ccd5ca89a4ca9",
+    .k  ="94a1bbb14b906a61a280f245f9e93c7f3b4a6247824f5d33b9670787642a68de",
+    .R  ="f3ac8061b514795b8843e3d6629527ed2afd6b1f6a555a7acabb5e6f79c8c2ac",
+    .S  ="8bf77819ca05a6b2786c76262bf7371cef97b218e96f175a3ccdda2acc058903"
+    },{
+    .Msg="c35e2f092553c55772926bdbe87c9796827d17024dbb9233a545366e2e5987dd"
+	 "344deb72df987144b8c6c43bc41b654b94cc856e16b96d7a821c8ec039b503e3"
+	 "d86728c494a967d83011a0e090b5d54cd47f4e366c0912bc808fbb2ea96efac8"
+	 "8fb3ebec9342738e225f7c7c2b011ce375b56621a20642b4d36e060db4524af1",
+    .d  ="0f56db78ca460b055c500064824bed999a25aaf48ebb519ac201537b85479813",
+    .Qx ="e266ddfdc12668db30d4ca3e8f7749432c416044f2d2b8c10bf3d4012aeffa8a",
+    .Qy ="bfa86404a2e9ffe67d47c587ef7a97a7f456b863b4d02cfc6928973ab5b1cb39",
+    .k  ="6d3e71882c3b83b156bb14e0ab184aa9fb728068d3ae9fac421187ae0b2f34c6",
+    .R  ="976d3a4e9d23326dc0baa9fa560b7c4e53f42864f508483a6473b6a11079b2db",
+    .S  ="1b766e9ceb71ba6c01dcd46e0af462cd4cfa652ae5017d4555b8eeefe36e1932"
+    },{
+    .Msg="3c054e333a94259c36af09ab5b4ff9beb3492f8d5b4282d16801daccb29f70fe"
+	 "61a0b37ffef5c04cd1b70e85b1f549a1c4dc672985e50f43ea037efa9964f096"
+	 "b5f62f7ffdf8d6bfb2cc859558f5a393cb949dbd48f269343b5263dcdb9c556e"
+	 "ca074f2e98e6d94c2c29a677afaf806edf79b15a3fcd46e7067b7669f83188ee",
+    .d  ="e283871239837e13b95f789e6e1af63bf61c918c992e62bca040d64cad1fc2ef",
+    .Qx ="74ccd8a62fba0e667c50929a53f78c21b8ff0c3c737b0b40b1750b2302b0bde8",
+    .Qy ="29074e21f3a0ef88b9efdf10d06aa4c295cc1671f758ca0e4cd108803d0f2614",
+    .k  ="ad5e887eb2b380b8d8280ad6e5ff8a60f4d26243e0124c2f31a297b5d0835de2",
+    .R  ="35fb60f5ca0f3ca08542fb3cc641c8263a2cab7a90ee6a5e1583fac2bb6f6bd1",
+    .S  ="ee59d81bc9db1055cc0ed97b159d8784af04e98511d0a9a407b99bb292572e96"
+    }
+  };
+
+  const testv: []TestV =
+  {
+    {
+    .Msg="e1130af6a38ccb412a9c8d13e15dbfc9e69a16385af3c3f1e5da954fd5e7c45f"
+	 "d75e2b8c36699228e92840c0562fbf3772f07e17f1add56588dd45f7450e1217"
+	 "ad239922dd9c32695dc71ff2424ca0dec1321aa47064a044b7fe3c2b97d03ce4"
+	 "70a592304c5ef21eed9f93da56bb232d1eeb0035f9bf0dfafdcc4606272b20a3",
+    .Qx ="e424dc61d4bb3cb7ef4344a7f8957a0c5134e16f7a67c074f82e6e12f49abf3c",
+    .Qy ="970eed7aa2bc48651545949de1dddaf0127e5965ac85d1243d6f60e7dfaee927",
+    .R  ="bf96b99aa49c705c910be33142017c642ff540c76349b9dab72f981fd9347f4f",
+    .S  ="17c55095819089c2e03b9cd415abdf12444e323075d98f31920b9e0f57ec871c",
+    true
+    },{
+    .Msg="73c5f6a67456ae48209b5f85d1e7de7758bf235300c6ae2bdceb1dcb27a7730f"
+	 "b68c950b7fcada0ecc4661d3578230f225a875e69aaa17f1e71c6be5c831f226"
+	 "63bac63d0c7a9635edb0043ff8c6f26470f02a7bc56556f1437f06dfa27b487a"
+	 "6c4290d8bad38d4879b334e341ba092dde4e4ae694a9c09302e2dbf443581c08",
+    .Qx ="e0fc6a6f50e1c57475673ee54e3a57f9a49f3328e743bf52f335e3eeaa3d2864",
+    .Qy ="7f59d689c91e463607d9194d99faf316e25432870816dde63f5d4b373f12f22a",
+    .R  ="1d75830cd36f4c9aa181b2c4221e87f176b7f05b7c87824e82e396c88315c407",
+    .S  ="cb2acb01dac96efc53a32d4a0d85d0c2e48955214783ecf50a4f0414a319c05a",
+    true
+    },{
+    .Msg="e4796db5f785f207aa30d311693b3702821dff1168fd2e04c0836825aefd850d"
+	 "9aa60326d88cde1a23c7745351392ca2288d632c264f197d05cd424a30336c19"
+	 "fd09bb229654f0222fcb881a4b35c290a093ac159ce13409111ff0358411133c"
+	 "24f5b8e2090d6db6558afc36f06ca1f6ef779785adba68db27a409859fc4c4a0",
+    .Qx ="87f8f2b218f49845f6f10eec3877136269f5c1a54736dbdf69f89940cad41555",
+    .Qy ="e15f369036f49842fac7a86c8a2b0557609776814448b8f5e84aa9f4395205e9",
+    .R  ="d19ff48b324915576416097d2544f7cbdf8768b1454ad20e0baac50e211f23b0",
+    .S  ="a3e81e59311cdfff2d4784949f7a2cb50ba6c3a91fa54710568e61aca3e847c6",
+    false	// bad S
+    }
+  };
+
+    proc TestSign()
+    {   var i, n: _uint;
+	var ok: boolean;
+	var priv, rand, R, S, myR, myS, h: Vect;
+	var pub: Point;
+	var r, s: [K*8+1]_byte;
+	var hash: [sha256.DigestSize]_byte;
+
+	for i from 0 to tests?len-1 do
+	{
+	    // convert messages from hex to bytes
+	    n = _zlen(tests[i].Msg@) / 2;	// assume no nibble stragler
+	    FromHex(tests[i].Msg, n, msg);
+	    sha256.Hash(msg, n, hash);
+	    bignum.Import(hash, h, sha256.DigestSize);
+	    bignum.ImportHexStr(tests[i].d,  priv, K);
+	    bignum.ImportHexStr(tests[i].Qx, pub.x, K);
+	    bignum.ImportHexStr(tests[i].Qy, pub.y, K);
+	    bignum.ImportHexStr(tests[i].k,  rand, K);
+	    bignum.ImportHexStr(tests[i].R,  R, K);
+	    bignum.ImportHexStr(tests[i].S,  S, K);
+	    ok = Sign(priv, h, rand, myR, myS);
+	    if Check(ok, name, "bad sign") then
+	    {
+		if !Check(myR == R, name, "bad R") then
+		{   PrintN("got ", myR, K);
+		}
+		if !Check(myS == S, name, "bad S") then
+		{   PrintN("got ", myS, K);
+		}
+		ok = Validate(pub, h, myR, myS);
+		Check(ok, name, "bad validate");
+	    }
+	}
+    }
+
+    proc TestVerify()
+    {	var i, n: _uint;
+	var ok: boolean;
+	var R, S, h: Vect;
+	var pub: Point;
+	var hash: [sha256.DigestSize]_byte;
+
+	for i from 0 to testv?len-1 do
+	{
+	    // convert messages from hex to bytes
+	    n = _zlen(testv[i].Msg@) / 2;	// assume no nibble stragler
+	    FromHex(testv[i].Msg, n, msg);
+	    sha256.Hash(msg, n, hash);
+	    bignum.Import(hash, h, sha256.DigestSize);
+	    bignum.ImportHexStr(testv[i].Qx, pub.x, K);
+	    bignum.ImportHexStr(testv[i].Qy, pub.y, K);
+	    bignum.ImportHexStr(testv[i].R,  R, K);
+	    bignum.ImportHexStr(testv[i].S,  S, K);
+	    ok = Validate(pub, h, R, S);
+	    Check(ok == testv[i].ok, name, "bad validate");
+	}
+    }
+}
+
+import sha384;
+import secp384r1;
+package secp384r1
+{
+  const name = "secp384r1.sha384";
+
+  const tests: []TestS =
+  {
+    {
+    .Msg="6b45d88037392e1371d9fd1cd174e9c1838d11c3d6133dc17e65fa0c485dcca9"
+	 "f52d41b60161246039e42ec784d49400bffdb51459f5de654091301a09378f93"
+	 "464d52118b48d44b30d781eb1dbed09da11fb4c818dbd442d161aba4b9edc79f"
+	 "05e4b7e401651395b53bd8b5bd3f2aaa6a00877fa9b45cadb8e648550b4c6cbe",
+    .d  ="201b432d8df14324182d6261db3e4b3f46a8284482d52e370da41e6cbdf45ec2"
+	 "952f5db7ccbce3bc29449f4fb080ac97",
+    .Qx ="c2b47944fb5de342d03285880177ca5f7d0f2fcad7678cce4229d6e1932fcac1"
+	 "1bfc3c3e97d942a3c56bf34123013dbf",
+    .Qy ="37257906a8223866eda0743c519616a76a758ae58aee81c5fd35fbf3a855b775"
+	 "4a36d4a0672df95d6c44a81cf7620c2d",
+    .k  ="dcedabf85978e090f733c6e16646fa34df9ded6e5ce28c6676a00f58a25283db"
+	 "8885e16ce5bf97f917c81e1f25c9c771",
+    .R  ="50835a9251bad008106177ef004b091a1e4235cd0da84fff54542b0ed755c1d6"
+	 "f251609d14ecf18f9e1ddfe69b946e32",
+    .S  ="0475f3d30c6463b646e8d3bf2455830314611cbde404be518b14464fdb195fdc"
+	 "c92eb222e61f426a4a592c00a6a89721"
+    },{
+    .Msg="d768f41e6e8ec2125d6cf5786d1ba96668ac6566c5cdbbe407f7f2051f3ad6b1"
+	 "acdbfe13edf0d0a86fa110f405406b69085219b5a234ebdb93153241f785d458"
+	 "11b3540d1c37424cc7194424787a51b79679266484c787fb1ded6d1a26b9567d"
+	 "5ea68f04be416caf3be9bd2cafa208fe2a9e234d3ae557c65d3fe6da4cb48da4",
+    .d  ="23d9f4ea6d87b7d6163d64256e3449255db14786401a51daa7847161bf56d494"
+	 "325ad2ac8ba928394e01061d882c3528",
+    .Qx ="5d42d6301c54a438f65970bae2a098cbc567e98840006e356221966c86d82e8e"
+	 "ca515bca850eaa3cd41f175f03a0cbfd",
+    .Qy ="4aef5a0ceece95d382bd70ab5ce1cb77408bae42b51a08816d5e5e1d3da8c18f"
+	 "cc95564a752730b0aabea983ccea4e2e",
+    .k  ="67ba379366049008593eac124f59ab017358892ee0c063d38f3758bb849fd25d"
+	 "867c3561563cac1532a323b228dc0890",
+    .R  ="fb318f4cb1276282bb43f733a7fb7c567ce94f4d02924fc758635ab2d1107108"
+	 "bf159b85db080cdc3b30fbb5400016f3",
+    .S  ="588e3d7af5da03eae255ecb1813100d95edc243476b724b22db8e85377660d76"
+	 "45ddc1c2c2ee4eaea8b683dbe22f86ca"
+    },{
+    .Msg="6af6652e92a17b7898e40b6776fabaf0d74cf88d8f0ebfa6088309cbe09fac47"
+	 "2eeac2aa8ea96b8c12e993d14c93f8ef4e8b547afe7ae5e4f3973170b35deb32"
+	 "39898918c70c1056332c3f894cd643d2d9b93c2561aac069577bbab45803250a"
+	 "31cd62226cab94d8cba7261dce9fe88c210c212b54329d76a273522c8ba91ddf",
+    .d  ="b5f670e98d8befc46f6f51fb2997069550c2a52ebfb4e5e25dd905352d9ef89e"
+	 "ed5c2ecd16521853aadb1b52b8c42ae6",
+    .Qx ="44ffb2a3a95e12d87c72b5ea0a8a7cb89f56b3bd46342b2303608d7216301c21"
+	 "b5d2921d80b6628dc512ccb84e2fc278",
+    .Qy ="e4c1002f1828abaec768cadcb7cf42fbf93b1709ccae6df5b134c41fae2b9a18"
+	 "8bfbe1eccff0bd348517d7227f2071a6",
+    .k  ="229e67638f712f57bea4c2b02279d5ccad1e7c9e201c77f6f01aeb81ea90e62b"
+	 "44b2d2107fd66d35e56608fff65e28e4",
+    .R  ="b11db592e4ebc75b6472b879b1d8ce57452c615aef20f67a280f8bca9b11a30a"
+	 "d4ac9d69541258c7dd5d0b4ab8dd7d49",
+    .S  ="4eb51db8004e46d438359abf060a9444616cb46b4f99c9a05b53ba6df02e914c"
+	 "9c0b6cc3a9791d804d2e4c0984dab1cc"
+    }
+  };
+
+  const testv: []TestV =
+  {
+    {
+    .Msg="93e7e75cfaf3fa4e71df80f7f8c0ef6672a630d2dbeba1d61349acbaaa476f5f"
+	 "0e34dccbd85b9a815d908203313a22fe3e919504cb222d623ad95662ea4a9009"
+	 "9742c048341fe3a7a51110d30ad3a48a777c6347ea8b71749316e0dd1902facb"
+	 "304a76324b71f3882e6e70319e13fc2bb9f3f5dbb9bd2cc7265f52dfc0a3bb91",
+    .Qx ="a370cdbef95d1df5bf68ec487122514a107db87df3f8852068fd4694abcadb9b"
+	 "14302c72491a76a64442fc07bd99f02c",
+    .Qy ="d397c25dc1a5781573d039f2520cf329bf65120fdbe964b6b80101160e533d55"
+	 "70e62125b9f3276c49244b8d0f3e44ec",
+    .R  ="c6c7bb516cc3f37a304328d136b2f44bb89d3dac78f1f5bcd36b412a8b4d879f"
+	 "6cdb75175292c696b58bfa9c91fe6391",
+    .S  ="6b711425e1b14f7224cd4b96717a84d65a60ec9951a30152ea1dd3b6ea66a008"
+	 "8d1fd3e9a1ef069804b7d969148c37a0",
+    true
+    },{
+    .Msg="15493aa10cfb804b3d80703ca02af7e2cfdc671447d9a171b418ecf6ca48b450"
+	 "414a28e7a058a78ab0946186ad2fe297e1b7e20e40547c74f94887a00f27dde7"
+	 "f78a3c15eb1115d704972b35a27caf8f7cdcce02b96f8a72d77f36a20d3f829e"
+	 "915cd3bb81f9c2997787a73616ed5cb0e864231959e0b623f12a18f779599d65",
+    .Qx ="d1cf635ca04f09b58879d29012f2025479a002bda590020e6a238bccc7644781"
+	 "31cac7e6980c67027d92ece947fea5a6",
+    .Qy ="21f7675c2be60c0a5b7d6df2bcc89b56212a2849ec0210c59316200c59864fd8"
+	 "6b9a19e1641d206fd8b29af7768b61d3",
+    .R  ="6101d26e76690634b7294b6b162dcc1a5e6233813ba09edf8567fb57a8f707e0"
+	 "24abe0eb3ce948675cd518bb3bfd4383",
+    .S  ="4e2a30f71c8f18b74184837f981a90485cd5943c7a184aba9ac787d179f17011"
+	 "4a96ddbb8720860a213cc289ae340f1f",
+    false	// Message changed
+    },{
+    .Msg="bc5582967888a425fb757bd4965900f01e6695d1547ed967c1d4f67b1b1de365"
+	 "d203f407698761699fec5f5a614c21e36a9f57a8aaf852e95538f56157855345"
+	 "68811a9a9ccc349843f6c16dc90a4ac96a8f72c33d9589a860f4981d7b4ee717"
+	 "3d1db5d49c4361368504c9a6cbbaedc2c9bff2b12884379ba90433698ceb881d",
+    .Qx ="d15ca4b2d944d5539658a19be8ef85874f0c363b870f1cd1f2dc9cb68b2a43a1"
+	 "0d37064697c84543e60982ab62bb32c8",
+    .Qy ="062fb7dfc379fc6465302ac5d8d11d3b957b594c9ef445cfe856765dd59e6f10"
+	 "f11809e115ac64969baa23543f2e5661",
+    .R  ="e2cf123ce15ca4edad5f087778d483d9536e4a37d2d55599541c06f878e60354"
+	 "aa31df250b2fc4ed252b80219552c958",
+    .S  ="696707a7e3f9a4b918e7c994e7332103d8e816bbe6d0d1cf72877318e087ed0e"
+	 "230b0d1269902f369acb432b9e97a389",
+    true
+    }
+  };
+
+    proc TestSign()
+    {   var i, n: _uint;
+	var ok: boolean;
+	var priv, rand, R, S, myR, myS, h: Vect;
+	var pub: Point;
+	var r, s: [K*8+1]_byte;
+	var hash: [sha384.DigestSize]_byte;
+
+	for i from 0 to tests?len-1 do
+	{
+	    // convert messages from hex to bytes
+	    n = _zlen(tests[i].Msg@) / 2;	// assume no nibble stragler
+	    FromHex(tests[i].Msg, n, msg);
+	    sha384.Hash(msg, n, hash);
+	    bignum.Import(hash, h, sha384.DigestSize);
+	    bignum.ImportHexStr(tests[i].d,  priv, K);
+	    bignum.ImportHexStr(tests[i].Qx, pub.x, K);
+	    bignum.ImportHexStr(tests[i].Qy, pub.y, K);
+	    bignum.ImportHexStr(tests[i].k,  rand, K);
+	    bignum.ImportHexStr(tests[i].R,  R, K);
+	    bignum.ImportHexStr(tests[i].S,  S, K);
+	    ok = Sign(priv, h, rand, myR, myS);
+	    if Check(ok, name, "bad sign") then
+	    {
+		if !Check(myR == R, name, "bad R") then
+		{   PrintN("got ", myR, K);
+		}
+		if !Check(myS == S, name, "bad S") then
+		{   PrintN("got ", myS, K);
+		}
+		ok = Validate(pub, h, myR, myS);
+		Check(ok, name, "bad validate");
+	    }
+	}
+    }
+
+    proc TestVerify()
+    {	var i, n: _uint;
+	var ok: boolean;
+	var R, S, h: Vect;
+	var pub: Point;
+	var hash: [sha384.DigestSize]_byte;
+
+	for i from 0 to testv?len-1 do
+	{
+	    // convert messages from hex to bytes
+	    n = _zlen(testv[i].Msg@) / 2;	// assume no nibble stragler
+	    FromHex(testv[i].Msg, n, msg);
+	    sha384.Hash(msg, n, hash);
+	    bignum.Import(hash, h, sha384.DigestSize);
+	    bignum.ImportHexStr(testv[i].Qx, pub.x, K);
+	    bignum.ImportHexStr(testv[i].Qy, pub.y, K);
+	    bignum.ImportHexStr(testv[i].R,  R, K);
+	    bignum.ImportHexStr(testv[i].S,  S, K);
+	    ok = Validate(pub, h, R, S);
+	    Check(ok == testv[i].ok, name, "bad validate");
+	}
+    }
+}
+
+import sha512;
+import secp521r1;
+package secp521r1
+{
+  const name = "secp521r1/sha512";
+
+  const tests: []TestS =
+  {
+    {
+    .Msg="9ecd500c60e701404922e58ab20cc002651fdee7cbc9336adda33e4c1088fab1"
+	 "964ecb7904dc6856865d6c8e15041ccf2d5ac302e99d346ff2f686531d255216"
+	 "78d4fd3f76bbf2c893d246cb4d7693792fe18172108146853103a51f824acc62"
+	 "1cb7311d2463c3361ea707254f2b052bc22cb8012873dcbb95bf1a5cc53ab89f",
+    .d  ="0f749d32704bc533ca82cef0acf103d8f4fba67f08d2678e515ed7db886267ff"
+	 "af02fab0080dca2359b72f574ccc29a0f218c8655c0cccf9fee6c5e567aa14cb926",
+    .Qx ="061387fd6b95914e885f912edfbb5fb274655027f216c4091ca83e19336740fd"
+	 "81aedfe047f51b42bdf68161121013e0d55b117a14e4303f926c8debb77a7fdaad1",
+    .Qy ="0e7d0c75c38626e895ca21526b9f9fdf84dcecb93f2b233390550d2b1463b7ee"
+	 "3f58df7346435ff0434199583c97c665a97f12f706f2357da4b40288def888e59e6",
+    .k  ="03af5ab6caa29a6de86a5bab9aa83c3b16a17ffcd52b5c60c769be3053cdddea"
+	 "c60812d12fecf46cfe1f3db9ac9dcf881fcec3f0aa733d4ecbb83c7593e864c6df1",
+    .R  ="04de826ea704ad10bc0f7538af8a3843f284f55c8b946af9235af5af74f2b76e"
+	 "099e4bc72fd79d28a380f8d4b4c919ac290d248c37983ba05aea42e2dd79fdd33e8",
+    .S  ="087488c859a96fea266ea13bf6d114c429b163be97a57559086edb64aed4a185"
+	 "94b46fb9efc7fd25d8b2de8f09ca0587f54bd287299f47b2ff124aac566e8ee3b43"
+    },{
+    .Msg="b3c63e5f5a21c4bfe3dbc644354d9a949186d6a9e1dd873828782aa6a0f1df2f"
+	 "64114a430b1c13fe8a2e09099e1ed05ef70de698161039ded73bcb50b312673b"
+	 "b073f8a792ac140a78a8b7f3586dffb1fc8be4f54516d57418ccc9945025ce3a"
+	 "cf1eb84f69ceee5e9bd10c18c251dbc481562cd3aae54b54ab618cb1eeda33cf",
+    .d  ="1a4d2623a7d59c55f408331ba8d1523b94d6bf8ac83375ceb57a2b395a5bcf97"
+	 "7cfc16234d4a97d6f6ee25a99aa5bff15ff535891bcb7ae849a583e01ac49e0e9b6",
+    .Qx ="04d5c8afee038984d2ea96681ec0dccb6b52dfa4ee2e2a77a23c8cf43ef19905"
+	 "a34d6f5d8c5cf0981ed804d89d175b17d1a63522ceb1e785c0f5a1d2f3d15e51352",
+    .Qy ="014368b8e746807b2b68f3615cd78d761a464ddd7918fc8df51d225962fdf1e3"
+	 "dc243e265100ff0ec133359e332e44dd49afd8e5f38fe86133573432d33c02fa0a3",
+    .k  ="0bc2c0f37155859303de6fa539a39714e195c37c6ea826e224c8218584ae09cd"
+	 "0d1cc14d94d93f2d83c96e4ef68517fdb3f383da5404e5a426bfc5d424e253c181b",
+    .R  ="1a3c4a6386c4fb614fba2cb9e74201e1aaa0001aa931a2a939c92e04b8344535"
+	 "a20f53c6e3c69c75c2e5d2fe3549ed27e6713cb0f4a9a94f6189eb33bff7d453fce",
+    .S  ="16a997f81aa0bea2e1469c8c1dab7df02a8b2086ba482c43af04f2174831f2b1"
+	 "761658795adfbdd44190a9b06fe10e578987369f3a2eced147cff89d8c2818f7471"
+    },{
+    .Msg="6e0f96d56505ffd2d005d5677dbf926345f0ff0a5da456bbcbcfdc2d33c8d878"
+	 "b0bc8511401c73168d161c23a88b04d7a9629a7a6fbcff241071b0d212248fcc"
+	 "2c94fa5c086909adb8f4b9772b4293b4acf5215ea2fc72f8cec57b5a13792d78"
+	 "59b6d40348fc3ba3f5e7062a19075a9edb713ddcd391aefc90f46bbd81e2557b",
+    .d  ="14787f95fb1057a2f3867b8407e54abb91740c097dac5024be92d5d65666bb16"
+	 "e4879f3d3904d6eab269cf5e7b632ab3c5f342108d1d4230c30165fba3a1bf1c66f",
+    .Qx ="0c2d540a7557f4530de35bbd94da8a6defbff783f54a65292f8f76341c996cea"
+	 "38795805a1b97174a9147a8644282e0d7040a6f83423ef2a0453248156393a1782e",
+    .Qy ="119f746c5df8cec24e4849ac1870d0d8594c799d2ceb6c3bdf891dfbd2242e7e"
+	 "a24d6aec3166214734acc4cbf4da8f71e2429c5c187b2b3a048527c861f58a9b97f",
+    .k  ="186cd803e6e0c9925022e41cb68671adba3ead5548c2b1cd09348ab19612b7af"
+	 "3820fd14da5fe1d7b550ed1a3c8d2f30592cd7745a3c09ee7b5dcfa9ed31bdd0f1f",
+    .R  ="10ed3ab6d07a15dc3376494501c27ce5f78c8a2b30cc809d3f9c3bf1aef437e5"
+	 "90ef66abae4e49065ead1af5f752ec145acfa98329f17bca9991a199579c41f9229",
+    .S  ="08c3457fe1f93d635bb52df9218bf3b49a7a345b8a8a988ac0a254340546752c"
+	 "ddf02e6ce47eee58ea398fdc9130e55a4c09f5ae548c715f5bcd539f07a34034d78"
+    }
+  };
+  const testv: []TestV =
+  {
+    {
+    .Msg="f69417bead3b1e208c4c99236bf84474a00de7f0b9dd23f991b6b60ef0fb3c62"
+	 "073a5a7abb1ef69dbbd8cf61e64200ca086dfd645b641e8d02397782da92d354"
+	 "2fbddf6349ac0b48b1b1d69fe462d1bb492f34dd40d137163843ac11bd099df7"
+	 "19212c160cbebcb2ab6f3525e64846c887e1b52b52eced9447a3d31938593a87",
+    .Qx ="153eb2be05438e5c1effb41b413efc2843b927cbf19f0bc9cc14b693eee26394"
+	 "a0d8880dc946a06656bcd09871544a5f15c7a1fa68e00cdc728c7cfb9c448034867",
+    .Qy ="143ae8eecbce8fcf6b16e6159b2970a9ceb32c17c1d878c09317311b7519ed5e"
+	 "ce3374e7929f338ddd0ec0522d81f2fa4fa47033ef0c0872dc049bb89233eef9bc1",
+    .R  ="0dd633947446d0d51a96a0173c01125858abb2bece670af922a92dedcec06713"
+	 "6c1fa92e5fa73d7116ac9c1a42b9cb642e4ac19310b049e48c53011ffc6e7461c36",
+    .S  ="0efbdc6a414bb8d663bb5cdb7c586bccfe7589049076f98cee82cdb5d203fddb"
+	 "2e0ffb77954959dfa5ed0de850e42a86f5a63c5a6592e9b9b8bd1b40557b9cd0cc0",
+    true
+    },{
+    .Msg="3607eaa1db2f696b93d573f67f0359422101cc6ceb526a5ec87b249e5b791ac4"
+	 "df488f4832eb00c6ec94bb52b7dd9d953a9c3ced3fb7171d28c42f81fd9998cd"
+	 "7d35c7030975381e54e071a37eb41d3e419fe93576d141e36a980089db54ebbf"
+	 "3a3ebf8a076daf8e57ce4484d7f7d234e1f6d658da5103a6e1d6ae9641ecac79",
+    .Qx ="1184b27a48e223891cbd1f4a0255747d078f82768157e5adcc8e78355a2ff17d"
+	 "8363dfa39bcdb48e2fae759ea3bd6a8909ce1b2e7c20653915b7cd7b94d8f110349",
+    .Qy ="03bd6e273ee4278743f1bb71ff7aefe1f2c52954d674c96f268f3985e69727f2"
+	 "2adbe31e0dbe01da91e3e6d19baf8efa4dcb4d1cacd06a8efe1b617bd681839e6b9",
+    .R  ="04c1d88d03878f967133eb56714945d3c89c3200fad08bd2d3b930190246bf8d"
+	 "43e453643c94fdab9c646c5a11271c800d5df25c11927c000263e785251d62acd59",
+    .S  ="12e31766af5c605a1a67834702052e7e56bbd9e2381163a9bf16b579912a98be"
+	 "babb70587da58bec621c1e779a8a21c193dda0785018fd58034f9a6ac3e297e3790",
+    false	// Message changed
+    },{
+    .Msg="27383a923d22292dacff105f00d0433eb719cc5fdf0d555f05a75fef392eb9a2"
+	 "b10aa7984ff8cfcc1425366578d138d193d735706e9689e1f2590374075c3b01"
+	 "43cf2a6f0d2108dcc3d6682c060e036c399774a3bc7800c7f34cba204693a428"
+	 "03df6592165fa19e34b6c1872ea11aa13e7a6648a4f0d56a5bf41dffd8f03aa4",
+    .Qx ="0365388d9589c18ae608124b4cf746ff488183a912e07d26b6e867c5defb552a"
+	 "5a0df5a16b6342014dd1b0b6760072bcd60045d6a9a514fc74d16047c2e8765636d",
+    .Qy ="1a5319b26fd555f2a12e557418f6aa65a3461aeaea5c0c6d8698ceaa5495eed7"
+	 "a7d2fed0b76e77b5be11834f36e413d5288e47231c0eb0e9007d4b042bb7a1b6014",
+    .R  ="1d9ef377063a592cf81e27815a2c20789ff9b60f7f125e618b52d90b35abdd41"
+	 "cd7f437cfad337953ab0314fe8e79a2f2d27fa08597d4b28313358f714a737321fb",
+    .S  ="0f01d4f150e0a174674a6a61a58a4ba781406024f6dd1b5252e04807b8a807a4"
+	 "ff8d52883eaa258286e506ef4b04ca890e6f81a79ed9a0cd5ed585094fea0bc5c43",
+    true
+    }
+  };
+
+    proc TestSign()
+    {   var i, n: _uint;
+	var ok: boolean;
+	var priv, rand, R, S, myR, myS, h: Vect;
+	var pub: Point;
+	var r, s: [K*8+1]_byte;
+	var hash: [K*4]_byte;
+	const pad = (K*4) - sha512.DigestSize;
+
+	for i from 0 to tests?len-1 do
+	{
+	    // convert messages from hex to bytes
+	    n = _zlen(tests[i].Msg@) / 2;	// assume no nibble stragler
+	    FromHex(tests[i].Msg, n, msg);
+	    sha512.Hash(msg, n, hash[pad:]);
+	    hash[0:pad] = { 0 };
+	    bignum.Import(hash, h, K*4);
+	    bignum.ImportHexStr(tests[i].d,  priv, K);
+	    bignum.ImportHexStr(tests[i].Qx, pub.x, K);
+	    bignum.ImportHexStr(tests[i].Qy, pub.y, K);
+	    bignum.ImportHexStr(tests[i].k,  rand, K);
+	    bignum.ImportHexStr(tests[i].R,  R, K);
+	    bignum.ImportHexStr(tests[i].S,  S, K);
+	    ok = Sign(priv, h, rand, myR, myS);
+	    if Check(ok, name, "bad sign") then
+	    {
+		if !Check(myR == R, name, "bad R") then
+		{   PrintN("got ", myR, K);
+		}
+		if !Check(myS == S, name, "bad S") then
+		{   PrintN("got ", myS, K);
+		}
+		ok = Validate(pub, h, myR, myS);
+		Check(ok, name, "bad validate");
+	    }
+	}
+    }
+
+    proc TestVerify()
+    {	var i, n: _uint;
+	var ok: boolean;
+	var R, S, h: Vect;
+	var pub: Point;
+	var hash: [K*4]_byte;
+	const pad = (K*4) - sha512.DigestSize;
+
+	for i from 0 to testv?len-1 do
+	{
+	    // convert messages from hex to bytes
+	    n = _zlen(testv[i].Msg@) / 2;	// assume no nibble stragler
+	    FromHex(testv[i].Msg, n, msg);
+	    sha512.Hash(msg, n, hash[pad:]);
+	    hash[0:pad] = { 0 };
+	    bignum.Import(hash, h, K*4);
+	    bignum.ImportHexStr(testv[i].Qx, pub.x, K);
+	    bignum.ImportHexStr(testv[i].Qy, pub.y, K);
+	    bignum.ImportHexStr(testv[i].R,  R, K);
+	    bignum.ImportHexStr(testv[i].S,  S, K);
+	    ok = Validate(pub, h, R, S);
+	    Check(ok == testv[i].ok, name, "bad validate");
+	}
+    }
+}
+
+
+proc main(): _int
+{
+    secp192r1.TestVerify();
+
+    secp224r1.TestVerify();
+    secp224r1.TestSign();
+
+    secp256r1.TestVerify();
+    secp256r1.TestSign();
+
+    secp384r1.TestSign();
+    secp384r1.TestVerify();
+
+    secp521r1.TestVerify();
+    secp521r1.TestSign();
+
+    return _int(nerr);
+}
+

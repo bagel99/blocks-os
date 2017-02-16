@@ -1,14 +1,15 @@
 /*
  * SHA256 crptographic hash function
  *
+ * Reference
+ *  1. NIST FIPS 180-2
+ *
  * Copyright Brian G. Lucas, 2016
  * License: New BSD.
  */
 
 package sha256
 {
-    type be32: _uint32: be;	// big-endian 32-bit unsigned
-
     const BlockSize  = 64;
     const DigestSize = 32;
 
@@ -45,6 +46,19 @@ package sha256
 	0x90BEFFFA, 0xA4506CEB, 0xBEF9A3F7, 0xC67178F2,
     };
 
+    const InitHash: [8]_uint32 =
+    {
+        0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A,
+        0x510E527F, 0x9B05688C, 0x1F83D9AB, 0x5BE0CD19
+    };
+    
+    proc (ctx: pContext) Start()
+    {
+	ctx.total = 0;
+	ctx.state = InitHash;
+	_zero(ctx.leftover);
+    }
+
     proc S0(x: _uint32): _uint32: inline
     {
 	return _ror(x,7) ^ _ror(x,18) ^ (x >> 3);
@@ -73,19 +87,6 @@ package sha256
     proc F1(x: _uint32, y: _uint32, z: _uint32): _uint32: inline
     {
 	return z ^ (x & (y ^ z));
-    }
-
-    proc (ctx: pContext) Start()
-    {
-	ctx.total = 0;
-        ctx.state[0] = 0x6A09E667;
-        ctx.state[1] = 0xBB67AE85;
-        ctx.state[2] = 0x3C6EF372;
-        ctx.state[3] = 0xA54FF53A;
-        ctx.state[4] = 0x510E527F;
-        ctx.state[5] = 0x9B05688C;
-        ctx.state[6] = 0x1F83D9AB;
-        ctx.state[7] = 0x5BE0CD19;
     }
 
     proc (ctx: pContext) Process(data: @[64]_byte)

@@ -211,7 +211,9 @@ package lowpan
     type LPBlock(Block):
     {   ubid:     BlockID;      // block ID of upper block (IPv6)
 	uifn:     _uint8;       // upper interface number
+	seqno:    _uint8;       // frame sequence number
 	fragtag:  _uint16;      // unique tag for fragments
+	panid:    _uint16;      // PAN ID
 	saddr:    _uint16;      // short address, 0 => invalid
 	laddr:    [8]_uint8;    // long address
 	adrtable: [NumAdrContexts] AdrContext;
@@ -222,6 +224,7 @@ package lowpan
 
     proc (ib: pLPBlock) SetLongAddr(adr: @[8]_uint8)
     {
+if db > 0 then { debug.dumpb("lowpan.SetLongAddr: ", adr, 8); }
 	ib.laddr = adr@;
     }
 
@@ -407,61 +410,73 @@ debug.str("mesh route not yet implemented\n");
 	return AM128;
     }
 
-    proc UDPHeaderUnpack(bp: @_memory, phu: inet.pUDPHeader): _uint
+    /*
+     * UDP Header Compression
+     *
+     * Since the UDP header and the compressed header are both big-endian
+     * we can just copy fields.
+     */
+
+    proc UDPHeaderUnpack(bp: @_memory, up: @_memory): _uint
     {   var n: _uint;
 
 	if bp[0] & 0b11
 	is 3 then
-	{   phu.srcport = (bp[1] >> 4)  | 0xF0B0;
-	    phu.dstport = (bp[1] & 0xF) | 0xF0B0;
+	{   up[0] = 0xF0;
+	    up[1] = (bp[1] >> 4)  | 0xB0;
+	    up[2] = 0xF0;
+	    up[3] = (bp[1] & 0xF) | 0xB0;
 	    n = 2;
 	}
 	is 2 then
-	{   phu.srcport = _unpkbe(bp[1:2]);
+	{   up[0:2] = bp[1:2];			    // srcport
+	    up[2] = 0xF0;
+	    up[3] = bp[3];
 	    n = 4;
 	}
 	is 1 then
-	{   phu.srcport = bp[1] | 0xF000;
-	    phu.dstport = _unpkbe(bp[2:2]);
+	{   up[0] = 0xF0;
+	    up[1] = bp[1];
+	    up[2:2] = bp[2:2];			    // dstport
 	    n = 4;
 	}
 	is 0 then
-	{   phu.srcport = _unpkbe(bp[1:2]);
-	    phu.dstport = _unpkbe(bp[3:2]);
+	{   up[0:2] = bp[1:2];			    // srcport
+	    up[2:2] = bp[3:2];			    // dstport
 	    n = 5;
 	}
-	phu.chksum = (bp[n] << 8) | bp[n+1];
+	up[6:2] = bp[n:2];			    // checksum
 	return n+2;
     }
 
-    proc UDPHeaderPack(phu: inet.pUDPHeader, bp: @_memory): _uint
+    proc UDPHeaderPack(up: @_memory, bp: @_memory): _uint
     {   var n: _uint;
 
-	if phu.srcport & 0xFFF0 == 0xF0B0 &&
-	       phu.dstport & 0xFFF0 == 0xF0B0 then
+	if up[0] == 0xF0 && (up[1] & 0xF0) == 0xB0 &&
+	   up[2] == 0xF0 && (up[2] & 0xF0) == 0xB0 then
 	{   bp[0] = NHC_UDP|3;
-	    bp[1] = ((phu.srcport & 0xF) << 4) | (phu.dstport & 0xF);
+	    bp[1] = ((up[3] & 0xF) << 4) | (up[1] & 0xF);
 	    n = 2;
 	}
-	elif phu.dstport & 0xFF00 == 0xF000 then
+	elif up[2] == 0xF0 then
 	{   bp[0] = NHC_UDP|2;
-	    _packbe(bp[1:2], phu.srcport);
-	    bp[3] = _uint8(phu.dstport);
+	    bp[1:2] = up[0:2];			    // srcport
+	    bp[3] = up[3];			    // dstport, lo
 	    n = 4;
 	}
-	elif phu.srcport & 0xFF00 == 0xF000 then
+	elif up[0] == 0xF0 then
 	{   bp[0] = NHC_UDP|1;
-	    bp[1] = _uint8(phu.srcport);
-	    _packbe(bp[2:2], phu.dstport);
+	    bp[1] = up[1];			    // srcport, lo
+	    bp[2:2] = up[2:2];			    // dstport
 	    n = 4;
 	}
 	else
 	{   bp[0] = NHC_UDP|0;
-	    _packbe(bp[1:2], phu.srcport);
-	    _packbe(bp[3:2], phu.dstport);
+	    bp[1:2] = up[0:2];			    // srcport
+	    bp[3:2] = up[2:2];			    // dstport
 	    n = 5;
 	}
-	_packbe(bp[n:2], phu.chksum);
+	bp[n:2] = up[6:2];			    // checksum
 	return n+2;
     }
 
@@ -582,7 +597,7 @@ if db > 0 then { debug.str("dst context not found\n"); }
 	    phu = inet.pUDPHeader(nbp[offs:inet.UDPHeader?size]);
 	    n += UDPHeaderUnpack(bp[n:], phu);
 	    if totlen == 0 then
-	    	phu.len = mb.Size() - n;
+		phu.len = mb.Size() - n + inet.UDPHeader?size;
 	    else
 	    	phu.len = totlen - ipv6.Header?size - inet.UDPHeader?size;
 	    offs += inet.UDPHeader?size;
@@ -873,7 +888,7 @@ if db > 0 then debug.str("HC1 frame not handled\n");
 
 	h0 = { .type=DISP, .one=1 };	// initialize top 3 bits
 	h1 = {};
-	n = 1;				// reserve space for cid
+	n = 0;
 	bp = mb.Data();
 	ph6 = ipv6.pHeader(bp);
 	// 1. compress flow and traffic
@@ -980,21 +995,19 @@ debug.str(" k="); debug.uint(k); debug.nl(); }
 	    hdrlen += inet.UDPHeader?size;
 	}
 	// replace the IPv6 header with the compressed information
-	if !h1.cid then
-	    n -= 1;	 // don't need space for context id
 if db > 2 then { debug.str("shrink="); debug.uint(hdrlen);
-debug.str(" grow="); debug.uint(n+2); debug.nl(); }
+debug.str(" grow="); debug.uint(n+2+_uint8(h1.cid)); debug.nl(); }
 	mb.ShrinkHead(hdrlen);
-	mb.GrowHead(n + 2);
+	mb.GrowHead(n + 2 + _uint8(h1.cid));
 	bp = mb.Data();
 	bp[0] = _byte(h0);
 	bp[1] = _byte(h1);
 	if h1.cid then
-	{   cd[0] = cid;
-	    bp[2:n] = cd[0:n];
+	{   bp[2] = cid;
+	    bp[3:n] = cd[0:n];
 	}
 	else
-	    bp[2:n] = cd[1:n-1];
+	    bp[2:n] = cd[0:n];
     }
 
     proc (ib: pLPBlock) HeaderIPv6(mb: pMBuf)
@@ -1006,9 +1019,6 @@ debug.str(" grow="); debug.uint(n+2); debug.nl(); }
 
     proc (ib: pLPBlock) LSend(mb: pMBuf, info:@ieee802154.FrameInfo)
     {
-	// flip local/univeral bits
-	info.srcadr[0] = info.srcadr[0] ^ 0x02;
-	info.dstadr[0] = info.dstadr[0] ^ 0x02;
 	ieee802154.Xmit(mb.Data(), mb.Size(), info);
     }
 
@@ -1098,17 +1108,31 @@ debug.str("\tnewlen="); debug.uint(newlen); debug.nl(); }
 
     proc (ib: pLPBlock) USend(mb: pMBuf)
     {   var info: ieee802154.FrameInfo;
-	var ip: ipv6.pHeader;
 	var pb: @[]_byte;
 
 if db > 3 then { debug.dumpb("lowpan SEND", mb.Data(), mb.Size()); }
 	_zero(info);
 	pb = mb.Data();
+if db > 1 then {
+debug.dumpb("lowpan.USend dstadr=", pb[0:8], 8); }
 	info.dstadr = pb[0:8];
-	ip = ipv6.pHeader(mb.ShrinkHead(8));
-	info.srcadr = ip.srcaddr[8:8];
-	info.dstpan = MyPANId;	// FIXME
-	info.srcpan = MyPANId;	// FIXME
+	// flip local/univeral bits
+	info.dstadr[0] = info.dstadr[0] ^ 0x02;
+	if info.dstadr[3:2] == {0xFF,0xFE} then // FIXME - broadcast indicator
+	{   info.srcpan = ieee802154.BroadcastPAN;
+	    info.dstpan = ieee802154.BroadcastPAN;
+	    info.flags = {.wack=false};
+	}
+	else
+	{
+	    info.dstpan = ib.panid;
+	    info.srcpan = ib.panid;
+	    info.flags = {.wack=true};
+	}
+	info.srcadr = ib.laddr;
+	info.seqno = ib.seqno;
+	ib.seqno += 1;
+	mb.ShrinkHead(8);
 	ib.Send(mb, info);
     }
 
@@ -1121,7 +1145,8 @@ if db > 3 then { debug.dumpb("lowpan SEND", mb.Data(), mb.Size()); }
 	{   li = _new(comm.LinkInfo);
 	    li.code = UP;;
 	    li.tag = ib.uifn;	// interface number
-	    li.id[0:8] = MyIID;     // FIXME - configure, how?
+	    li.id[0:8] = ib.laddr;
+	    li.id[0] = li.id[0] ^ 0x02;     // FIXME - where should this be done?
 	    li.hdr = FrameInfo?size;
 	    li.trl = 0;
 	    li.mtu = 1280;
@@ -1164,7 +1189,7 @@ if db > 0 then { debug.str("lowpan.Run: OPEN\n"); }
 	    ce = event.pConnEvent(e);
 	    if ce.type == UPPER then
 	    {   // assert not a duplicate
-if db > 0 then { debug.str("lowpan.Run: CONNECT: bid=");
+if db > 0 then { debug.str("lowpan.Connect: bid=");
 debug.uint8(ce.tag); debug.str(" ifn="); debug.uint8(ce.chan); debug.nl();}
 		ib.ubid = ce.tag;
 		ib.uifn = ce.chan;
@@ -1176,10 +1201,13 @@ debug.uint8(ce.tag); debug.str(" ifn="); debug.uint8(ce.chan); debug.nl();}
     proc NewBlock(id: BlockID): pBlock
     {   var ib: pLPBlock;
 
-	ib = _new(LPBlock);  _zero(ib);
+	ib = _new(LPBlock);
 if db > 0 then { debug.str("lowpan.NewBlock ");
 debug.uint8(id); debug.chr(' ');
 debug.hex(_uint(ib)); debug.nl(); }
+	_zero(ib);
+	ib.seqno = 0x30;	// FIXME
+	ib.panid = ieee802154.BroadcastPAN;
 	ib.BlockInit(id, Run);
 	return ib;
     }
