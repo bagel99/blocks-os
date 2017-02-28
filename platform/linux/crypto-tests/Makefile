@@ -29,7 +29,7 @@ GCCARCH=
 %.ll: %.esl
 	$(ESLC) -m$(ARCH) $(DBG) $(INC) $(OPT) -c $<
 
-all:	test-sha2.out \
+all:	test-sha2.out test-sha3.out \
 	test-aesccm.out test-aesgcm.out test-chacha.out \
 	test-ecdh.out test-ecdsa.out
 
