@@ -302,7 +302,7 @@ package rcc
 	sc = rcc;
 	// set everything as it would be after a reset
 	sc.cr.hsion = true;
-	sc.cfgr = {.sw=false};		// reset all bits
+	sc.cfgr = {.sw=HSI};		// reset all bits
 	cr = sc.cr;
 	cr.hseon = false;
 	cr.csson = false;

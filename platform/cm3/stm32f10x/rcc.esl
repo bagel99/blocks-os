@@ -198,7 +198,7 @@ package rcc
 	sc.cr.hse.csson = false;
 	sc.cr.hse.byp = false;
 	// Redundant? These should already be zero after reset
-	sc.cfg.pll = { .src=HSI, .xtpre=false, .mul=NONE, .otgfspre=false };
+	sc.cfg.pll = { .src=HSI, .xtpre=false, .mul=NONE, .otgfspre=DIV3 };
 	// Redundant? These should be zero after reset
 	sc.cr.pll.on2 = false;
 	sc.cr.pll.on3 = false;

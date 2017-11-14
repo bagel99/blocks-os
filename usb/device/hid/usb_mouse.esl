@@ -15,7 +15,7 @@ package usbdev		// extends driver
     {	usb.DeviceDesc?size,		// desc. length
     	usb.DescDevice,
     	0x0200,				// version 2.0
-    	0,				// class
+	NONE,				// class
     	0,				// subclass
     	0,				// protocol
     	64,				// max packet size

@@ -21,9 +21,9 @@ package usb	// extends package
 	REPORT= 0x2,
 	PHYSICAL=0x3
     );
-    const DescHID: DescType =      { ClassDescNumber.HID, CLASS };
-    const DescReport: DescType =   { ClassDescNumber.REPORT, CLASS };
-    const DescPhysical: DescType = { ClassDescNumber.PHYSICAL, CLASS };
+    const DescHID: DescType =      { DescNumber(ClassDescNumber.HID), CLASS };
+    const DescReport: DescType =   { DescNumber(ClassDescNumber.REPORT), CLASS };
+    const DescPhysical: DescType = { DescNumber(ClassDescNumber.PHYSICAL), CLASS };
 
     type HIDDesc(Descriptor):
     {	spec:   _uint16: le;	// BCD					// 0x02

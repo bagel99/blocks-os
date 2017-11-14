@@ -165,7 +165,7 @@ package eth
         }: packed, lsb, out;
 	supp:								// 0x018
 	{   _:      0..0xFF;		// .00-07
-	    speed:  (s10mb, s100mb);    // .08
+	    speed:  Speed;		// .08
 	    _:      0..0x7F_FFFF;	// .09-31
         }: packed, lsb, out;
 	test:								// 0x01C
@@ -419,7 +419,7 @@ debug.str(" duplex="); debug.uint8(_uint8(duplex)); debug.nl(); }
 
     proc (en: Enet) Dump()
     {   var i: _uint32;
-
+      if _defined(debug) then {
 	debug.dumpw("MAC:", 0x5000_0000, 10);
 	debug.dumpw("",     0x5000_0040, 3);
 	debug.dumpw("CMD:", 0x5000_0100, 12);
@@ -448,6 +448,7 @@ debug.str(" duplex="); debug.uint8(_uint8(duplex)); debug.nl(); }
 	    debug.nl();
 	    i += 1;
 	}
+      }
     }
 }
 

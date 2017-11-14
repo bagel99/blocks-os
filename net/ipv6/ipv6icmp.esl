@@ -159,7 +159,7 @@ debug.nl();}
 	ic = pICMPNAHeader(mb.GrowTail(ICMPNAHeader?size));
 	ic.type = NeighborAdvertisement;
 	ic.code = 0;
-	ic.flags = { .R=0, .S=1, .O=1 };	// FIXME
+	ic.flags = { .R=false, .S=true, .O=true };	// FIXME
 	ic.tgt = tgt@;
 	intf.AddOptionLinkAddr(mb, TgtLinkAddr);
 	intf.SendICMP(mb, ip, ic);
