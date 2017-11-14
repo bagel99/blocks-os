@@ -1,0 +1,166 @@
+/*
+ * SHA3 hash
+ *
+ * Reference:
+ *  1. NIST FIPS-202
+ *  2. sha3.c by Andrey Jivsov
+ *
+ * License: public domain
+ */
+
+
+package sha3
+{
+    // instead of a 5x5 array used in Ref 1, use a combined array
+    const NWords = 25;
+    const NBytes = _uint64?size;	// number of bytes in word
+    type State: [NWords]_uint64;
+    type Context:
+    {
+	state: State;
+	work:  [NBytes]_byte;		// partial word in progress
+	bix:   0..NBytes-1;		// byte index into work
+	wix:   0..NWords-1;		// word index into state
+	cap:   0..NWords-1;		// word capacity
+    };
+    type pContext: @Context;
+
+    const NRounds = 24;
+
+    proc (s: @State) Theta(): : inline
+    {	var i, j: _uint;
+	var bc: [5]_uint64;
+	var t: _uint64;
+
+	for i from 0 to 4 do
+	    bc[i] = s[i] ^ s[i+5] ^ s[i+10] ^ s[i+15] ^ s[i+20];
+	for i from 0 to 4 do
+	{   t = bc[(i+4)%5] ^ _rol(bc[(i+1)%5], 1);
+	    for j from 0 to 20 by 5 do
+	    	s[i+j] ^= t;
+	}
+    }
+    
+    proc (s: @State) RhoPi(): : inline
+    {	var i, j: _uint;
+	var t, u: _uint64;
+	const piix: [24]_uint8 =
+	{   10,  7, 11, 17, 18,  3,  5, 16,  8, 21, 24,  4,
+	    15, 23, 19, 13, 12,  2, 20, 14, 22,  9,  6,  1
+	};
+	const rotc: [24]_uint8 =
+	{    1,  3,  6, 10, 15, 21, 28, 36, 45, 55,  2, 14,
+	    27, 41, 56,  8, 25, 43, 62, 18, 39, 61, 20, 44
+	};
+
+	t = s[1];
+	for i from 0 to 23 do
+	{   j = piix[i];
+	    u = s[j];
+	    s[j] = _rol(t, rotc[i]);
+	    t = u;
+	} 
+    }
+
+    proc (s: @State) Chi(): : inline
+    {	var i, j: _uint;
+	var bc: [5]_uint64;
+
+	for j from 0 to 20 by 5 do
+	{   for i from 0 to 4 do
+		bc[i] = s[j+i];
+	    for i from 0 to 4 do
+	    	s[j+i] ^= bc[(i+2)%5] & ~bc[(i+1)%5];
+	}
+    }
+
+    proc (s: @State) Iota(n: _uint): : inline
+    {
+	const ixor: [NRounds]_uint64 =
+	{   0x00000000_00000001, 0x00000000_00008082,
+	    0x80000000_0000808a, 0x80000000_80008000,
+	    0x00000000_0000808b, 0x00000000_80000001,
+	    0x80000000_80008081, 0x80000000_00008009,
+	    0x00000000_0000008a, 0x00000000_00000088,
+	    0x00000000_80008009, 0x00000000_8000000a,
+	    0x00000000_8000808b, 0x80000000_0000008b,
+	    0x80000000_00008089, 0x80000000_00008003,
+	    0x80000000_00008002, 0x80000000_00000080,
+	    0x00000000_0000800a, 0x80000000_8000000a,
+	    0x80000000_80008081, 0x80000000_00008080,
+	    0x00000000_80000001, 0x80000000_80008008
+	};
+
+	s[0] ^= ixor[n];
+    }	
+
+
+    proc (s: @State) Process()
+    {	var n, i, j: _uint;
+
+	for n from 0 to NRounds-1 do
+	{
+	    s.Theta();
+	    s.RhoPi();
+	    s.Chi();
+	    s.Iota(n);
+	}
+    }
+
+    proc (ctx: pContext) Update(data: @[]_byte, len: _uint)
+    {   var i: _uint;	// index into data[]
+	var j: _uint;
+	var n: _uint;
+
+	if len == 0 then
+	    return;
+	i = 0;
+	if ctx.bix > 0 then	// working on partial word
+	{   n = _min(8 - ctx.bix, len);
+	    ctx.work[ctx.bix:n] = data[0:n];
+	    i += n;
+	    ctx.bix += n;
+	    if ctx.bix >= 8 then	// filled out the word
+	    {	ctx.state[ctx.wix] ^= _unpkle(ctx.work[0:8]);
+		ctx.bix = 0;
+		ctx.wix += 1;
+	    	if ctx.wix == NWords - ctx.cap then
+	    	{   ctx.state.Process();
+		    ctx.wix = 0;
+		}
+	    }
+	}
+	loop			// work on full words, if any
+	{   n = len - i;
+	  exit n < 8;
+	    ctx.state[ctx.wix] ^= _unpkle(data[i:8]);
+	    ctx.wix += 1;
+	    if ctx.wix == NWords - ctx.cap then
+	    {   ctx.state.Process();
+		ctx.wix = 0;
+	    }
+	    i += 8;
+	}
+	if n > 0 then		// handle leftover bytes
+	{   ctx.work[ctx.bix:n] = data[i:n];
+	    ctx.bix += n;
+	}
+    }
+
+    proc (ctx: sha3.pContext) Finish(out: @[]_byte, len: _uint)
+    {   var i: _uint;
+	var need: _uint;
+	const term: [8]_byte = { 6, 0, 0, 0, 0, 0, 0, 0 };
+
+	need = 8 - ctx.bix;
+	ctx.work[ctx.bix:need] = term[0:need];
+	ctx.state[ctx.wix] ^= _unpkle(ctx.work[0:8]);
+	ctx.state[NWords-ctx.cap-1] ^= 0x80000000_00000000;
+	ctx.state.Process();
+	i = 0;
+	while i < len do
+	{   _packle(out[i:8], ctx.state[i/8]);
+	    i += 8;
+	}
+    }
+}

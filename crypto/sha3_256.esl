@@ -1,0 +1,30 @@
+/*
+ * SHA3-256 hash
+ *
+ * License: public domain
+ */
+
+import sha3;
+
+package sha3_256
+{
+    type Context(sha3.Context):{};
+    type pContext: @Context;
+
+    const DigestSize = 32;	// in bytes, 256 bits
+
+    proc (ctx: sha3.pContext) Start()
+    {
+	_zero(ctx@);
+	ctx.cap = (DigestSize * 2) / _uint64?size;
+    }
+
+    proc Hash(in: @[]_byte, len: _uint, out: @[DigestSize]_byte)
+    {   var ctx: sha3.Context;       // FIXME - large stack area
+
+	ctx.Start();
+	ctx.Update(in, len);
+	ctx.Finish(out, DigestSize);	
+    }
+}
+

@@ -1,0 +1,46 @@
+/*
+ * This implements the Psuedo-Random Function (PRF) of RFC 5246, section 5.
+ */
+import hmac256;
+
+package prf256
+{
+
+    proc pHash(secret: @[]_byte, slen: _uint,
+	       label:  @[]_byte, llen: _uint,
+	       random: @[]_byte, rlen: _uint,	// aka "seed"
+	       output: @[]_byte, olen: _uint)
+    {
+	const hlen = hmac256.DigestSize;
+	var ctx: hmac256.Context;		// hash context
+	var a: [hlen]_byte;			// aka 'A'
+	var b: [hlen]_byte;
+	var len: _uint;				// length of output
+	var n: _uint;
+
+	ctx.Start(secret, slen);
+	ctx.Update(label, llen);
+	ctx.Update(random, rlen);
+	ctx.Finish(a);				// A0
+//debug.dumpb("A0=\n", a, hlen);
+	len = 0;
+	loop
+	{   ctx.Start(secret, slen);
+	    ctx.Update(a, hlen);
+	    ctx.Update(label, llen);
+	    ctx.Update(random, rlen);
+	    ctx.Finish(b);
+//debug.dumpb("Bi=\n", b, hlen);
+	    n = _min(olen-len, hlen);
+//debug.str("len="); debug.uint(len); debug.str(" n="); debug.uint(n); debug.nl();
+	    output[len:n] = b[0:n];
+	    len += n;
+	  exit len >= olen;
+	    ctx.Start(secret, slen);
+	    ctx.Update(a, hlen);
+	    ctx.Finish(a);			// Ai
+//debug.dumpb("Ai=\n", a, hlen);
+	}		
+    }
+}
+

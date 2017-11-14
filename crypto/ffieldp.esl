@@ -1,0 +1,146 @@
+/*
+ * Routines to implement a finite field based on the prime P
+ *
+ * Before importing, the following symbols must be defined:
+ *  bn - the package implementing multi-precision arithmetic
+ *  P - the prime basis of the field
+ *  W - the width of the field in bits
+ *  K - the width of the field in units of bignum.Base
+ *
+ * Within ffieldp, the routine ModP() must be defined after importing.
+ */
+
+package ffieldp
+{
+    type Vect: [K]bn.Base;
+
+    proc ModP(r: @Vect, x: @Vect2);	// forward
+
+    // shift x right by 1 in place
+    proc RShf1(x: @Vect)
+    {   var i: _uint;
+	var c, t: _uint32;
+
+	c = 0;
+	i = K;
+	do
+	{   i -= 1;
+	    t = x[i] & 1;
+	    x[i] = (x[i] >> 1) | (c << (bn.Base?bits-1));
+	    c = t;
+	} while i > 0;
+	    
+    }
+    
+    // r = (x + y) mod P
+    proc AddModP(r: @Vect, x: @Vect, y: @Vect)
+    {
+	// if carry out or result larger than P then reduce
+	if bn.Add(r, x, y, K) != 0 || bn.isGE(r, P, K) then
+	    bn.Sub(r, r, P, K);
+    }
+
+    // r = (x + y) mod m
+    proc AddMod(r: @Vect, x: @Vect, y: @Vect, m: @Vect)
+    {
+	// if carry out or result larger than P then reduce
+	if bn.Add(r, x, y, K) != 0 || bn.isGE(r, m, K) then
+	    bn.Sub(r, r, m, K);
+    }
+
+    // r = (x - y) mod P
+    proc SubModP(r: @Vect, x: @Vect, y: @Vect)
+    {   var tmp: Vect;
+
+	// if carry out then we wrapped
+	if bn.Sub(r, x, y, K) != 0 then
+	    bn.Add(r, r, P, K);
+    }
+
+    // called with n=K and n=K+1
+    proc Mul(r: @Vect, x: @Vect, y: @Vect, n: _uint)
+    {   var i, j: _uint;
+	var t: _uint64;
+	var tmp: [(K+1)*2]_uint32;
+
+	_zero(tmp[0:n*2]);
+	_zero(r[0:n*2]);
+	for i from 0 to n-1 do
+	{   for j from 0 to n-1 do
+	    {	t = x[j] * y[i];
+		tmp[i+j] = _uint32(t);
+		tmp[i+j+1] = _uint32(t >> 32);
+		bn.Add(r[i+j:], tmp[i+j:], r[i+j:], n*2 - (i+j));
+		_zero(tmp[0:n*2]);
+	    }
+	}
+    }
+
+    // r = (x * y) mod P
+    proc MulModP(r: @Vect, x: @Vect, y: @Vect)
+    {	var t: Vect2;
+
+	Mul(t, x, y, K);
+	ModP(r, t);
+    }
+
+    // r = 1/x mod m
+    proc InvMod(r: @Vect, x: @Vect, m: @Vect)
+    {   var t: _int;
+	var c: bn.Base;
+	var a, b, u, v: Vect;
+
+	a = x@;
+	b = m@;
+	_zero(u); u[0] = 1;	// u = {1}
+	_zero(v);
+	loop
+	{   t = bn.Cmp(a, b, K);
+	  exit t == 0;
+	    c = 0;
+	    if bn.isEven(a) then
+	    {	bn.RShf1(a, K);
+	    	if bn.isOdd(u) then
+	    	   c = bn.Add(u, u, m, K);
+	    	bn.RShf1(u, K);
+	    	u[K-1] |= c << (bn.Base?bits-1);
+	    }
+	    elif bn.isEven(b) then
+	    {	bn.RShf1(b, K);
+	    	if bn.isOdd(v) then
+	    	    c = bn.Add(v, v, m, K);
+	    	bn.RShf1(v, K);
+	    	v[K-1] |= c << (bn.Base?bits-1);
+	    }
+	    elif t > 0 then
+	    {	bn.Sub(a, a, b, K);
+	    	bn.RShf1(a, K);
+	    	if bn.Cmp(u, v, K) < 0 then
+	    	    bn.Add(u, u, m, K);
+	    	bn.Sub(u, u, v, K);
+	    	if bn.isOdd(u) then
+	    	    c = bn.Add(u, u, m, K);
+	    	bn.RShf1(u, K);
+	    	u[K-1] |= c << (bn.Base?bits-1);
+	    }
+	    else
+	    {	bn.Sub(b, b, a, K);
+	    	bn.RShf1(b, K);
+	    	if bn.Cmp(v, u, K) < 0 then
+	    	   bn.Add(v, v, m, K);
+	    	bn.Sub(v, v, u, K);
+	    	if bn.isOdd(v) then
+	    	    c = bn.Add(v, v, m, K);
+	    	bn.RShf1(v, K);
+	    	v[K-1] |= c << (bn.Base?bits-1);
+	    }	
+	r@ = u;
+	}
+    }
+
+    proc InvModP(r: @Vect, x: @Vect)
+    {
+	InvMod(r, x, P);
+    }
+}
+

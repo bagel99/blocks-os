@@ -1,0 +1,930 @@
+// Test field operators
+
+import out;
+const err: out.OutFD = 2;
+
+proc Print(x: @[8]_uint32)
+{   var i: _uint;
+
+    for i from 0 to 7 do
+    {   err.str("0x");
+    	err.hex32(x[i]);
+    	if i != 7 then err.chr(',');
+    }
+    err.nl();
+}
+
+proc Print2(x: @[16]_uint32)
+{   var i: _uint;
+
+    for i from 0 to 15 do
+    {   err.str("0x");
+    	err.hex32(x[i]);
+    	if i != 15 then err.chr(',');
+    }
+    err.nl();
+}
+
+proc PrintN(msg: @[]_byte, x: @[]_uint32, n: _uint)
+{   var i: _uint;
+
+    err.str(msg); err.chr('=');
+    for i from 0 to n-1 do
+    {   err.str("0x");
+    	err.hex32(x[i]);
+    	if i < n-1 then
+    	{   err.chr(',');
+    	    if (i&3) == 3 then err.str("\n\t");
+    	}
+    }
+    err.nl();
+}
+
+var nerr: _uint = 0;
+
+proc Check(test: boolean, which: @[]_byte, msg: @[]_byte): boolean
+{
+    if !test then
+    {   err.str("Test failed: ");
+	err.str(which); err.chr(' ');
+	err.str(msg);
+	err.nl();
+	nerr += 1;
+    }
+    return test;
+}
+
+const MaxK = 17;	// big enough for secp521r1
+
+const zero: [MaxK]_uint32 = { 0 };
+const one:  [MaxK]_uint32 = { 1 };
+const two:  [MaxK]_uint32 = { 2 };
+const three:[MaxK]_uint32 = { 3 };
+const four: [MaxK]_uint32 = { 4 };
+const six:  [MaxK]_uint32 = { 6 };
+const eight:[MaxK]_uint32 = { 8 };
+const full: [MaxK]_uint32 = {
+    0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,
+    0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,
+    0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,
+    0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,
+    0xFFFFFFFF
+};
+
+const zero2:[MaxK*2]_uint32 = { 0 };
+const one2: [MaxK*2]_uint32 = { 1 };
+const two2: [MaxK*2]_uint32 = { 2 };
+const four2:[MaxK*2]_uint32 = { 4 };
+
+import secp192r1;
+package secp192r1
+{
+    const name = "secp192r1";
+    if !_defined(f) then error "f not defined\n";
+
+    const primeminusone: Vect =
+    {   0xFFFFFFFE,0xFFFFFFFF,0xFFFFFFFE,0xFFFFFFFF,
+	0xFFFFFFFF,0xFFFFFFFF
+    };
+    const orderminusone: Vect = 
+    {	0xB4D22830, 0x146BC9B1, 0x99DEF836, 0xFFFFFFFF,
+	0xFFFFFFFF, 0xFFFFFFFF
+    };
+    // The next is just the bit inverse of P plus 1
+    const resultfulladd: Vect =
+    {   0x00000001,0x00000000,0x00000001,0x00000000,
+	0x00000000,0x00000000
+    };
+    const orderresultdoublemod: Vect =		    // WARNING - calculated
+    {   0xB4D2282F,0x146BC9B1,0x99DEF836,0xFFFFFFFF,
+	0xFFFFFFFF,0xFFFFFFFF
+    };
+    const resultquadmod: Vect2 =
+    {   0x00000004,0x00000000,0x00000004,0x00000000,
+	0x00000001,0x00000000,0xFFFFFFFC,0xFFFFFFFF,
+	0xFFFFFFFD,0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF
+    };
+    const resultdoublemod: Vect =
+    {   0xFFFFFFFD,0xFFFFFFFF,0xFFFFFFFE,0xFFFFFFFF,
+	0xFFFFFFFF,0xFFFFFFFF
+    };
+
+    var tmp: Vect;
+    var tmp2: Vect2;
+
+    proc TestAdd()
+    {
+	Check(one == one, name, "one == one");
+	_zero(tmp);
+	f.AddModP(tmp, one, zero);
+	Check(tmp == one, name, "one + zero");
+	_zero(tmp);
+	f.AddModP(tmp, one, one);
+	Check(tmp == two, name, "one + one");
+	_zero(tmp);
+	f.AddModP(tmp, full, one);
+    //    Print(tmp);
+	Check(tmp == resultfulladd, name, "full + one");
+    }
+
+    proc TestSub()
+    {
+	_zero(tmp);
+	f.SubModP(tmp, one, zero);
+	Check(tmp == one, name, "one - zero");
+	_zero(tmp);
+	f.SubModP(tmp, one, one);
+	Check(tmp == zero, name, "one - one");
+	_zero(tmp);
+	f.SubModP(tmp, zero, one);
+	Check(tmp == primeminusone, name, "zero - one");
+    }
+
+    proc TestMul()
+    {
+	_zero(tmp2);
+	f.Mul(tmp2, one, zero, K);
+	Check(tmp2 == zero2, name, "one * zero");
+	_zero(tmp2);
+	f.Mul(tmp2, one, two, K);
+	Check(tmp2 == two2, name, "one * two");
+	_zero(tmp2);
+	f.Mul(tmp2, two, two, K);
+	Check(tmp2 == four2, name, "two * two");
+	_zero(tmp2);
+	f.Mul(tmp2, primeminusone, primeminusone, K);
+	Check(tmp2 == resultquadmod, name, "pm1 * pm1");
+    /*
+	_zero(tmp2); _zero(tmp);
+	field.inv(two, P, prime_r, tmp);
+	field.mul(tmp, two, tmp2, K);
+	field.modp(tmp, tmp2);
+	Check(tmp == one, name, "inv(two) * two");
+    */
+    }
+
+    proc TestModP()
+    {
+	var txx: Vect;
+
+	_zero(tmp2); _zero(txx);
+	f.Mul(tmp2, primeminusone, primeminusone, K);
+	f.ModP(txx, tmp2);
+	Check(txx == one, name, "modp test 1");
+	_zero(txx);
+	f.ModP(txx, one2);
+	Check(txx == one, name, "modp test 2");
+	_zero(tmp2); _zero(txx);
+	f.Mul(tmp2, two, primeminusone, K);
+	f.ModP(txx, tmp2);
+	Check(txx == resultdoublemod, name, "modp test 3");
+    }
+
+    proc TestModO()
+    {
+	_zero(tmp2); _zero(tmp);
+	f.Mul(tmp2, orderminusone, orderminusone, K);
+	ModN(tmp, tmp2, K*2);
+	Check(tmp == one, name, "modo test 1");
+	_zero(tmp);
+	ModN(tmp, one2, K*2);
+	Check(tmp == one, name, "modo test 2");
+	_zero(tmp2); _zero(tmp);
+	f.Mul(tmp2, two, orderminusone, K);
+	ModN(tmp, tmp2, K*2);
+	Check(tmp == orderresultdoublemod, name, "modo test 3");
+    }
+
+    proc TestInv()
+    {
+
+	_zero(tmp2); _zero(tmp);
+	f.InvModP(tmp, two);
+	f.Mul(tmp2, tmp, two, K);
+	f.ModP(tmp, tmp2);
+	Check(tmp == one, name, "inv test 1");
+	_zero(tmp2); _zero(tmp);
+	f.InvModP(tmp, eight);
+	f.Mul(tmp2, tmp, eight, K);
+	f.ModP(tmp, tmp2);
+	Check(tmp == one, name, "inv test 2");
+	_zero(tmp2); _zero(tmp);
+	f.InvModP(tmp, three);
+	f.Mul(tmp2, tmp, three, K);
+	f.ModP(tmp, tmp2);
+	Check(tmp == one, name, "inv test 3");
+	_zero(tmp2); _zero(tmp);
+	f.InvModP(tmp, six);
+	f.Mul(tmp2, tmp, six, K);
+	f.ModP(tmp, tmp2);
+	Check(tmp == one, name, "inv test 4");
+	_zero(tmp2); _zero(tmp);
+	f.InvModP(tmp, primeminusone);
+	f.Mul(tmp2, tmp, primeminusone, K);
+	f.ModP(tmp, tmp2);
+	Check(tmp == one, name, "inv test 5");
+    }
+
+    proc TestAll()
+    {
+	TestAdd();
+	TestSub();
+	TestMul();
+	TestModP();
+	TestModO();
+	TestInv();
+    }
+}
+
+
+import secp224r1;
+package secp224r1
+{
+    const name = "secp224r1";
+
+    const primeminusone: Vect =
+    {   0x00000000,0x00000000,0x00000000,0xFFFFFFFF,
+	0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF
+    };
+    const orderminusone: Vect =
+    {   0x5C5C2A3C,0x13DD2945,0xE0B8F03E,0xFFFF16A2,
+	0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF
+    };
+    const resultfulladd: Vect =
+    {   0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,0x00000000,
+	0x00000000,0x00000000,0x00000000
+    };
+    const orderresultdoublemod: Vect =		    // WARNING - calculated
+    {   0x5C5C2A3B,0x13DD2945,0xE0B8F03E,0xFFFF16A2,
+	0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF
+    };
+    const resultquadmod: Vect2 =
+    {   0x00000000,0x00000000,0x00000000,0x00000000,
+	0x00000000,0x00000000,0x00000001,0x00000000,
+	0x00000000,0x00000000,0xFFFFFFFE,0xFFFFFFFF,
+	0xFFFFFFFF,0xFFFFFFFF
+    };
+    const resultdoublemod: Vect2 =
+    {   0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFE,
+	0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF
+    };
+
+    var tmp: Vect;
+    var tmp2: Vect2;
+
+    proc TestAdd()
+    {
+	Check(one == one, name, "one == one");
+	_zero(tmp);
+	f.AddModP(tmp, one, zero);
+	Check(tmp == one, name, "one + zero");
+	_zero(tmp);
+	f.AddModP(tmp, one, one);
+	Check(tmp == two, name, "one + one");
+	_zero(tmp);
+	f.AddModP(tmp, full, one);
+    //    Print(tmp);
+	Check(tmp == resultfulladd, name, "full + one");
+    }
+
+    proc TestSub()
+    {
+	_zero(tmp);
+	f.SubModP(tmp, one, zero);
+	Check(tmp == one, name, "one - zero");
+	_zero(tmp);
+	f.SubModP(tmp, one, one);
+	Check(tmp == zero, name, "one - one");
+	_zero(tmp);
+	f.SubModP(tmp, zero, one);
+	Check(tmp == primeminusone, name, "zero - one");
+    }
+
+    proc TestMul()
+    {
+	_zero(tmp2);
+	f.Mul(tmp2, one, zero, K);
+	Check(tmp2 == zero2, name, "one * zero");
+	_zero(tmp2);
+	f.Mul(tmp2, one, two, K);
+	Check(tmp2 == two2, name, "one * two");
+	_zero(tmp2);
+	f.Mul(tmp2, two, two, K);
+	Check(tmp2 == four2, name, "two * two");
+	_zero(tmp2);
+	f.Mul(tmp2, primeminusone, primeminusone, K);
+	Check(tmp2 == resultquadmod, name, "pm1 * pm1");
+    /*
+	_zero(tmp2); _zero(tmp);
+	field.inv(two, P, prime_r, tmp);
+	field.mul(tmp, two, tmp2, K);
+	field.modp(tmp, tmp2);
+	Check(tmp == one, name, "inv(two) * two");
+    */
+    }
+
+    proc TestModP()
+    {
+	var txx: Vect;
+
+	_zero(tmp2); _zero(txx);
+	f.Mul(tmp2, primeminusone, primeminusone, K);
+	f.ModP(txx, tmp2);
+	Check(txx == one, name, "modp test 1");
+	_zero(txx);
+	f.ModP(txx, one2);
+	Check(txx == one, name, "modp test 2");
+	_zero(tmp2); _zero(txx);
+	f.Mul(tmp2, two, primeminusone, K);
+	f.ModP(txx, tmp2);
+	Check(txx == resultdoublemod, name, "modp test 3");
+    }
+
+    proc TestModO()
+    {
+	_zero(tmp2); _zero(tmp);
+	f.Mul(tmp2, orderminusone, orderminusone, K);
+	ModN(tmp, tmp2, K*2);
+	Check(tmp == one, name, "modo test 1");
+	_zero(tmp);
+	ModN(tmp, one2, K*2);
+	Check(tmp == one, name, "modo test 2");
+	_zero(tmp2); _zero(tmp);
+	f.Mul(tmp2, two, orderminusone, K);
+	ModN(tmp, tmp2, K*2);
+	Check(tmp == orderresultdoublemod, name, "modo test 3");
+    }
+
+    proc TestInv()
+    {
+
+	_zero(tmp2); _zero(tmp);
+	f.InvModP(tmp, two);
+	f.Mul(tmp2, tmp, two, K);
+	f.ModP(tmp, tmp2);
+	Check(tmp == one, name, "inv test 1");
+	_zero(tmp2); _zero(tmp);
+	f.InvModP(tmp, eight);
+	f.Mul(tmp2, tmp, eight, K);
+	f.ModP(tmp, tmp2);
+	Check(tmp == one, name, "inv test 2");
+	_zero(tmp2); _zero(tmp);
+	f.InvModP(tmp, three);
+	f.Mul(tmp2, tmp, three, K);
+	f.ModP(tmp, tmp2);
+	Check(tmp == one, name, "inv test 3");
+	_zero(tmp2); _zero(tmp);
+	f.InvModP(tmp, six);
+	f.Mul(tmp2, tmp, six, K);
+	f.ModP(tmp, tmp2);
+	Check(tmp == one, name, "inv test 4");
+	_zero(tmp2); _zero(tmp);
+	f.InvModP(tmp, primeminusone);
+	f.Mul(tmp2, tmp, primeminusone, K);
+	f.ModP(tmp, tmp2);
+	Check(tmp == one, name, "inv test 5");
+    }
+
+    proc TestAll()
+    {
+	TestAdd();
+	TestSub();
+	TestMul();
+	TestModP();
+	TestModO();
+	TestInv();
+    }
+
+}
+
+
+import secp256r1;
+package secp256r1
+{
+    const name = "secp256r1";
+
+    const primeminusone: Vect =
+    {   0xfffffffe,0xffffffff,0xffffffff,0x00000000,
+	0x00000000,0x00000000,0x00000001,0xffffffff
+    };
+    const orderminusone: Vect =
+    {   0xFC632550,0xF3B9CAC2,0xA7179E84,0xBCE6FAAD,
+	0xFFFFFFFF,0xFFFFFFFF,0x00000000,0xFFFFFFFF
+    };
+    const resultfulladd: Vect =
+    {   0x00000001,0x00000000,0x00000000,0xFFFFFFFF,
+	0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFE,0x00000000
+    };
+    const orderresultdoublemod: Vect =
+    {   0xFC63254F,0xF3B9CAC2,0xA7179E84,0xBCE6FAAD,
+	0xFFFFFFFF,0xFFFFFFFF,0x00000000,0xFFFFFFFF
+    };
+    const resultquadmod: Vect2 =
+    {   0x00000004,0x00000000,0x00000000,0xFFFFFFFC,
+	0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFC,0x00000003,
+	0xFFFFFFFC,0x00000001,0xFFFFFFFE,0x00000001,
+	0x00000001,0xFFFFFFFE,0x00000002,0xFFFFFFFE
+    };
+    const resultdoublemod: Vect2 =
+    {   0xfffffffd,0xffffffff,0xffffffff,0x00000000,
+	0x00000000,0x00000000,0x00000001,0xffffffff
+    };
+
+    var tmp: Vect;
+    var tmp2: Vect2;
+
+    proc TestAdd()
+    {
+	Check(one == one, name, "one == one");
+	_zero(tmp);
+	f.AddModP(tmp, one, zero);
+	Check(tmp == one, name, "one + zero");
+	_zero(tmp);
+	f.AddModP(tmp, one, one);
+	Check(tmp == two, name, "one + one");
+	_zero(tmp);
+	f.AddModP(tmp, full, one);
+    //    Print(tmp);
+	Check(tmp == resultfulladd, name, "full + one");
+    }
+
+    proc TestSub()
+    {
+	_zero(tmp);
+	f.SubModP(tmp, one, zero);
+	Check(tmp == one, name, "one - zero");
+	_zero(tmp);
+	f.SubModP(tmp, one, one);
+	Check(tmp == zero, name, "one - one");
+	_zero(tmp);
+	f.SubModP(tmp, zero, one);
+	Check(tmp == primeminusone, name, "zero - one");
+    }
+
+    proc TestMul()
+    {
+	_zero(tmp2);
+	f.Mul(tmp2, one, zero, K);
+	Check(tmp2 == zero2, name, "one * zero");
+	_zero(tmp2);
+	f.Mul(tmp2, one, two, K);
+	Check(tmp2 == two2, name, "one * two");
+	_zero(tmp2);
+	f.Mul(tmp2, two, two, K);
+	Check(tmp2 == four2, name, "two * two");
+	_zero(tmp2);
+	f.Mul(tmp2, primeminusone, primeminusone, K);
+	Check(tmp2 == resultquadmod, name, "pm1 * pm1");
+    /*
+	_zero(tmp2); _zero(tmp);
+	field.inv(two, P, prime_r, tmp);
+	field.mul(tmp, two, tmp2, K);
+	field.modp(tmp, tmp2);
+	Check(tmp == one, name, "inv(two) * two");
+    */
+    }
+
+    proc TestModP()
+    {
+	var txx: Vect;
+
+	_zero(tmp2); _zero(txx);
+	f.Mul(tmp2, primeminusone, primeminusone, K);
+	f.ModP(txx, tmp2);
+	Check(txx == one, name, "modp test 1");
+	_zero(txx);
+	f.ModP(txx, one2);
+	Check(txx == one, name, "modp test 2");
+	_zero(tmp2); _zero(txx);
+	f.Mul(tmp2, two, primeminusone, K);
+	f.ModP(txx, tmp2);
+	Check(txx == resultdoublemod, name, "modp test 3");
+    }
+
+    proc TestModO()
+    {
+	_zero(tmp2); _zero(tmp);
+	f.Mul(tmp2, orderminusone, orderminusone, K);
+	ModN(tmp, tmp2, K*2);
+	Check(tmp == one, name, "modo test 1");
+	_zero(tmp);
+	ModN(tmp, one2, K*2);
+	Check(tmp == one, name, "modo test 2");
+	_zero(tmp2); _zero(tmp);
+	f.Mul(tmp2, two, orderminusone, K);
+	ModN(tmp, tmp2, K*2);
+	Check(tmp == orderresultdoublemod, name, "modo test 3");
+    }
+
+    proc TestInv()
+    {
+
+	_zero(tmp2); _zero(tmp);
+	f.InvModP(tmp, two);
+	f.Mul(tmp2, tmp, two, K);
+	f.ModP(tmp, tmp2);
+	Check(tmp == one, name, "inv test 1");
+	_zero(tmp2); _zero(tmp);
+	f.InvModP(tmp, eight);
+	f.Mul(tmp2, tmp, eight, K);
+	f.ModP(tmp, tmp2);
+	Check(tmp == one, name, "inv test 2");
+	_zero(tmp2); _zero(tmp);
+	f.InvModP(tmp, three);
+	f.Mul(tmp2, tmp, three, K);
+	f.ModP(tmp, tmp2);
+	Check(tmp == one, name, "inv test 3");
+	_zero(tmp2); _zero(tmp);
+	f.InvModP(tmp, six);
+	f.Mul(tmp2, tmp, six, K);
+	f.ModP(tmp, tmp2);
+	Check(tmp == one, name, "inv test 4");
+	_zero(tmp2); _zero(tmp);
+	f.InvModP(tmp, primeminusone);
+	f.Mul(tmp2, tmp, primeminusone, K);
+	f.ModP(tmp, tmp2);
+	Check(tmp == one, name, "inv test 5");
+    }
+
+    proc TestAll()
+    {
+	TestAdd();
+	TestSub();
+	TestMul();
+	TestModP();
+	TestModO();
+	TestInv();
+    }
+}
+
+
+import secp384r1;
+package secp384r1
+{
+    const name = "secp384r1";
+
+    const primeminusone: Vect =
+    {   0xFFFFFFFE, 0x00000000, 0x00000000, 0xFFFFFFFF,
+	0xFFFFFFFE, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF,
+	0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF
+    };
+    const orderminusone: Vect =
+    {   0xCCC52972, 0xECEC196A, 0x48B0A77A, 0x581A0DB2,
+	0xF4372DDF, 0xC7634D81, 0xFFFFFFFF, 0xFFFFFFFF,
+	0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF
+    };
+    // The next is just the bit inverse of P plus 1
+    const resultfulladd: Vect =
+    {   0x00000001,0xFFFFFFFF,0xFFFFFFFF,0x00000000,
+	0x00000001,0x00000000,0x00000000,0x00000000,
+	0x00000000,0x00000000,0x00000000,0x00000000
+    };
+    const orderresultdoublemod: Vect=		    // WARNING - calculated
+    {   0xCCC52971,0xECEC196A,0x48B0A77A,0x581A0DB2,
+	0xF4372DDF,0xC7634D81,0xFFFFFFFF,0xFFFFFFFF,
+	0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF
+    };
+    const resultquadmod: Vect2 =
+    {   0x00000004,0xFFFFFFFC,0x00000000,0x00000004,
+	0x00000002,0xFFFFFFFE,0x00000000,0x00000002,
+	0x00000001,0x00000000,0x00000000,0x00000000,
+	0xFFFFFFFC,0x00000001,0x00000000,0xFFFFFFFE,
+	0xFFFFFFFD,0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,
+	0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF
+    };
+    const resultdoublemod: Vect =
+    {   0xfffffffd,0x00000000,0x00000000,0xffffffff,
+	0xfffffffe,0xffffffff,0xffffffff,0xffffffff,
+	0xffffffff,0xffffffff,0xffffffff,0xffffffff
+    };
+
+    var tmp: Vect;
+    var tmp2: Vect2;
+
+    proc TestAdd()
+    {
+	Check(one == one, name, "one == one");
+	_zero(tmp);
+	f.AddModP(tmp, one, zero);
+	Check(tmp == one, name, "one + zero");
+	_zero(tmp);
+	f.AddModP(tmp, one, one);
+	Check(tmp == two, name, "one + one");
+	_zero(tmp);
+	f.AddModP(tmp, full, one);
+    //    Print(tmp);
+	Check(tmp == resultfulladd, name, "full + one");
+    }
+
+    proc TestSub()
+    {
+	_zero(tmp);
+	f.SubModP(tmp, one, zero);
+	Check(tmp == one, name, "one - zero");
+	_zero(tmp);
+	f.SubModP(tmp, one, one);
+	Check(tmp == zero, name, "one - one");
+	_zero(tmp);
+	f.SubModP(tmp, zero, one);
+	Check(tmp == primeminusone, name, "zero - one");
+    }
+
+    proc TestMul()
+    {
+	_zero(tmp2);
+	f.Mul(tmp2, one, zero, K);
+	Check(tmp2 == zero2, name, "one * zero");
+	_zero(tmp2);
+	f.Mul(tmp2, one, two, K);
+	Check(tmp2 == two2, name, "one * two");
+	_zero(tmp2);
+	f.Mul(tmp2, two, two, K);
+	Check(tmp2 == four2, name, "two * two");
+	_zero(tmp2);
+	f.Mul(tmp2, primeminusone, primeminusone, K);
+	Check(tmp2 == resultquadmod, name, "pm1 * pm1");
+    /*
+	_zero(tmp2); _zero(tmp);
+	field.inv(two, P, prime_r, tmp);
+	field.mul(tmp, two, tmp2, K);
+	field.modp(tmp, tmp2);
+	Check(tmp == one, name, "inv(two) * two");
+    */
+    }
+
+    proc TestModP()
+    {
+	var txx: Vect;
+
+	_zero(tmp2); _zero(txx);
+	f.Mul(tmp2, primeminusone, primeminusone, K);
+	f.ModP(txx, tmp2);
+	Check(txx == one, name, "modp test 1");
+	_zero(txx);
+	f.ModP(txx, one2);
+	Check(txx == one, name, "modp test 2");
+	_zero(tmp2); _zero(txx);
+	f.Mul(tmp2, two, primeminusone, K);
+	f.ModP(txx, tmp2);
+	Check(txx == resultdoublemod, name, "modp test 3");
+    }
+
+    proc TestModO()
+    {
+	_zero(tmp2); _zero(tmp);
+	f.Mul(tmp2, orderminusone, orderminusone, K);
+	ModN(tmp, tmp2, K*2);
+	Check(tmp == one, name, "modo test 1");
+	_zero(tmp);
+	ModN(tmp, one2, K*2);
+	Check(tmp == one, name, "modo test 2");
+	_zero(tmp2); _zero(tmp);
+	f.Mul(tmp2, two, orderminusone, K);
+	ModN(tmp, tmp2, K*2);
+	Check(tmp == orderresultdoublemod, name, "modo test 3");
+    }
+
+    proc TestInv()
+    {
+
+	_zero(tmp2); _zero(tmp);
+	f.InvModP(tmp, two);
+	f.Mul(tmp2, tmp, two, K);
+	f.ModP(tmp, tmp2);
+	Check(tmp == one, name, "inv test 1");
+	_zero(tmp2); _zero(tmp);
+	f.InvModP(tmp, eight);
+	f.Mul(tmp2, tmp, eight, K);
+	f.ModP(tmp, tmp2);
+	Check(tmp == one, name, "inv test 2");
+	_zero(tmp2); _zero(tmp);
+	f.InvModP(tmp, three);
+	f.Mul(tmp2, tmp, three, K);
+	f.ModP(tmp, tmp2);
+	Check(tmp == one, name, "inv test 3");
+	_zero(tmp2); _zero(tmp);
+	f.InvModP(tmp, six);
+	f.Mul(tmp2, tmp, six, K);
+	f.ModP(tmp, tmp2);
+	Check(tmp == one, name, "inv test 4");
+	_zero(tmp2); _zero(tmp);
+	f.InvModP(tmp, primeminusone);
+	f.Mul(tmp2, tmp, primeminusone, K);
+	f.ModP(tmp, tmp2);
+	Check(tmp == one, name, "inv test 5");
+    }
+
+    proc TestAll()
+    {
+	TestAdd();
+	TestSub();
+	TestMul();
+	TestModP();
+	TestModO();
+	TestInv();
+    }
+}
+
+
+import secp521r1;
+package secp521r1
+{
+    const name = "secp521r1";
+
+    // Don't use global value, since there are zeros in high order word
+    const full: Vect =
+    {   0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,
+	0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,
+	0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,
+	0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,
+	0x000001FF
+    };
+    const primeminusone: Vect =
+    {   0xFFFFFFFE,0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,
+	0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,
+	0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,
+	0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,
+	0x000001FF
+    };
+    const orderminusone: Vect = 
+    {	0x91386408, 0xBB6FB71E, 0x899C47AE, 0x3BB5C9B8,
+	0xF709A5D0, 0x7FCC0148, 0xBF2F966B, 0x51868783,
+	0xFFFFFFFA, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF,
+	0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF,
+	0x000001FF
+    };
+    // The next is just the bit inverse of P plus 1
+    const resultfulladd: Vect =
+    {   0x00000001,0x00000000,0x00000000,0x00000000,
+	0x00000000,0x00000000,0x00000000,0x00000000,
+	0x00000000,0x00000000,0x00000000,0x00000000,
+	0x00000000,0x00000000,0x00000000,0x00000000,
+	0x00000000
+    };
+    const orderresultdoublemod: Vect=		    // WARNING - calculated
+    {   0x91386407,0xBB6FB71E,0x899C47AE,0x3BB5C9B8,
+	0xF709A5D0,0x7FCC0148,0xBF2F966B,0x51868783,
+	0xFFFFFFFA,0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,
+	0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,
+	0x000001FF
+    };
+    const resultquadmod: Vect2 =
+    {   0x00000004,0x00000000,0x00000000,0x00000000,
+	0x00000000,0x00000000,0x00000000,0x00000000,
+	0x00000000,0x00000000,0x00000000,0x00000000,
+	0x00000000,0x00000000,0x00000000,0x00000000,
+	0xFFFFF800,0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,
+	0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,
+	0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,
+	0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,
+	0x0003FFFF,0x00000000
+    };
+    const resultdoublemod: Vect =
+    {   0xFFFFFFFD,0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,
+	0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,
+	0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,
+	0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,
+	0x000001FF
+    };
+
+    var tmp: Vect;
+    var tmp2: Vect2;
+
+    proc TestAdd()
+    {
+	Check(one == one, name, "one == one");
+	_zero(tmp);
+	f.AddModP(tmp, one, zero);
+	Check(tmp == one, name, "one + zero");
+	_zero(tmp);
+	f.AddModP(tmp, one, one);
+	Check(tmp == two, name, "one + one");
+	_zero(tmp);
+	f.AddModP(tmp, full, one);
+    //    Print(tmp);
+	Check(tmp == resultfulladd, name, "full + one");
+    }
+
+    proc TestSub()
+    {
+	_zero(tmp);
+	f.SubModP(tmp, one, zero);
+	Check(tmp == one, name, "one - zero");
+	_zero(tmp);
+	f.SubModP(tmp, one, one);
+	Check(tmp == zero, name, "one - one");
+	_zero(tmp);
+	f.SubModP(tmp, zero, one);
+	Check(tmp == primeminusone, name, "zero - one");
+    }
+
+    proc TestMul()
+    {
+	_zero(tmp2);
+	f.Mul(tmp2, one, zero, K);
+	Check(tmp2 == zero2, name, "one * zero");
+	_zero(tmp2);
+	f.Mul(tmp2, one, two, K);
+	Check(tmp2 == two2, name, "one * two");
+	_zero(tmp2);
+	f.Mul(tmp2, two, two, K);
+	Check(tmp2 == four2, name, "two * two");
+	_zero(tmp2);
+	f.Mul(tmp2, primeminusone, primeminusone, K);
+	Check(tmp2 == resultquadmod, name, "pm1 * pm1");
+    /*
+	_zero(tmp2); _zero(tmp);
+	field.inv(two, P, prime_r, tmp);
+	field.mul(tmp, two, tmp2, K);
+	field.modp(tmp, tmp2);
+	Check(tmp == one, name, "inv(two) * two");
+    */
+    }
+
+    proc TestModP()
+    {
+	var txx: Vect;
+
+	_zero(tmp2); _zero(txx);
+	f.Mul(tmp2, primeminusone, primeminusone, K);
+	f.ModP(txx, tmp2);
+	Check(txx == one, name, "modp test 1");
+	_zero(txx);
+	f.ModP(txx, one2);
+	Check(txx == one, name, "modp test 2");
+	_zero(tmp2); _zero(txx);
+	f.Mul(tmp2, two, primeminusone, K);
+	f.ModP(txx, tmp2);
+	Check(txx == resultdoublemod, name, "modp test 3");
+    }
+
+    proc TestModO()
+    {
+	_zero(tmp2); _zero(tmp);
+	f.Mul(tmp2, orderminusone, orderminusone, K);
+	ModN(tmp, tmp2, K*2);
+	Check(tmp == one, name, "modo test 1");
+	_zero(tmp);
+	ModN(tmp, one2, K*2);
+	Check(tmp == one, name, "modo test 2");
+	_zero(tmp2); _zero(tmp);
+	f.Mul(tmp2, two, orderminusone, K);
+	ModN(tmp, tmp2, K*2);
+	Check(tmp == orderresultdoublemod, name, "modo test 3");
+    }
+
+    proc TestInv()
+    {
+
+	_zero(tmp2); _zero(tmp);
+	f.InvModP(tmp, two);
+	f.Mul(tmp2, tmp, two, K);
+	f.ModP(tmp, tmp2);
+	Check(tmp == one, name, "inv test 1");
+	_zero(tmp2); _zero(tmp);
+	f.InvModP(tmp, eight);
+	f.Mul(tmp2, tmp, eight, K);
+	f.ModP(tmp, tmp2);
+	Check(tmp == one, name, "inv test 2");
+	_zero(tmp2); _zero(tmp);
+	f.InvModP(tmp, three);
+	f.Mul(tmp2, tmp, three, K);
+	f.ModP(tmp, tmp2);
+	Check(tmp == one, name, "inv test 3");
+	_zero(tmp2); _zero(tmp);
+	f.InvModP(tmp, six);
+	f.Mul(tmp2, tmp, six, K);
+	f.ModP(tmp, tmp2);
+	Check(tmp == one, name, "inv test 4");
+	_zero(tmp2); _zero(tmp);
+	f.InvModP(tmp, primeminusone);
+	f.Mul(tmp2, tmp, primeminusone, K);
+	f.ModP(tmp, tmp2);
+	Check(tmp == one, name, "inv test 5");
+    }
+
+    proc TestAll()
+    {
+	TestAdd();
+	TestSub();
+	TestMul();
+	TestModP();
+	TestModO();
+	TestInv();
+    }
+}
+
+
+proc main(): _int
+{
+
+    secp192r1.TestAll();
+    secp224r1.TestAll();
+    secp256r1.TestAll();
+    secp384r1.TestAll();
+    secp521r1.TestAll();
+
+    return nerr;
+}
+// vim: ts=8 sw=4 noet nowrap
+

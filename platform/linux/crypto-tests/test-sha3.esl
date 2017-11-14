@@ -1,0 +1,271 @@
+import debug;
+alias debug as err;
+
+import sha3_224;
+import sha3_256;
+import sha3_384;
+import sha3_512;
+
+type Test:
+{   msg: @[]_byte;		// text
+    h224: [28*2+1]_byte;	// hex
+    h256: [32*2+1]_byte;	// hex
+    h384: [48*2+1]_byte;	// hex
+    h512: [64*2+1]_byte;	// hex
+};
+
+const tests: []Test =
+{ {
+	"",		// zero length
+  .h224="6B4E03423667DBB73B6E15454F0EB1ABD4597F9A1B078E3F5B5A6BC7",
+  .h256="A7FFC6F8BF1ED76651C14756A061D662F580FF4DE43B49FA82D80A4B80F8434A",
+  .h384="0C63A75B845E4F7D01107D852E4C2485C51A50AAAA94FC61995E71BBEE983A2A"
+	"C3713831264ADB47FB6BD1E058D5F004",
+  .h512="A69F73CCA23A9AC5C8B567DC185A756E97C982164FE25859E0D1DCC1475C80A6"
+	"15B2123AF1F5F94C11E3E9402C3AC558F500199D95B6D3E301758586281DCD26"
+  },{
+	"abc",
+  .h224="E642824C3F8CF24AD09234EE7D3C766FC9A3A5168D0C94AD73B46FDF",
+  .h256="3A985DA74FE225B2045C172D6BD390BD855F086E3E9D525B46BFE24511431532",
+  .h384="EC01498288516FC926459F58E2C6AD8DF9B473CB0FC08C2596DA7CF0E49BE4B2"
+	"98D88CEA927AC7F539F1EDF228376D25",
+  .h512="B751850B1A57168A5693CD924B6B096E08F621827444F70D884F5D0240D2712E"
+	"10E116E9192AF3C91A7EC57647E3934057340B4CF408D5A56592F8274EEC53F0"
+  },{
+	"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq",
+  .h224="8A24108B154ADA21C9FD5574494479BA5C7E7AB76EF264EAD0FCCE33",
+  .h256="41C0DBA2A9D6240849100376A8235E2C82E1B9998A999E21DB32DD97496D3376",
+  .h384="991C665755EB3A4B6BBDFB75C78A492E8C56A22C5C4D7E429BFDBC32B9D4AD5A"
+	"A04A1F076E62FEA19EEF51ACD0657C22",
+  .h512="04A371E84ECFB5B8B77CB48610FCA8182DD457CE6F326A0FD3D7EC2F1E91636D"
+	"EE691FBE0C985302BA1B0D8DC78C086346B533B49C030D99A27DAF1139D6E75E"
+  },{
+	"abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmno"
+	"ijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu",
+  .h224="543E6868E1666C1A643630DF77367AE5A62A85070A51C14CBF665CBC",
+  .h256="916F6061FE879741CA6469B43971DFDB28B1A32DC36CB3254E812BE27AAD1D18",
+  .h384="79407D3B5916B59C3E30B09822974791C313FB9ECC849E406F23592D04F625DC"
+	"8C709B98B43B3852B337216179AA7FC7",
+  .h512="AFEBB2EF542E6579C50CAD06D2E578F9F8DD6881D7DC824D26360FEEBF18A4FA"
+	"73E3261122948EFCFD492E74E82E2189ED0FB440D187F382270CB455F21DD185"
+  },{
+	"a",	// A trigger for 1 million 'a's
+  .h224="d69335b93325192e516a912e6d19a15cb51c6ed5c15243e7a7fd653c",
+  .h256="5c8875ae474a3634ba4fd55ec85bffd661f32aca75c6d699d0cdcb6c115891c1",
+  .h384="eee9e24d78c1855337983451df97c8ad9eedf256c6334f8e948d252d5e0e7684"
+	"7aa0774ddb90a842190d2c558b4b8340",
+  .h512="3c3a876da14034ab60627c077bb98f7e120a2a5370212dffb3385a18d4f38859"
+	"ed311d0a9d5141ce9cc5c66ee689b266a8aa18ace8282a0e0db596c90b0a7b87"
+  }
+};
+
+
+
+proc PrintHex(s: @[]_byte, x: @[]_byte, n: _uint)
+{   var i: _uint;
+
+    err.str(s);
+    for i from 0 to n-1 do
+    {	err.hex8(x[i]);
+	if (i&0xF) == 0xF then err.nl(); else err.chr(' ');
+    }
+    err.nl();
+}
+
+
+var hash, good: [64]_byte;
+
+
+const As: [512]_byte =
+"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+;
+
+package sha3_224
+{
+    proc TestA(hash: @[DigestSize]_byte)
+    {   var n, k: _uint;
+	var ctx: Context;
+
+	n = 1_000_000;
+	ctx.Start();
+	// try to exercise all the paths
+	ctx.Update(As, 5);  n -= 5;
+	ctx.Update(As, 2);  n -= 2;
+	ctx.Update(As, 5);  n -= 5;
+	ctx.Update(As, 4);  n -= 4;
+	ctx.Update(As,10);  n -= 10;
+	ctx.Update(As,18);  n -= 18;
+	ctx.Update(As,12);  n -= 12;
+	while n > 0 do
+	{   k = _min(n, 512);
+	    ctx.Update(As, k);
+	    n -= k; 
+	}     
+	ctx.Finish(hash, DigestSize);
+    }
+}
+
+package sha3_256
+{
+    proc TestA(hash: @[DigestSize]_byte)
+    {   var n, k: _uint;
+	var ctx: Context;
+
+	n = 1_000_000;
+	ctx.Start();
+	// try to exercise all the paths
+	ctx.Update(As, 5);  n -= 5;
+	ctx.Update(As, 2);  n -= 2;
+	ctx.Update(As, 5);  n -= 5;
+	ctx.Update(As, 4);  n -= 4;
+	ctx.Update(As,10);  n -= 10;
+	ctx.Update(As,18);  n -= 18;
+	ctx.Update(As,12);  n -= 12;
+	while n > 0 do
+	{   k = _min(n, 512);
+	    ctx.Update(As, k);
+	    n -= k; 
+	}     
+	ctx.Finish(hash, DigestSize);
+    }
+}
+
+package sha3_384
+{
+    proc TestA(hash: @[DigestSize]_byte)
+    {   var n, k: _uint;
+	var ctx: Context;
+
+	n = 1_000_000;
+	ctx.Start();
+	// try to exercise all the paths
+	ctx.Update(As, 5);  n -= 5;
+	ctx.Update(As, 2);  n -= 2;
+	ctx.Update(As, 5);  n -= 5;
+	ctx.Update(As, 4);  n -= 4;
+	ctx.Update(As,10);  n -= 10;
+	ctx.Update(As,18);  n -= 18;
+	ctx.Update(As,12);  n -= 12;
+	while n > 0 do
+	{   k = _min(n, 512);
+	    ctx.Update(As, k);
+	    n -= k; 
+	}     
+	ctx.Finish(hash, DigestSize);
+    }
+}
+
+package sha3_512
+{
+    proc TestA(hash: @[DigestSize]_byte)
+    {   var n, k: _uint;
+	var ctx: Context;
+
+	n = 1_000_000;
+	ctx.Start();
+	// try to exercise all the paths
+	ctx.Update(As, 5);  n -= 5;
+	ctx.Update(As, 2);  n -= 2;
+	ctx.Update(As, 5);  n -= 5;
+	ctx.Update(As, 4);  n -= 4;
+	ctx.Update(As,10);  n -= 10;
+	ctx.Update(As,18);  n -= 18;
+	ctx.Update(As,12);  n -= 12;
+	while n > 0 do
+	{   k = _min(n, 512);
+	    ctx.Update(As, k);
+	    n -= k; 
+	}     
+	ctx.Finish(hash, DigestSize);
+    }
+}
+
+proc Hex1(x: _byte): _byte
+{
+    if x
+    is '0'..'9' then return x-'0';
+    is 'A'..'F' then return x-'A'+10;
+    is 'a'..'f' then return x-'a'+10;
+    return 0;	// error
+}
+
+proc FromHex(x: @[]_byte, n: _uint, b: @[]_byte)
+{   var i: _uint;
+
+    for i from 0 to n-1 do
+    {   b[i] = (Hex1(x[2*i]) << 4) | (Hex1(x[2*i+1]));
+    }
+}
+
+var nerr: _uint = 0;
+
+proc Check(test: boolean, which: @[]_byte, num: _uint): boolean
+{
+    if !test then
+    {   err.str("Test failed: ");
+    	err.str(which);
+    	err.str(" #");
+	err.uint(num);
+	err.nl();
+	nerr += 1;
+    }
+    return test;
+}
+
+proc main(): _int
+{   var i, n: _uint;
+    var atest: boolean;
+
+    for i from 0 to tests?len-1 do
+    {
+	n = _zlen(tests[i].msg@);
+//err.str("n="); err.uint(n); err.nl();
+	atest = n == 1 && tests[i].msg[0] == 'a';
+	if atest then
+	    sha3_224.TestA(hash);
+	else
+	    sha3_224.Hash(tests[i].msg, n, hash);
+	FromHex(tests[i].h224, 28, good);
+	if !Check(hash[0:28] == good[0:28], "sha3_224", i+1) then
+	{   PrintHex("bad =", hash, 28);
+	    PrintHex("good=", good, 28);
+	}
+	if atest then
+	    sha3_256.TestA(hash);
+	else
+	    sha3_256.Hash(tests[i].msg, n, hash);
+	FromHex(tests[i].h256, 32, good);
+	if !Check(hash[0:32] == good[0:32], "sha3_256", i+1) then
+	{   PrintHex("bad =", hash, 32);
+	    PrintHex("good=", good, 32);
+	}
+	if atest then
+	    sha3_384.TestA(hash);
+	else
+	    sha3_384.Hash(tests[i].msg, n, hash);
+	FromHex(tests[i].h384, 48, good);
+	if !Check(hash[0:48] == good[0:48], "sha3_384", i+1) then
+	{   PrintHex("bad =", hash, 48);
+	    PrintHex("good=", good, 48);
+	}
+	if atest then
+	    sha3_512.TestA(hash);
+	else
+	    sha3_512.Hash(tests[i].msg, n, hash);	
+	FromHex(tests[i].h512, 64, good);
+	if !Check(hash[0:64] == good[0:64], "sha3_512", i+1) then
+	{   PrintHex("bad =", hash, 64);
+	    PrintHex("good=", good, 64);
+	}
+    }
+
+    return _int(nerr);
+}
+

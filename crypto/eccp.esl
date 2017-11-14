@@ -1,0 +1,175 @@
+/*
+ * Common routines for Elliptic Curve routines based on NIST primes
+ *
+ * Before importing, define the finite field and import ffieldp.
+ */
+
+    alias ffieldp as f;
+
+    proc PointDouble(r: @Point, p: @Point)
+    {
+	var s, t: Vect;
+
+	if bn.isZero(p.x, K) && bn.isZero(p.y, K) then
+	{   _zero(r@);
+	    return;
+	}
+	_zero(s);		// for small constants
+	f.MulModP(t, p.x, p.x);	// t = p.x²
+	s[0] = 1;		// s = 1
+	f.SubModP(t, t, s);	// t = p.x²-1
+	s[0] = 3;		// s = 3
+	f.MulModP(t, t, s);	// t = 3(p.x²-1) = 3p.x²+a because a=-3
+	f.AddModP(s, p.y, p.y);	// s = 2p.y
+	f.InvModP(s, s);	// s = 1/2p.y
+	f.MulModP(s, t, s);	// s = (3p.x²+a)/2p.y
+	f.MulModP(t, s, s);	// t = s²
+	f.SubModP(t, t, p.x);	// t = s²-p.x
+	f.SubModP(r.x, t, p.x);	// r.x = s²-p.x-p.x = s²-2p.x
+	f.SubModP(t, p.x, r.x);	// t = p.x-r.x
+	f.MulModP(s, s, t);	// s = s(p.x-r.x)
+	f.SubModP(r.y, s, p.y);	// r.y = s(p.x-r.x)-p.y
+    }
+
+    proc PointAdd(r: @Point, p: @Point, q: @Point)
+    {
+	var t, u, v: Vect;
+
+	if bn.isZero(p.x, K) && bn.isZero(p.y, K) then
+	{   r@ = q@;
+	    return;
+	}
+	if bn.isZero(q.x, K) && bn.isZero(q.y, K) then
+	{   r@ = p@;
+	    return;
+	}
+	if p.x == q.x then
+	{   if p.y == q.y then
+		PointDouble(r, p);
+	    else
+	    {	_zero(r@);
+	    }
+	    return;
+	}
+	f.SubModP(t, p.y, q.y);
+	f.SubModP(u, p.x, q.x);
+	f.InvModP(u, u);
+	f.MulModP(v, t, u);
+	f.MulModP(t, v, v);
+	f.SubModP(u, t, p.x);
+	f.SubModP(r.x, u, q.x);
+	f.SubModP(u, q.x, r.x);
+	f.MulModP(v, v, u);
+	f.SubModP(r.y, v, q.y);
+    }
+
+    // multiply  point (px,py) by scalar sc, result point is (rx,ry)
+    proc PointMul(r: @Point, p: @Point, sc: @Vect)
+    {
+	var q, t: Point;
+	var i: _uint;
+
+	_zero(q);
+	i = W;
+	while i > 0 do
+	{   i -= 1;
+	    PointDouble(t, q);
+	    q = t;
+	    if sc[i/32] & (_uint32(1) << (i%32)) != 0 then
+	    {	PointAdd(t, q, p);
+		q = t;
+	    }
+	}
+	r@ = q;
+    }
+
+    proc ECDH(pub: @Point, priv: @Vect, result: @Point)
+    {
+	PointMul(result, pub, priv);
+    }
+
+    proc GenPubKey(priv: @Vect, pub: @Point)
+    {
+	PointMul(pub, G, priv);
+    }
+
+    proc IsKeyValid(key: @Vect): boolean
+    {
+	return bn.isGT(N, key, K);
+    }
+
+    // r = x mod N where N is the order of the curve
+    // uses Barrett's reduction method
+    proc ModN(r: @Vect, x: @Vect2, len: _uint)
+    {   var q1q3: Vect1;
+	var q2:   [(K+1)*2]_uint32;
+
+	// if x is smaller than the modulus
+	if len == K && bn.isLT(x, N, K) then
+	{   //if x != out then	// not the same vector
+	    r@ = x[0:K];
+	    return;
+	}
+	bn.RShf(q1q3, x, len, K+1, K-1);
+	f.Mul(q2, order_mu, q1q3, K+1);
+	bn.RShf(q1q3, q2, (K+1)*2, K, K+1);
+	f.Mul(q2, q1q3, N, K);
+	bn.Sub(q1q3, x, q2, K+1);
+	while bn.isGE(q1q3, N, K+1) do
+	    bn.Sub(q1q3, q1q3, N, K+1);
+	r@ = q1q3[0:K];
+    }
+
+    proc MulModN(r: @Vect, x: @Vect, y: @Vect)
+    {	var t: Vect2;
+
+	f.Mul(t, x, y, K);
+	ModN(r, t, K*2);
+    }
+
+    proc Sign(d: @Vect,			// private key on the curve
+	      e: @Vect,			// hash to sign
+	      k: @Vect,			// random data
+	      r: @Vect, s: @Vect	// out, signature
+	     ):  boolean		// true if all was OK
+    {
+	var T: Point;
+	var t1, t2: Vect;
+
+	if bn.isZero(k, K) || !bn.isGT(N, k, K) then
+	    return false;		// 0 < k < N failed
+	PointMul(T, G, k);
+	r@ = T.x;
+	if !bn.isGT(N, r, K) then	// must reduce mod N
+	    bn.Sub(r, r, N, K);
+	if bn.isZero(r@, K) then
+	    return false;		// bad random number
+	MulModN(t1, r, d);
+	f.AddMod(t2, e, t1, N);
+	f.InvMod(t1, k, N);
+	MulModN(s, t1, t2);
+	if bn.isZero(s@, K) then return false;
+	return true;
+    }
+
+    proc Validate(pub: @Point,		// coordinates of the public key
+		  e: @Vect,		// hash
+	          r: @Vect, s: @Vect	// signature
+	         ):  boolean		// true if all was OK
+    {
+	var w: Vect;
+	var u1, u2: Vect;
+	var p: Point;
+	var t1, t2, t3: Point;
+	var t3x, t3y: Vect;
+
+	f.InvMod(w, s, N);
+	MulModN(u1, e, w);
+	MulModN(u2, r, w);
+	PointMul(t1, G, u1);
+	PointMul(t2, pub, u2);
+	PointAdd(t3, t1, t2);
+
+	return t3.x == r@;
+    }
+
