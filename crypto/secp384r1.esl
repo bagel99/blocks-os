@@ -42,356 +42,62 @@ package secp384r1
 			0xF4372DDF, 0xC7634D81, 0xFFFFFFFF, 0xFFFFFFFF,
 			0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF,
 			0x00000000 };
+    const order_mu: Vect1 = 	// µ in Barrett reduction
+		    {	0x333AD68D, 0x1313E695, 0xB74F5885, 0xA7E5F24D,
+			0x0BC8D220, 0x389CB27E, 0x00000000, 0x00000000,
+			0x00000000, 0x00000000, 0x00000000, 0x00000000,
+			0x00000001};
 
-  package field
-  {
-    proc RShf(x: @Vect)
-    {   var i: _uint;
-	var c, t: _uint32;
+    import ffieldp;
 
-	c = 0;
-	i = K;
-	do
-	{   i -= 1;
-	    t = x[i] & 1;
-	    x[i] = (x[i] >> 1) | (c << 31);
-	    c = t;
-	} while i > 0;
-	    
-    }
-    
-    // r = (x + y) mod P
-    proc AddP(r: @Vect, x: @Vect, y: @Vect)
+    package ffieldp
     {
-	// if carry out or result larger than P then reduce
-	if bn.Add(r, x, y, K) != 0 || bn.isGE(r, P, K) then
-	    bn.Sub(r, r, P, K);
-    }
+	// r = x mod P
+	// double length vector in x (x must be writable)
+	proc ModP(r: @Vect, x: @Vect2)
+	{   var s: Vect;
 
-    // r = (x + y) mod m
-    proc AddM(r: @Vect, x: @Vect, y: @Vect, m: @Vect)
-    {
-	// if carry out or result larger than P then reduce
-	if bn.Add(r, x, y, K) != 0 || bn.isGE(r, m, K) then
-	    bn.Sub(r, r, m, K);
-    }
-
-    // r = (x - y) mod P
-    proc SubP(r: @Vect, x: @Vect, y: @Vect)
-    {   var tmp: Vect;
-
-	// if carry out then we wrapped
-	if bn.Sub(r, x, y, K) != 0 then
-	    bn.Add(r, r, P, K);
-    }
-
-    // called with len=K and len=K+1
-    proc Mul(r: @Vect, x: @Vect, y: @Vect, n: _uint32)
-    {   var i, j: _uint;
-	var t: _uint64;
-	var tmp: [(K+1)*2]_uint32;
-
-	_zero(tmp[0:n*2]);
-	_zero(r[0:n*2]);
-	for i from 0 to n-1 do
-	{   for j from 0 to n-1 do
-	    {	t = x[j] * y[i];
-		tmp[i+j] = _uint32(t);
-		tmp[i+j+1] = _uint32(t >> 32);
-		bn.Add(r[i+j:], tmp[i+j:], r[i+j:], n*2 - (i+j));
-		_zero(tmp[0:n*2]);
-	    }
+	    r@ = x[0:K];	// t
+	    s[0:4] = { 0 };
+	    s[4:3] = x[21:3];
+	    s[7:5] = { 0 };	// s₁
+	    AddModP(r, r, s);	// t+s₁
+	    AddModP(r, r, s);	// t+2s₁
+	    s = x[12:12];	// s₂
+	    AddModP(r, r, s);	// t+2s₁+s₂
+	    s[0:3] = x[21:3];
+	    s[3:9] = x[12:9];	// s₃
+	    AddModP(r, r, s);	// t+2s₁+s₂+s₃
+	    s[0] = 0;
+	    s[1] = x[23];
+	    s[2] = 0;
+	    s[3] = x[20];
+	    s[4:8] = x[12:8];	// s₄
+	    AddModP(r, r, s);	// t+2s₁+s₂+s₃+s₄
+	    s[0:4] = { 0 };
+	    s[4:4] = x[20:4];
+	    s[8:4] = { 0 };	// s₅
+	    AddModP(r, r, s);	// t+2s₁+s₂+s₃+s₄+s₅
+	    s[0] = x[20];
+	    s[1:2] = { 0 };
+	    s[3:3] = x[21:3];
+	    s[6:6] = { 0 };	// s₆
+	    AddModP(r, r, s);	// t+2s₁+s₂+s₃+s₄+s₅+s₆
+	    s[0] = x[23];
+	    s[1:11] = x[12:11];	// d₁
+	    SubModP(r, r, s);	// t+2s₁+s₂+s₃+s₄+s₅+s₆-d₁
+	    s[0] = 0;
+	    s[1:4] = x[20:4];
+	    s[5:7] = { 0 };	// d₂
+	    SubModP(r, r, s);	// t+2s₁+s₂+s₃+s₄+s₅+s₆-d₁-d₂
+	    s[0:3] = { 0 };
+	    s[3] = x[23];
+	    s[4] = x[23];
+	    s[5:7] = { 0 };	// d₃
+	    SubModP(r, r, s);	// t+2s₁+s₂+s₃+s₄+s₅+s₆-d₁-d₂-d₃
 	}
     }
 
-    // r = x mod P
-    // double length vector in x (x must be writable)
-    proc ModP(r: @Vect, x: @Vect2)
-    {
-	var s: Vect;
-
-	r@ = x[0:K];		// t
-	s[0:4] = { 0 };
-	s[4:3] = x[21:3];
-	s[7:5] = { 0 };		// s₁
-	AddP(r, r, s);		// r = t+s₁
-	AddP(r, r, s);		// r = t+2s₁
-	s = x[12:12];		// s₂
-	AddP(r, r, s);		// r = t+2s₁+s₂
-	s[0:3] = x[21:3];
-	s[3:9] = x[12:9];	// s₃
-	AddP(r, r, s);		// r = t+2s₁+s₂+s₃
-	s[0] = 0;
-	s[1] = x[23];
-	s[2] = 0;
-	s[3] = x[20];
-	s[4:8] = x[12:8];	// s₄
-	AddP(r, r, s);		// r = t+2s₁+s₂+s₃+s₄
-	s[0:4] = { 0 };
-	s[4:4] = x[20:4];
-	s[8:4] = { 0 };		// s₅
-	AddP(r, r, s);		// r = t+2s₁+s₂+s₃+s₄+s₅
-	s[0] = x[20];
-	s[1:2] = { 0 };
-	s[3:3] = x[21:3];
-	s[6:6] = { 0 };		// s₆
-	AddP(r, r, s);		// r = t+2s₁+s₂+s₃+s₄+s₅+s₆
-	s[0] = x[23];
-	s[1:11] = x[12:11];	// d₁
-	SubP(r, r, s);		// r = t+2s₁+s₂+s₃+s₄+s₅+s₆-d₁
-	s[0] = 0;
-	s[1:4] = x[20:4];
-	s[5:7] = { 0 };		// d₂
-	SubP(r, r, s);		// r = t+2s₁+s₂+s₃+s₄+s₅+s₆-d₁-d₂
-	s[0:3] = { 0 };
-	s[3] = x[23];
-	s[4] = x[23];
-	s[5:7] = { 0 };		// d₃
-	SubP(r, r, s);		// r = t+2s₁+s₂+s₃+s₄+s₅+s₆-d₁-d₂-d₃
-    }
-
-    // r = (x * y) mod P
-    proc MulModP(r: @Vect, x: @Vect, y: @Vect)
-    {	var t: Vect2;
-
-	Mul(t, x, y, K);
-	ModP(r, t);
-    }
-
-    // Multiplicative inverse
-    // r = 1/x mod m
-    proc InvModM(r: @Vect, x: @Vect, m: @Vect)
-    {   var t: _int;
-	var c: bn.Base;
-	var a, b, u, v: Vect;
-
-	a = x@;
-	b = m@;
-	_zero(u); u[0] = 1;	// u = {1}
-	_zero(v);
-	loop
-	{   t = bn.Cmp(a, b, K);
-	  exit t == 0;
-	    c = 0;
-	    if bn.isEven(a) then
-	    {	bn.RShf1(a, K);
-		if bn.isOdd(u) then
-		    c = bn.Add(u, u, m, K);
-		bn.RShf1(u, K);
-		u[K-1] |= c << (bn.Base?bits-1);
-	    }
-	    elif bn.isEven(b) then
-	    {	bn.RShf1(b, K);
-		if bn.isOdd(v) then
-		    c = bn.Add(v, v, m, K);
-		bn.RShf1(v, K);
-		v[K-1] |= c << (bn.Base?bits-1);
-	    }
-	    elif t > 0 then
-	    {	bn.Sub(a, a, b, K);
-		bn.RShf1(a, K);
-		if bn.Cmp(u, v, K) < 0 then
-		    bn.Add(u, u, m, K);
-		bn.Sub(u, u, v, K);
-		if bn.isOdd(u) then
-		    c = bn.Add(u, u, m, K);
-		bn.RShf1(u, K);
-		u[K-1] |= c << (bn.Base?bits-1);
-	    }
-	    else
-	    {	bn.Sub(b, b, a, K);
-		bn.RShf1(b, K);
-		if bn.Cmp(v, u, K) < 0 then
-		    bn.Add(v, v, m, K);
-		bn.Sub(v, v, u, K);
-		if bn.isOdd(v) then
-		    c = bn.Add(v, v, m, K);
-		bn.RShf1(v, K);
-		v[K-1] |= c << (bn.Base?bits-1);
-	    }
-	}
-	r@ = u;
-    }
-
-    proc InvModP(r: @Vect, x: @Vect)
-    {
-	InvModM(r, x, P);
-    }
-  }	// end package field
-
-    alias field as f;
-
-    proc PointDouble(r: @Point, p: @Point)
-    {
-	var s, t: Vect;
-
-	if bn.isZero(p.x, K) && bn.isZero(p.y, K) then
-	{   _zero(r@);
-	    return;
-	}
-	_zero(s);		// for small constants
-	f.MulModP(t, p.x, p.x);	// t = p.x²
-	s[0] = 1;		// s = 1
-	f.SubP(t, t, s);	// t = p.x²-1
-	s[0] = 3;		// s = 3
-	f.MulModP(t, t, s);	// t = 3(p.x²-1) = 3p.x²+a because a=-3
-	f.AddP(s, p.y, p.y);	// s = 2p.y
-	f.InvModP(s, s);	// s = 1/2p.y
-	f.MulModP(s, t, s);	// s = (3p.x²+a)/2p.y
-	f.MulModP(t, s, s);	// t = s²
-	f.SubP(t, t, p.x);	// t = s²-p.x
-	f.SubP(r.x, t, p.x);	// r.x = s²-p.x-p.x = s²-2p.x
-	f.SubP(t, p.x, r.x);	// t = p.x-r.x
-	f.MulModP(s, s, t);	// s = s(p.x-r.x)
-	f.SubP(r.y, s, p.y);	// r.y = s(p.x-r.x)-p.y
-    }
-
-    proc PointAdd(r: @Point, p: @Point, q: @Point)
-    {
-	var t, u, v: Vect;
-
-	if bn.isZero(p.x, K) && bn.isZero(p.y, K) then
-	{   r@ = q@;
-	    return;
-	}
-	if bn.isZero(q.x, K) && bn.isZero(q.y, K) then
-	{   r@ = p@;
-	    return;
-	}
-	if p.x == q.x then
-	{   if p.y == q.y then
-		PointDouble(r, p);
-	    else
-	    {	_zero(r@);
-	    }
-	    return;
-	}
-	f.SubP(t, p.y, q.y);
-	f.SubP(u, p.x, q.x);
-	f.InvModP(u, u);
-	f.MulModP(v, t, u);
-	f.MulModP(t, v, v);
-	f.SubP(u, t, p.x);
-	f.SubP(r.x, u, q.x);
-	f.SubP(u, q.x, r.x);
-	f.MulModP(v, v, u);
-	f.SubP(r.y, v, q.y);
-    }
-
-    // multiply  point (px,py) by scalar sc, result point is (rx,ry)
-    proc PointMul(r: @Point, p: @Point, sc: @Vect)
-    {
-	var q, t: Point;
-	var i: _uint;
-
-	_zero(q);
-	i = W;
-	while i > 0 do
-	{   i -= 1;
-	    PointDouble(t, q);
-	    q = t;
-	    if sc[i/32] & (_uint32(1) << (i%32)) != 0 then
-	    {	PointAdd(t, q, p);
-		q = t;
-	    }
-	}
-	r@ = q;
-    }
-
-    proc ECDH(pub: @Point, priv: @Vect, result: @Point)
-    {
-	PointMul(result, pub, priv);
-    }
-
-    proc GenPubKey(priv: @Vect, pub: @Point)
-    {
-	PointMul(pub, G, priv);
-    }
-
-    proc IsKeyValid(key: @Vect): boolean
-    {
-	return bn.isGT(N, key, K);
-    }
-
-    // r = x mod N where N is the order of the curve
-    // uses Barrett's reduction method
-    proc ModN(r: @Vect, x: @Vect2, len: _uint)
-    {   var q1q3: Vect1;
-	var q2:   [(K+1)*2]_uint32;
-	const order_mu: Vect1 = 	// µ in Barrett reduction
-	{   0x333AD68D, 0x1313E695, 0xB74F5885, 0xA7E5F24D,
-	    0x0BC8D220, 0x389CB27E, 0x00000000, 0x00000000,
-	    0x00000000, 0x00000000, 0x00000000, 0x00000000,
-	    0x00000001
-	};
-
-	// if x is smaller than the modulus
-	if len == K && bn.isLT(x, N, K) then
-	{   //if x != out then	// not the same vector
-	    r@ = x[0:K];
-	    return;
-	}
-	bn.RShf(q1q3, x, len, K+1, K-1);
-	f.Mul(q2, order_mu, q1q3, K+1);
-	bn.RShf(q1q3, q2, (K+1)*2, K, K+1);
-	f.Mul(q2, q1q3, N, K);
-	bn.Sub(q1q3, x, q2, K+1);
-	while bn.isGE(q1q3, N, K+1) do
-	    bn.Sub(q1q3, q1q3, N, K+1);
-	r@ = q1q3[0:K];
-    }
-
-    proc MulModN(r: @Vect, x: @Vect, y: @Vect)
-    {	var t: Vect2;
-
-	f.Mul(t, x, y, K);
-	ModN(r, t, K*2);
-    }
-
-    proc Sign(d: @Vect,			// private key on the curve
-	      e: @Vect,			// hash to sign
-	      k: @Vect,			// random data
-	      r: @Vect, s: @Vect	// out, signature
-	     ):  boolean		// true if all was OK
-    {
-	var T: Point;
-	var t1, t2: Vect;
-
-	if bn.isZero(k, K) || !bn.isGT(N, k, K) then
-	    return false;		// 0 < k < N failed
-	PointMul(T, G, k);
-	r@ = T.x;
-	if !bn.isGT(N, r, K) then	// must reduce mod N
-	    bn.Sub(r, r, N, K);
-	if bn.isZero(r@, K) then
-	    return false;		// bad random number
-	MulModN(t1, r, d);
-	f.AddM(t2, e, t1, N);
-	f.InvModM(t1, k, N);
-	MulModN(s, t1, t2);
-	if bn.isZero(s@, K) then return false;
-	return true;
-    }
-
-    proc Validate(pub: @Point,		// coordinates of the public key
-		  e: @Vect,		// hash
-	          r: @Vect, s: @Vect	// signature
-	         ):  boolean		// true if all was OK
-    {
-	var w: Vect;
-	var u1, u2: Vect;
-	var p: Point;
-	var t1, t2, t3: Point;
-	var t3x, t3y: Vect;
-
-	f.InvModM(w, s, N);
-	MulModN(u1, e, w);
-	MulModN(u2, r, w);
-	PointMul(t1, G, u1);
-	PointMul(t2, pub, u2);
-	PointAdd(t3, t1, t2);
-
-	return t3.x == r@;
-    }
+    import eccp;
 }
 
