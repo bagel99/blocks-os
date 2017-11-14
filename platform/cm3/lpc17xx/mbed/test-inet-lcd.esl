@@ -78,7 +78,7 @@ proc main(): _int
     sysctl.Init();
     fault.Init();
     debug.Init();
-    sys.ledon(0);							// 01
+    sys.ledon(0);							// 1000
 debug.str("Starting test-inet-lcd...\n");
     meminit(0x2007C100, 0x7F00, 0);	// FIXME
     // create MAC from serial number
@@ -103,7 +103,7 @@ debug.str("Starting test-inet-lcd...\n");
 	IPv6ID.Send(e);
     }
 
-    sys.ledon(1);							// 11
+    sys.ledon(1);							// 1100
     ds.Init();
     ds.SetFont(myfont.fonttab);
     
@@ -126,18 +126,18 @@ debug.str("Starting test-inet-lcd...\n");
 		ds.SetXY(0,0);
 		ds.ShowString(buf);
 		ds.Refresh();
-		sys.ledon(3);						// 1111
+		sys.ledon(3);						// 11x1
 		once4 = true;
 	    }
 	}
 	if !once6 then
 	{   if ip6.GetAddress(1, addr6) != 0 then
-	    {   n = ipv6.AddrToText(addr6, buf[0:40]);
+	    {	n = ipv6.AddrToText(addr6, buf[0:40]);
 		buf[n] = 0;
 		ds.SetXY(0,10);
 		ds.ShowString(buf);
 		ds.Refresh();
-		sys.ledon(2);						// 111
+		sys.ledon(2);						// 111x
 		once6 = true;
 	    }
 	}

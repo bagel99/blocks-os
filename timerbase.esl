@@ -116,7 +116,7 @@ package timer
     // DEBUG
     proc (tb: pTimer) Dump(te: pTimerEvent)
     {   var i: _uint;
-
+      if _defined(debug) then {
 	debug.str("tmr.Dump:\n");
 	i = 0;
 	while te != 0 && i < 10 do
@@ -127,6 +127,7 @@ package timer
 	    te = pTimerEvent(te.next);
 	    i += 1;
 	}
+      }
     }
     // END DEBUG
 
@@ -151,6 +152,7 @@ package timer
 if db > 2 then {debug.str("tmr.Enq "); debug.uint8(te.from);
 debug.chr(':'); debug.uint8(te.tag);
 debug.chr(' '); debug.uint32(te.ticks); debug.nl();}
+	// FIXME - if te.ticks == 0 then ???
 	ten = tb.list;
 	if ten == 0 then		// queue was empty
 	{   te.next = 0;
@@ -258,8 +260,8 @@ if db > 6 then { debug.str("tmr.Run I\n"); }
 	}
 	else
 	{
-if db > 2 then { debug.str("tmr.Run "); debug.uint8(_uint8(e.code));
-debug.chr(','); debug.uint8(e.tag); debug.nl();}
+if db > 2 then { debug.str("tmr.Run "); debug.uint8(e.from); debug.chr(':');
+debug.uint8(_uint8(e.code)); debug.chr(','); debug.uint8(e.tag); debug.nl();}
 	    if te.code
 	    is TSTART then
 	    {

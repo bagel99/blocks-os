@@ -128,7 +128,7 @@ if db > 1 then {debug.str("eth.Send: size="); debug.uint(mb.Size());
 debug.str(" proto="); debug.hex16(_uint16(eh.proto));
 debug.nl();}
 	if !eb.state.XmitLoad(mb.Data(), mb.Size()) then    // FIXME: need to queue here
-debug.str("eb.Xmit failed\n");
+if db > 0 then debug.str("eb.Xmit failed\n");
     }
 
     var ethb: pEthBlock;   // FIXME: kludge to get context

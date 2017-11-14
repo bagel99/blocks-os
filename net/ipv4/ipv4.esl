@@ -567,7 +567,7 @@ debug.nl();}
 if db > 1 then {debug.str("ipv4.StartTimer\n");}
 //	if ib.iftimer == NONE then
 //	{   ib.iftimer = RUN;
-	    timer.StartSeconds(TimerSecs, 0);
+	    timer.StartSeconds(0, TimerSecs);
 //	}
     }
 
@@ -584,7 +584,7 @@ if db > 1 then {debug.str("ipv4.Timer\n");}
 		    intf.DHCPTimer(TimerSecs);
 	    }
 	}
-	te.RestartSeconds(TimerSecs, 0);
+	te.RestartSeconds(0, TimerSecs);
     }
 
     proc Run(b: pBlock, e: pEvent)
