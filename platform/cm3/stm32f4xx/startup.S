@@ -1,5 +1,7 @@
 	.syntax	unified
+	.eabi_attribute	67, "2.09"
 	.cpu	cortex-m4
+	.fpu	fpv4-sp-d16
 	.eabi_attribute	6, 10
 	.eabi_attribute 27, 1
 	.section ".vectors"

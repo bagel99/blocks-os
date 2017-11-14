@@ -11,11 +11,11 @@ INC=	-I.. -I../.. -I../../.. -I../../.. -I../../../.. \
 
 DBG=
 OPT=	-i	# disable inlining
-AS=	arm-as -mcpu=cortex-m3
-LD=	arm-ld
-OBJCOPY=arm-objcopy
-OBJDUMP=arm-objdump
-NM=	arm-nm
+AS=	arm-none-eabi-as -mcpu=cortex-m3
+LD=	arm-none-eabi-ld
+OBJCOPY=arm-none-eabi-objcopy
+OBJDUMP=arm-none-eabi-objdump
+NM=	arm-none-eabi-nm
 LIB= 	../../lib/lib.a
 
 # keep intermediate files, for now
