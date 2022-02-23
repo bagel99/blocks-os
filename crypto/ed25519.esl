@@ -1,0 +1,356 @@
+/*
+ * Curve 25519
+ * As developed by D.J. Bernstein, and the related Edwards version.
+ * References:
+ *  1. RFC 7749
+ *  2. An implementation by mehdi sotoodeh:
+ *     https://github.com/msotoodeh/curve25519.git
+ */
+
+import bignum4;
+
+package ed25519
+{
+    alias bignum as bn;
+    alias bignum.Base as Base;
+    alias bignum.Basex2 as Basex2;
+    const W = 256;				// width in bits
+    const K = (W+(Base?bits)-1)/Base?bits;	// width in chunks
+    type Vect: [K]_uint32;
+    type Vect1: [K+1]_uint32;
+    type Vect2: [K*2]_uint32;
+
+    // curve y² = x³ + 486662x² + x over prime 2²⁵⁵ − 19
+    // base point g=9
+    const A = 486662;
+    const A4 = (A-2) / 4;
+    const P: Vect = {	 0xFFFFFFED, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF,
+			 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0x7FFFFFFF };
+    const maxP: Vect = { 0xFFFFFFDA, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF,
+			 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF };
+    const G: Vect = {    0x00000009, 0x00000000, 0x00000000, 0x00000000,
+			 0x00000000, 0x00000000, 0x00000000, 0x00000000 };
+    package ffieldp
+    {
+	proc AddModP(r: @Vect, x: @Vect, y: @Vect)
+	{   var i: _uint;
+	    var c: bn.Base;
+
+	    c = bn.Add(r, x, y, K) * 38;
+	    c = bn.AddC(r, r, c, K) * 38;
+	    _ = bn.AddC(r, r, c, K);
+	}
+
+	proc SubModP(r: @Vect, x: @Vect, y: @Vect)
+	{   var i: _uint;
+	    var c: bn.Base;
+
+	    c = bn.Sub(r, x, y, K);
+	    c = bn.SubC(r, r, c * 38, K);
+	    _ = bn.SubC(r, r, c * 38, K);
+	}
+
+	// r = (c == 0) then 1, (c == 1) then P
+	// constant time
+	proc SetP(r: @Vect, c: Base)
+	{
+	    // c is either 0 or 1
+	    // change it to either 0 or all 1s
+	    c = ~c + 1;
+	    r[0] = c & 0xFFFFFFED;
+	    r[1] = c;
+	    r[2] = c;
+	    r[3] = c;
+	    r[4] = c;
+	    r[5] = c;
+	    r[6] = c;
+	    r[7] = c >> 1;
+	}
+
+	proc ModP(x: @Vect)
+	{   var t: Vect;
+	    var c: Base;
+
+	    c = bn.Sub(x, x, P, K);
+	    SetP(t, c);
+	    _ = bn.Add(x, x, t, K);
+	    c = bn.Sub(x, x, P, K);
+	    SetP(t, c);
+	    _ = bn.Add(x, x, t, K);
+	}
+
+	// r = y + b*x
+	proc Reduce(r: @Vect, y: @Vect, b: Base, x: @Vect)
+	{   var i: _uint;
+	    var c: Base;
+	    var t: Basex2;
+
+	    for i from 0 to K-1 do
+	    {	t = b * x[i];
+	    	t += y[i] + c;
+	    	r[i] = Base(t);
+	    	c = Base(t >> 32);
+	    }
+	    c = bn.AddC(r, r, c*38, K);
+	    _ = bn.AddC(r, r, c*38, K);
+	}
+
+	// r = x+y reduced
+	proc AddRed(r: @Vect, x: @Vect, y: @Vect)
+	{   var c: Base;
+
+	    c = bn.Add(r, x, y, K);
+	    c = bn.AddC(r, r, c*38, K);
+	    _ = bn.AddC(r, r, c*38, K);
+	}
+
+	// r = x+y reduced
+	proc SubRed(r: @Vect, x: @Vect, y: @Vect)
+	{   var c: Base;
+
+	    c = bn.Sub(r, x, y, K);
+	    c = bn.SubC(r, r, c*38, K);
+	    _ = bn.SubC(r, r, c*38, K);
+	}
+
+	proc SubRed2(r: @Vect, x: @Vect, y: @Vect)
+	{
+	}
+
+	// r = x + b*y
+	proc MulAddRed(r: @Vect, x: @Vect, b: Base, y: @Vect)
+	{   var i: _uint;
+	    var c: Base;
+	    var t: Basex2;
+
+	    c = 0;
+	    for i from 0 to K-1 do
+	    {	t = b * y[i];
+		t += x[i];
+		t += c;
+		r[i] = Base(t);
+		c = Base(t>>32);
+	    }
+	    c = bn.AddC(r, r, c*38, K);
+	    _ = bn.AddC(r, r, c*38, K);
+	}
+
+	// r = x*y reduced
+	proc MulRed(r: @Vect, x: @Vect, y: @Vect)
+	{   var t: Vect2;
+
+	    bn.Mul(t, x, y, K);
+	    Reduce(r, t, 38, t[8:]);
+	}
+
+	// r = x*x reduced
+	proc SqrRed(r: @Vect, x: @Vect)
+	{
+	    MulRed(r, x, x);
+	}
+
+	// r = x*y mod P
+        proc MulModP(r: @Vect, x: @Vect, y: @Vect)
+        {
+	    MulRed(r, x, y);
+	    ModP(r);
+        }
+
+	// r = 1/x mod P
+	proc InvModP(r: @Vect, x: @Vect)
+	{   var i: _uint;
+	    var x2, x9, x11: Vect;
+	    var x_5_0, x_10_0, x_20_0, x_50_0, x_100_0: Vect;
+	    var t0, t1: Vect;
+
+	    SqrRed(x2, x);		// x2 = x²
+	    SqrRed(t1, x2);		// t1 = x⁴
+	    SqrRed(t0, t1);		// t0 = x⁸
+	    MulRed(x9, t0, x);		// x9 = x⁹
+	    MulRed(x11, x9, x2);	// x11 = x¹¹
+	    SqrRed(t0, x11);		// t0 = x²²
+	    MulRed(x_5_0, t0, x9);	// x_5_0 = x³¹ = x**(2⁵-2⁰)
+
+	    SqrRed(t0, x_5_0);
+	    SqrRed(t1, t0);
+	    SqrRed(t0, t1);
+	    SqrRed(t1, t0);
+	    SqrRed(t0, t1);
+	    MulRed(x_10_0, t0, x_5_0);
+
+	    SqrRed(t0, x_10_0);
+	    SqrRed(t1, t0);
+	    for i from 0 to 3 do
+	    {	SqrRed(t0, t1);
+		SqrRed(t1, t0);
+	    }
+	    MulRed(x_20_0, t1, x_10_0);
+
+	    SqrRed(t0, x_20_0);
+	    SqrRed(t1, t0);
+	    for i from 0 to 8 do
+	    {	SqrRed(t0, t1);
+		SqrRed(t1, t0);
+	    }
+	    MulRed(t0, t1, x_20_0);
+
+	    SqrRed(t1, t0);
+	    SqrRed(t0, t1);
+	    for i from 0 to 3 do
+	    {	SqrRed(t1, t0);
+		SqrRed(t0, t1);
+	    }
+	    MulRed(x_50_0, t0, x_10_0);
+
+	    SqrRed(t0, x_50_0);
+	    SqrRed(t1, t0);
+	    for i from 0 to 23 do
+	    {	SqrRed(t0, t1);
+		SqrRed(t1, t0);
+	    }
+	    MulRed(x_100_0, t1, x_50_0);
+
+	    SqrRed(t1, x_100_0);
+	    SqrRed(t0, t1);
+	    for i from 0 to 48 do
+	    {	SqrRed(t1, t0);
+		SqrRed(t0, t1);
+	    }
+	    MulRed(t1, t0, x_100_0);
+
+	    SqrRed(t0, t1);
+	    SqrRed(t1, t0);
+	    for i from 0 to 23 do
+	    {	SqrRed(t0, t1);
+		SqrRed(t1, t0);
+	    }
+	    MulRed(t0, t1, x_50_0);
+
+	    SqrRed(t1, t0);
+	    SqrRed(t0, t1);
+	    SqrRed(t1, t0);
+	    SqrRed(t0, t1);
+	    SqrRed(t1, t0);
+	    MulRed(r, t1, x11);
+
+	}
+    }
+    alias ffieldp as f;
+
+    // point terminology uses x and z
+    type Point: { x: Vect; z: Vect; };
+
+    /*
+     * The curve 25519 algorithms use keys stored little endian,
+     * i.e. the [0] byte is the least significant.
+     */
+    type Key: [32]_byte;
+
+    /*
+     * A valid key must have the 2 most significant bits = 01
+     * and the 3 least significant bits = 000
+     */
+    proc TrimKey(key: @Key)
+    {
+	key[31] = (key[31] | 0x40) & 0x7F;	// most significant
+	key[0] &= 0xF8;				// least significant
+    }
+
+    proc MontDouble(r: @Point, q: @Point)
+    {
+	var a, b: Vect;
+
+	f.AddRed(a, q.x, q.z);	// a = qx+qz
+	f.SubRed(b, q.x, q.z);	// b = qx-qz
+	f.SqrRed(a, a);		// a = (qx+qz)²
+	f.SqrRed(b, b);		// b = (qx-qz)²
+	f.MulRed(r.x, a, b);	// rx = (qx+qz)²(qx-qz)²
+	f.SubRed(b, a, b);	// b = (qx+qz)²-(qx-qz)²
+	f.MulAddRed(a, a, A4, b);
+	f.MulRed(r.z, a, b);
+    }
+
+    // p = p+q, q = 2q
+    proc MontMulStep(p: @Point, q: @Point, base: @Vect)
+    {
+	var a, b, c, d, e: Vect;
+
+	f.SubRed(a, p.x, p.z);	// a = px-pz
+	f.AddRed(b, p.x, p.z);	// b = px+pz
+	f.SubRed(c, q.x, q.z);	// c = qx-qz
+	f.AddRed(d, q.x, q.z);	// d = qx+qz
+	f.MulRed(a, a, d);	// a = (px-pz)(qx+qz)
+	f.MulRed(b, b, c);	// b = (px+pz)(qx-qz)
+	f.AddRed(e, a, b);	// e = (px-pz)(qx+qz)+(px+pz)(qx-qz)
+	f.SubRed(b, a, b);	// b = (px-pz)(qx+qz)-(px+pz)(qx-qz)
+	f.SqrRed(p.x, e);	// px = ((px-pz)(qx+qz)+(px+pz)(qx-qz))²
+	f.SqrRed(a, b);		// a = ((px-pz)(qx+qz)-(px+pz)(qx-qz))²
+	f.MulRed(p.z, a, base);
+	f.SqrRed(a, d);		// a = (qx+qz)²
+	f.SqrRed(b, c);		// b = (qx-qz)²
+	f.MulRed(q.x, a, b);	// qx = (qx+qz)²(qx-qz)²
+	f.SubRed(b, a, b);	// b = (qx+qz)²-(qx-qz)²
+	f.MulAddRed(a, a, A4, b);
+	f.MulRed(q.z, a, b);
+    }
+
+// FIXME - should be random
+const my_r = "105FFFF0BF0814B61DC748AFCC8C2BB6653436A31834DF70223B478E6AEF114A";
+
+    // not a full point multiply, just the x component
+    proc PointMul(r: @Vect, g: @Vect, k: @Key)
+    {   var p, q, gp: Point;
+	var rand: Vect;
+	var PP, QP: [0..1]@Point;
+	var i, j, bit: _uint;
+	var t: Base;
+
+	bn.ImportHexStr(rand, my_r, 8);		// FIXME
+	bn.Add(p.z, g, rand, K);
+	f.MulRed(p.x, g, p.z);
+	MontDouble(q, p);
+	PP[0] = q;  PP[1] = p;
+	QP[0] = p;  QP[1] = q;
+	i = k@?len - 1;
+	t = k[i];
+	// a valid key has most significate bits == 01
+	assert t&0b1100_0000 == 0b0100_0000;
+	t = t << 2;	// skip top 2 bits
+	j = 6;			// skip top 2 bits
+	loop
+	{   while j > 0 do
+	    {	j -= 1;
+		bit = (t>>7)&1;
+		MontMulStep(PP[bit], QP[bit], g);
+		t = t << 1;
+	   }
+	 exit i == 0;
+	   i -= 1;
+	   t = k[i];
+	   j = 8;
+	}
+	f.InvModP(q.z, p.z);
+	f.MulModP(q.x, p.x, q.z);
+	r@ = q.x;
+    }
+
+    proc GenPubKey(prvk: @Key, pubk : @Key)
+    {   var prv, pub: Vect;
+
+	TrimKey(prvk);
+	bn.ImportLE(prv, prvk, 32);
+	PointMul(pub, G, prvk);
+	bn.ExportLE(pubk, pub, 32);
+    }
+
+    proc GenShrKey(shrk: @Key, pubk: @Key, prvk: @Key)
+    {   var tmp: Vect;
+
+	TrimKey(prvk);
+	bn.ImportLE(tmp, pubk, 32);
+	PointMul(tmp, tmp, prvk);
+	bn.ExportLE(shrk, tmp, 32);
+    }
+
+}
+

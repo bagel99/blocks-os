@@ -1,0 +1,108 @@
+/*
+ * AES-CMAC
+ * References:
+ * 1. RFC 4493
+ * Copyright Brian G. Lucas, 2022.
+ * License: New BSD.
+ */
+
+import aes;
+
+package aescmac
+{
+    const Rb: [16]_byte =
+    { 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+      0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x87
+    };
+
+    proc AES128(key: @[16]_byte, in: @[16]_byte, out: @[16]_byte)
+    {
+	var ctx: aes.Context;
+	ctx.LoadKey(KEY128, key);
+	ctx.Encrypt(in, out);
+    }
+
+    proc LeftShift1(in: @[16]_byte, out: @[16]_byte)
+    {	var i: _uint;
+	var c: _uint8;
+	c = 0;
+	i = 15;
+	loop
+	{   out[i] = (in[i] << 1) | c;
+	    c = in[i] >> 7;
+	  exit i == 0;
+	    i -= 1;
+	}
+    }
+
+    proc Xor128(a: @[16]_byte, b: @[16]_byte, out: @[16]_byte)
+    {	var i: _uint;
+	for i in 0..15 do
+	    out[i] = a[i] ^ b[i];
+    }
+
+    // FIXME - this can be done much better
+    proc Pad(b: @[]_byte, pad: @[16]_byte, len: _uint)
+    {	var j: _uint;
+
+	for j from 0 to 15 do
+	{   if j < len then
+		pad[j] = b[j];
+	    elif j == len then
+		pad[j] = 0x80;
+	    else
+		pad[j] = 0x00;
+	}
+    }
+
+    proc GenerateSubkey(key: @[16]_byte, K1: @[16]_byte, K2: @[16]_byte)
+    {	var L, Z, tmp: [16]_byte;
+
+	_zero(Z);
+	AES128(key, Z, L);
+	if (L[0] & 0x80) == 0 then
+	    LeftShift1(L, K1);
+	else
+	{   LeftShift1(L, tmp);
+	    Xor128(tmp, Rb, K1);
+	}
+	if (K1[0] & 0x80) == 0 then
+	    LeftShift1(K1, K2);
+	else
+	{   LeftShift1(K1, tmp);
+	    Xor128(tmp, Rb, K2);
+	}
+    }
+
+    proc Process(key: @[16]_byte, in: @[]_byte, len: _uint, mac: @[16]_byte)
+    {	var n, i: _uint;
+	var flag: boolean;
+	var X, Y, K1, K2: [16]_byte;
+	var M: [16]_byte;	// M_last
+	var P: [16]_byte;	// padded
+
+	GenerateSubkey(key, K1, K2);
+	n = (len+15)/16;		// n is number of rounds
+	if n == 0 then
+	{   n = 1;
+	    flag = false;
+	}
+	else
+	    flag = (len % 16) == 0;	// last block is complete
+	if flag then
+	    Xor128(in[16*(n-1):16], K1, M);
+	else
+	{   Pad(in[16*(n-1):], P, len%16);
+	    Xor128(P, K2, M);
+	}
+	_zero(X);
+	i = 0;
+	while i < n-1 do		// not done if n==1
+	{   Xor128(X, in[16*i:16], Y);
+	    AES128(key, Y, X);
+	    i += 1;
+	}
+	Xor128(X, M, Y);		// last block
+	AES128(key, Y, mac);
+    }
+}

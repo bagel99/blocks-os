@@ -136,7 +136,7 @@ if _defined(debug) then {
 	debug.str(" head="); debug.uint16(mb.head);
 	debug.str(" tail="); debug.uint16(mb.tail);
 	if all then
-	    debug.dumpb(" data=", mb.Data(), mb.Size());
+	    debug.dumpb(" data=\n", mb.Data(), mb.Size());
 	else
 	    debug.nl();
     }
@@ -164,7 +164,7 @@ if _defined(debug) then {
     proc Free(mb: pMBuf)
     {
 	_delete(mb(mb.size - HdrSize));
-    }	
+    }
 
     proc Combine(mb1: pMBuf, mb2: pMBuf): pMBuf
     {   var size1, size2, head: _uint;
@@ -195,7 +195,7 @@ if _defined(debug) then {
 	    mb3.CopyInTail(mb2);
 	    Free(mb2);
 	}
-	return mb3;	
+	return mb3;
     }
 
 }

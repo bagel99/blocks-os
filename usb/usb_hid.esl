@@ -38,6 +38,9 @@ package usb	// extends package
 	SetReport=9, SetIdle, SetProtocol
     );
 
+    type ReportRequest:
+    (	INPUT=1, OUTPUT=2, FEATURE=3, MAX=255 );
+
     /*
      *  iiiittss
      *        ss - size

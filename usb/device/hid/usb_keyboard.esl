@@ -3,7 +3,7 @@
  *
  * keycodes sent via endpoint 1 configured as Interrupt in 8-byte reports
  * LEDs received via endpoint 0 control packet SetReport
- * 
+ *
  */
 import usb_hid;
 
@@ -15,7 +15,7 @@ package usbdev		// extends driver
     const ManufactString = 1;
     const ProductString = 2;
     const SerialNoString = 3;
-    const DevDesc: usb.DeviceDesc: align(4) = 
+    const DevDesc: usb.DeviceDesc: align(4) =
     {	usb.DeviceDesc?size,		// desc. length
     	usb.DescDevice,
     	0x0200,				// version 2.0
@@ -42,7 +42,7 @@ package usbdev		// extends driver
 	0x05, 0x07,	//   USAGE_PAGE (Key Codes)
 	0x19, 0xE0,	//   USAGE_MINIMUM (Keycode 0xE0)
 	0x29, 0xE7,	//   USAGE_MAXIMUM (Keycode 0xE7)
-	0x15, 0x00,	//   LOGICAL_MINIMUM (0)			
+	0x15, 0x00,	//   LOGICAL_MINIMUM (0)
 	0x25, 0x01,	//   LOGICAL_MAXIMUM (1)
 	0x75, 0x01,	//   REPORT_SIZE (1)
 	0x95, 0x08,	//   REPORT_COUNT (8)
@@ -65,12 +65,12 @@ package usbdev		// extends driver
 			//   --- key array bytes 2-7
 	0x95, 0x06,	//   REPORT_COUNT (6)
 	0x75, 0x08,	//   REPORT_SIZE (8)
-	0x15, 0x00,	//   LOGICAL_MINIMUM (0)			
+	0x15, 0x00,	//   LOGICAL_MINIMUM (0)
 	0x25, 0x01,	//   LOGICAL_MAXIMUM (1)
 	0x05, 0x07,	//   USAGE_PAGE (Key Codes)
 	0x19, 0x00,	//   USAGE_MINIMUM (Keycode 0x00)
 	0x29, 0x65,	//   USAGE_MAXIMUM (keycode 0x65=101)
-	0x81, 0x00,	//   INPUT (Data,Array)	
+	0x81, 0x00,	//   INPUT (Data,Array)
 	0xC0		// END_COLLECTION
     };
 
@@ -129,7 +129,7 @@ package usbdev		// extends driver
     {   38,
     	usb.DescString,
 	{'S','T','M','i','c','r','o','e','l','e','c','t','r','o','n','i','c','s'}
-    };    	
+    };
     const S2: usb.StringDesc =		// Product
     {   30,
     	usb.DescString,
@@ -141,6 +141,21 @@ package usbdev		// extends driver
 	{'0','0','0','0','0','0','1'}
     };
 
+    type Modifier:
+    {	LeftCtrl: boolean;
+	LeftShift: boolean;
+	LeftAlt: boolean;
+	LeftGui:   boolean;
+	RightCtrl: boolean;
+	RightShift: boolean;
+	RightAlt:   boolean;
+	RightGui:   boolean;
+    }: packed, lsb, bits(8);
+
+    type KeyCode:
+    {   modifier: Modifier;
+	code:     _uint8;
+    }: packed;
 
     type State:
     {
@@ -279,7 +294,7 @@ if db > 1 then {debug.str("IGS\n");}
 	    {
 if db > 1 then {debug.str("IGI\n");}
 	    }
-	}    
+	}
 	is {.dir=IN, .stype=Standard, .recip=EndPoint} then
 	{
 	    if usb.StandardRequests(rqst.request)
@@ -287,7 +302,7 @@ if db > 1 then {debug.str("IGI\n");}
 	    {
 if db > 1 then {debug.str("EGS\n");}
 	    }
-	}    
+	}
 	is {.dir=IN, .stype=Class, .recip=Interface} then
 	{   if usb.hid.HIDRequest(_uint8(rqst.request))
 	    is GetReport then
@@ -317,10 +332,6 @@ if db > 1 then {debug.str("DS\n");}
 	hs.busy = false;
     }
 
-	type KeyCode:
-	{   modifier: _uint8;
-	    code:     _uint8;
-	}: packed;
     proc Key(keycode: KeyCode)
     {
 	// wait for report buffer to be free
@@ -331,7 +342,7 @@ if db > 1 then {debug.str("DS\n");}
 	hs.busy = true;
 	hs.epin.StartIn(hs.datain, 8);
     }
-	
+
     proc KeyboardInit()
     {
 	DeviceInit();

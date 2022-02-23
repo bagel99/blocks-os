@@ -232,12 +232,14 @@ debug.str("id="); debug.hex32(_uint32(id)); debug.nl();
 	    nep = id.NEP;
 debug.str("nep="); debug.uint(nep); debug.nl();
 	}
+	// FIXME - what if we don't find interface descriptor, nep undefined
 	// skip until we find endpoint descriptor
 	loop
 	{   mb.ShrinkHead(d.Length);
 	    d = pDesc(mb.Data());
 	  exit d.Type == usb.DescEndpoint;
 	}
+	// FIXME - what if we don't find endpoint descriptor
 	ep = pEPDescArray(d);
 debug.str("ep="); debug.hex32(_uint32(ep)); debug.nl();
 	for n from 0 to nep-1 do

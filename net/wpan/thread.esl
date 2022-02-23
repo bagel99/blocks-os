@@ -1,0 +1,276 @@
+/*
+ * Stuff related to the "Thread" protocol
+ */
+
+import hmac256;
+import ieee802154def;
+
+package thread
+{
+    alias ieee802154.AddrLong as AddrLong;
+    alias ieee802154.AddrShort as AddrShort;
+    alias ieee802154.SecLevel as SecLevel;
+    alias ieee802154.KeyMode as KeyMode;
+    alias ieee802154.SecurityControl as SecurityControl;
+
+    /*
+     * UDP Ports
+     *  :MM	61632 (0xF0BF)	Management
+     *  :MC	49196		Commissioner
+     *  :MJ			Joiner
+     *
+     * Thread IPv6 Addresses
+     * Anycast Locator (ALOC)
+     *   Mesh-local-prefix  ||  0000:00FF:FE00:11111100xxxxxxxx
+     * Routing Locator (RLOC)
+     *   Mesh-local-prefix  ||  0000:00FF:FE00:rrrrrrRccccccccc
+     *     r - router id	0..0x3E
+     *     R - reserved (0)
+     *     c - child id		0..0x1FF
+     * Endpoint Identifier (EID)
+     */
+    type ThreadDeviceType:
+    (	MTD,		// Minimal Thread Device
+	FTD		// Full Thread Device
+    );
+    type ThreadDeviceRole:
+    (	SED,		// Sleepy End Device (MTD)
+	MED,		// Minimal End Device (MTD)
+	FED,		// Full End Device (FTD)
+	REED,		// Router-Eligible End Device (FTD)
+	ROUTER		// Active Router (FTD)
+    );
+
+    type DeviceMode:
+    {   fullnwkdata: boolean;	// .00
+	devtype:     (RFD, FFD);// .01 device type
+	secdatareq:  boolean;	// .02
+	rcvron:      boolean;	// .03 receiver on when idle
+    }: packed, lsb;
+
+    type DeviceState:
+    (	Disabled = 0,	// Thread interface is disabled.
+	Detached = 1,	// Thread interface is not attached to a partition.
+	Child    = 2,	// Thread interface participating as a Child.
+	Router   = 3,	// Thread interface participating as a Router.
+	Leader   = 4	// Thread interface participating as a Leader.
+    );
+
+    type ParentRequestState:
+    (	Idle,		// Not currently searching for a parent.
+	Synchronize,	// Looking to synchronize with a parent (after reset).
+	RequestStart,	// Starting to look for a parent.
+	RequestRouter,	// Searching for a Router to attach to.
+	RequestChild,	// Searching for Routers or REEDs to attach to.
+	ChildIdRequest	// Sending a Child ID Request message.
+    );
+
+    type AttachMode:
+    (	Any,		// Attach to any Thread partition.
+	Same,		// Attach to the same Thread partition.
+	Better		// Attach to a better Thread partition.
+    );
+
+    type NeighborBase:
+    {
+	s:
+	{   state:  DeviceState;
+	    mode:   DeviceMode;
+	    datareq:boolean;
+	}: packed;
+	laddr:  AddrLong;
+	keyseq: _uint32;
+	ipaddr:	inet.IPv6Addr;
+	// FIXME - link info
+    };
+
+    type Neighbor(NeighborBase):
+    {
+	macfrmctr:  _uint32;
+	mlefrmctr:  _uint32;
+	saddr:	    AddrShort;
+    };
+
+    type Router(Neighbor):
+    {
+    };
+
+    type Child(Neighbor):
+    {
+	networkdataver: _uint8;
+    };
+
+
+    //********************
+    // Thread device state
+    //********************
+    var devstate: DeviceState;
+    var myaddr: AddrLong;
+    var myipaddr: inet.IPv6Addr;	// FIXME - where?
+    var macfrmctr: _uint32;	// for MAC security FIXME one per neighbor?
+    var parent: Router;
+    var nodeid: _uint16;
+    var random: _uint32;
+    var myiid: [8]_byte;
+
+    // FIXME - this should be per neighbor
+    proc GetMACFrameCounter(incr: _uint): _uint32
+    {   var tmp: _uint32;
+
+	tmp = macfrmctr;
+	macfrmctr += incr;
+	return tmp;
+    }
+
+    /*
+     * Determine what type of security this packet should have
+     * 1. Multicast
+     *    a. Is broadcast PAN (e.g. MLE Announce) then key mode 2
+     *    b. Otherwise no security
+     * 2. Otherwise
+     *    a. Up as Child or better
+     *       1. Not a MLE message then key mode 1
+     *       2. Otherwise no security
+     *    b. Otherwise then no security
+     */
+    proc GetSecurity(mb: mbuf.pMBuf, broadcastpan: boolean)
+	(secctl: SecurityControl,
+	 index: _uint, keyid: _uint)
+    {   var ph6: ipv6.pHeader;
+
+	// assume no security
+	secctl = {.level=NONE}; index = 0; keyid = 0;
+	ph6 = ipv6.pHeader(mb.Data());
+	if ipv6.IsMulticast(ph6.dstaddr) then
+	{   if broadcastpan then
+	    {	secctl = {.level=ENC_MIC32, .keymode=KEY4};
+		index = 0xff;
+		keyid = 0xffffffff;
+	    }
+	}
+	else
+	{   if devstate >= DeviceState.Child	// MLE has gotten this far
+	    then
+	    {	// if !IsMLEMessage(ph6.dstadr) then
+		{   secctl = {.level=ENC_MIC32, .keymode=KEY0};
+		    index = 1;	// FIXME
+		}
+	    }
+	}
+    }
+
+    proc InitRandom()
+    {
+	random = nodeid;
+    }
+
+    proc GetRandom(): _uint32
+    {
+	var tmp: _uint64;
+	var m, p, q: _uint32;
+
+	tmp = 33614 * random;
+	q = _uint32(tmp);
+	q = q >> 1;
+	p = _uint32(tmp >> 32);
+	m = p + q;
+	if m & 0x80000000 != 0 then
+	{    m = m & 0x7FFFFFFF;
+	     m += 1;
+	}
+	random = m;
+	return m;
+    }
+
+  package keys
+  {
+    /*
+     * There are separate 16-bit keys for the MLE and MAC layer.
+     * They are simultaneously generated as a result of a SHA256 hash.
+     * MAC key modes:
+     * 0 - data frames
+     *     only in join request/response
+     * 1 - data or command frames
+     *     uses the key index to find the key
+     * 2 - data frames
+     *	   only for sends to broadcast PAN ID
+     *     the key source is 0xffffffff
+     *     the key id is 0xff
+     *     the key is pre-defined
+     *
+     */
+    const Mode2MacKey: [16]_uint8 =
+    { 0x78, 0x58, 0x16, 0x86, 0xfd, 0xb4, 0x58, 0x0f,
+      0xb0, 0x92, 0x54, 0x6a, 0xec, 0xbd, 0x15, 0x66 };
+    const Mode2Address: [8]_byte =
+    { 0x35, 0x06, 0xfe, 0xb8, 0x23, 0xd4, 0x87, 0x12 };
+
+    var ThreadMasterRawKey: [16]_uint8 =
+    { 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
+      0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff };
+
+    const ThreadMagicString: [6]_byte = 'Thread';
+
+    var prevkey: [32]_uint8;
+    var currkey: [32]_uint8;
+    var keysequence: _uint32 = 0;
+    var keyindex: _uint8;
+
+    proc SetMasterKey(key: @[16]_uint8)
+    {
+debug.str("MasterKey: "); debug.hex8n(key, 16); debug.nl();
+	ThreadMasterRawKey = key@;
+    }
+
+    proc ComputeKey(seqno: _uint32, key: @[32]_uint8): _uint8
+    {   var buf: [4]_byte;
+	var ctx: hmac256.Context;
+
+	_packbe(buf, seqno);
+	ctx.Start(ThreadMasterRawKey, 16);
+	ctx.Update(buf, 4);	// sequence number
+	ctx.Update(ThreadMagicString, 6);
+	ctx.Finish(key);
+	return (seqno & 0x7F) + 1;
+    }
+
+    proc RotateKeys()
+    {
+	prevkey = currkey;
+	keysequence += 1;
+	keyindex = ComputeKey(keysequence, currkey);
+    }
+
+    proc InitKeys()
+    {
+	keyindex = ComputeKey(keysequence, currkey);
+debug.str("Keys: "); debug.hex8n(currkey, 16);
+debug.chr(' '); debug.hex8n(currkey[16:], 16); debug.nl();
+    }
+
+    proc GetMleKey(): @[16]_uint8
+    {
+	return currkey[0:16];
+    }
+
+    proc GetMacKeyImplicit(srcadr: @[8]_byte): @[16]_uint8
+    {
+debug.str("GetMacKeyImplicit not implemented\n");
+	return currkey[16:16];	// FIXME
+    }
+
+    proc GetMacKeyIndex(index: _uint): @[16]_uint8
+    {
+	return currkey[16:16];
+    }
+
+    proc GetMacKeyId(index: _uint, id: _uint64): @[16]_uint8, @[8]_byte
+    {
+	if index == 0xFF && id == 0xFFFFFFFF then
+	    return Mode2MacKey, Mode2Address;
+debug.str("GetMacKeyId no matching id\n");
+	return currkey[16:16], 0;	// FIXME
+    }
+  }
+}
+

@@ -64,7 +64,7 @@ package udp
 	var uh6: inet.pULHeader6;
 	var up: pUpper;
 	var uhlen, chksumlen: _uint;
-	var chksum: _uint16;
+	var chksav, chksum: _uint16;
 	var info: inet.ULInfo;
 	var port: inet.Port;
 	var addr: inet.IPv6Addr;
@@ -94,6 +94,9 @@ debug.str(" len="); debug.uint32(uh.len);}
 		return;
 	    }
 	}
+	chksav = dp.chksum;
+	dp.chksum = 0;
+//debug.dumpb("chksum data\n", mb.Data(), chksumlen);
 	chksum = inet.Checksum(mb.Data(), chksumlen);
 	uh.info = info;
 	port = dp.srcport;
@@ -105,32 +108,26 @@ debug.nl();}
 	while up != 0 do
 	{
 	    if up.port == dp.dstport then
-	    {   pa = inet.pAddrInfo(mb.ShrinkHead(
-		    uhlen + Header?size - inet.AddrInfo?size));
-		if info.isipv6 then pa.af = inet.AFNum.IPV6;
-			       else pa.af = inet.AFNum.IPV4;
-		pa.ifn = info.ifn;
-		pa.port = port;
-		pa.addr = addr;
-		mb.tag = up.tag;
+	    {	mb.tag = up.tag;
 		up.bid.Send(mb);
 		return;
 	    }
 	    up = up.next;
 	}
-	mbuf.Free(mb);	// Bad, or no-one interested, discard.	
+	mbuf.Free(mb);	// Bad, or no-one interested, discard.
     }
 
     // Process packet send by Upper Block
     proc (ub: pUDPBlock) USend(mb: pMBuf)
     {   var dp: pHeader;
-	var len: _uint;
+	var uhlen, len, chksumlen: _uint;
+	var uh:  inet.pULHeader;
 	var uh4: inet.pULHeader4;
 	var uh6: inet.pULHeader6;
 	var bid: BlockID;
-	var conn: inet.AddrInfo;
-	var pconn: inet.pAddrInfo;
 	var up: pUpper;
+	var chksum: _uint16;
+	var info: inet.ULInfo;
 
 	up = ub.upper;
 	while up != 0 && up.tag != mb.tag do
@@ -140,40 +137,44 @@ debug.nl();}
 if db > 0 then { debug.str("UDP Send: No match for tag\n"); }
 	    return;
 	}
-	// copy connection info and then discard
-	pconn = inet.pAddrInfo(mb.Data());
-	conn = pconn@;
-	mb.ShrinkHead(inet.AddrInfo?size);
-	// create UDP header
-	dp = pHeader(mb.GrowHead(Header?size));
-	len = mb.Size();    // includes head and data
-	dp.srcport = up.port;
-	dp.dstport = conn.port;
-	dp.len = len;
-if db > 1 then { debug.str("udp.Send: srcport="); debug.uint16(dp.srcport);
-debug.str(" dstport="); debug.uint16(dp.dstport);
-debug.str(" len="); debug.uint16(dp.len);
-debug.str(" af="); debug.hex8(_uint8(conn.af)); debug.nl();
-}
-	// Create checksum header
-	if conn.af == IPV6 then
-	{   uh6 = inet.pULHeader6(mb.GrowHead(inet.ULHeader6?size));
-	    uh6.dstaddr = conn.addr[0:inet.IPv6AddrLen];
-	    uh6.len = len;
+	// Prepare Upper Header for checksumming
+	uh = inet.pULHeader(mb.Data());
+	info = uh.info;
+	uh.info = inet.InfoZero;	// zero for checksumming
+	if info.isipv6 then
+	{   uh6 = inet.pULHeader6(uh);
 	    uh6.proto = Proto.UDP;
+	    uh6.len = mb.Size() - inet.ULHeader6?size;
 	    uh6.zeros = 0;
-	    uh6.info = {true, conn.ifn};
 	    bid = ub.lower6.bid;
+	    uhlen = inet.ULHeader6?size;
 	}
-	else
-	{   uh4 = inet.pULHeader4(mb.GrowHead(inet.ULHeader4?size));
-	    uh4.dstaddr = conn.addr[0:inet.IPv4AddrLen];
-	    uh4.len = len;
+	else // IPv4
+	{   uh4 = inet.pULHeader4(uh);
 	    uh4.proto = Proto.UDP;
-	    uh4.info = {false, conn.ifn};
+	    uh6.len = mb.Size() - inet.ULHeader4?size;
 	    bid = ub.lower4.bid;
+	    uhlen = inet.ULHeader4?size;
 	}
+	len = mb.Size() - uhlen;
+	// find UDP header
+	dp = pHeader(mb.Offset(uhlen));
+	dp.srcport = up.port;
+//	dp.dstport = conn.port;
+	dp.len = len;
+	dp.chksum = 0;
+	chksumlen = uhlen + len;
+//debug.dumpb("chksum data\n", mb.Data(), chksumlen);
+	chksum = inet.Checksum(mb.Data(), chksumlen);
+	dp.chksum = chksum;
+if db > 1 then { debug.str("udp.Send: len="); debug.uint16(dp.len);
+debug.str(" cksum="); debug.hex16(dp.chksum);
+debug.str(" sport="); debug.uint16(dp.srcport);
+debug.str(" dport="); debug.uint16(dp.dstport);
+debug.nl();
+}
 	mb.code = SEND;
+mb.Dump(true);
 	bid.Send(mb);
     }
 
@@ -183,7 +184,6 @@ debug.str(" af="); debug.hex8(_uint8(conn.af)); debug.nl();
 
 	pa = inet.pAddrInfo(po.data[0:inet.AddrInfo?size]);
 	// check to make sure its not open
-	
 	up = _new(Upper);
 	_zero(up);
 //	up.bid = po.to;
@@ -232,6 +232,9 @@ debug.chr(','); debug.uint8(e.tag); debug.nl();}
 		up.port = ce.info;
 		up.next = ub.upper;
 		ub.upper = up;
+if db > 1 then {debug.str("udp.Connect upper: tag="); debug.uint8(up.tag);
+debug.str(" bid="); debug.uint8(up.bid);
+debug.str(" port="); debug.uint16(up.port); debug.nl();}
 	    }
 	    _delete(ce);
 	}

@@ -1,0 +1,28 @@
+/*
+ * AES-CMAC-PRF-128
+ * References:
+ * 1. RFC 4615
+ * Copyright Brian G. Lucas, 2022.
+ * License: New BSD.
+ */
+
+import aescmac;
+
+package aescmacprf128
+{
+    proc Process(VK: @[]_byte, vklen: _uint, M: @[]_byte, len: _uint,
+		out: @[16]_byte)
+    {
+	var K: [16]_byte;
+	var Zero: [16]_byte;
+
+	if vklen == 16 then
+	    K = VK[0:16];
+	else
+	{   _zero(Zero);
+	    aescmac.Process(Zero, VK, vklen, K);
+	}
+	aescmac.Process(K, M, len, out);
+    }
+}
+

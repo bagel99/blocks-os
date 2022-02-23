@@ -1,0 +1,60 @@
+/*
+ * PKCS#5 PBKDF2 using CMAC (AES-CMAC-PRF-128
+ * References:
+ * 1. RFC 2898
+ * Copyright Brian G. Lucas, 2022.
+ * License: New BSD.
+ */
+
+import aescmacprf128;
+
+package pbkdf2aescmac
+{
+    const MaxSaltLength = 30;
+    const BlockSize = 16;
+
+    proc Xor128(a: @[16]_byte, b: @[16]_byte, out: @[16]_byte)
+    {	var i: _uint;
+	for i in 0..15 do
+	    out[i] = a[i] ^ b[i];
+    }
+
+    proc GenerateKey(passwd: @[]_byte, plen: _uint, salt: @[]_byte, slen: _uint,
+		iterations: _uint, klen: _uint, key: @[]_byte)
+    {
+	var input: [MaxSaltLength+_uint32?size]_byte;
+	var keyBlock, prfOne, prfTwo: [BlockSize]_byte;
+	var blkno: _uint32 = 0;
+	var i, j, n: _uint;
+
+	assert slen <= MaxSaltLength;
+	input[0:slen] = salt[0:slen];
+	assert iterations % 2 == 0;
+	iterations = iterations / 2;
+	j = 0;		// index of key
+	while klen > 0 do
+	{   blkno += 1;
+	    _packbe(input[slen:4], blkno);
+	    aescmacprf128.Process(passwd, plen, input, slen+_uint32?size,
+		    keyBlock);
+printhex("U1", keyBlock, 16);
+	    aescmacprf128.Process(passwd, plen, keyBlock, BlockSize,
+		    prfOne);
+	    Xor128(keyBlock, prfOne, keyBlock);
+	    i = 1;
+	    while i < iterations do
+	    {	aescmacprf128.Process(passwd, plen, prfOne, BlockSize,
+			prfTwo);
+		aescmacprf128.Process(passwd, plen, prfTwo, BlockSize,
+			prfOne);
+		Xor128(keyBlock, prfOne, keyBlock);
+		Xor128(keyBlock, prfTwo, keyBlock);
+		i += 1;
+	    }
+	    n = _min(klen, BlockSize);
+	    key[j:n] = keyBlock[0:n];
+	    j += n;
+	    klen -= n;
+	}
+    }
+}

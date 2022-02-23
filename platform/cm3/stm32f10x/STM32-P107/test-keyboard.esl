@@ -42,10 +42,12 @@ proc EINT10_15_IRQ()
 }
 
 // "Hello world!\n" in keycodes
+const NONE: usbdev.Modifier = { .LeftShift=false };	// all false
+const SHFT: usbdev.Modifier = { .LeftShift=true };
 const mesg1: []usbdev.KeyCode =
-{   {0x02,0x0B},{0x00,0x08},{0x00,0x0F},{0x00,0x0F},{0x00,0x12},{0x00,0x2C},
-    {0x00,0x1A},{0x00,0x12},{0x00,0x15},{0x00,0x0F},{0x00,0x07},{0x02,0x1E},
-    {0x00,0x28}
+{   {SHFT,0x0B},{NONE,0x08},{NONE,0x0F},{NONE,0x0F},{NONE,0x12},{NONE,0x2C},
+    {NONE,0x1A},{NONE,0x12},{NONE,0x15},{NONE,0x0F},{NONE,0x07},{SHFT,0x1E},
+    {NONE,0x28}
 };
 
 proc main()
@@ -55,7 +57,7 @@ proc main()
     sys.Init();
     debug.Init();
     usbdev.KeyboardInit();
-    exti.EnableIntr(sys.BUT1, RISING);	// WAKEUP 
+    exti.EnableIntr(sys.BUT1, RISING);	// WAKEUP
     exti.EnableIntr(sys.BUT2, FALLING);	// TAMPER
     sys.ledon(0);
     // wait for button
@@ -67,7 +69,7 @@ proc main()
     loop
     {
     }
-    
+
 }
 // vim: ts=8 sw=4 noet nowrap
 

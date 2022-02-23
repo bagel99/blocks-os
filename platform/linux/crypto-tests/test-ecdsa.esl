@@ -80,7 +80,7 @@ type TestV:
     ok: boolean;	// true if this should validate
 };
 
-var msg: [2049]_uint32;
+var msg: [2049]_byte;
 
 
 import sha224;
@@ -142,11 +142,11 @@ package secp192r1
 	    n = _zlen(testv[i].Msg@) / 2;	// assume no nibble stragler
 	    FromHex(testv[i].Msg, n, msg);
 	    sha224.Hash(msg, n, hash);
-	    bignum.Import(hash, h, sha224.DigestSize);
-	    bignum.ImportHexStr(testv[i].Qx, pub.x, K);
-	    bignum.ImportHexStr(testv[i].Qy, pub.y, K);
-	    bignum.ImportHexStr(testv[i].R,  R, K);
-	    bignum.ImportHexStr(testv[i].S,  S, K);
+	    bignum.Import(h, hash, sha224.DigestSize);
+	    bignum.ImportHexStr(pub.x, testv[i].Qx, K);
+	    bignum.ImportHexStr(pub.y, testv[i].Qy, K);
+	    bignum.ImportHexStr(R, testv[i].R,  K);
+	    bignum.ImportHexStr(S, testv[i].S,  K);
 	    ok = Validate(pub, h[1:K], R, S);
 	    Check(ok == testv[i].ok, name, "bad validate");
 	}
@@ -248,13 +248,13 @@ package secp224r1
 	    n = _zlen(tests[i].Msg@) / 2;	// assume no nibble stragler
 	    FromHex(tests[i].Msg, n, msg);
 	    sha224.Hash(msg, n, hash);
-	    bignum.Import(hash, h, sha224.DigestSize);
-	    bignum.ImportHexStr(tests[i].d,  priv, K);
-	    bignum.ImportHexStr(tests[i].Qx, pub.x, K);
-	    bignum.ImportHexStr(tests[i].Qy, pub.y, K);
-	    bignum.ImportHexStr(tests[i].k,  rand, K);
-	    bignum.ImportHexStr(tests[i].R,  R, K);
-	    bignum.ImportHexStr(tests[i].S,  S, K);
+	    bignum.Import(h, hash, sha224.DigestSize);
+	    bignum.ImportHexStr(priv, tests[i].d,  K);
+	    bignum.ImportHexStr(pub.x, tests[i].Qx, K);
+	    bignum.ImportHexStr(pub.y, tests[i].Qy, K);
+	    bignum.ImportHexStr(rand, tests[i].k,  K);
+	    bignum.ImportHexStr(R, tests[i].R,  K);
+	    bignum.ImportHexStr(S, tests[i].S,  K);
 	    ok = Sign(priv, h, rand, myR, myS);
 	    if Check(ok, name, "bad sign") then
 	    {
@@ -283,11 +283,11 @@ package secp224r1
 	    n = _zlen(testv[i].Msg@) / 2;	// assume no nibble stragler
 	    FromHex(testv[i].Msg, n, msg);
 	    sha224.Hash(msg, n, hash);
-	    bignum.Import(hash, h, sha224.DigestSize);
-	    bignum.ImportHexStr(testv[i].Qx, pub.x, K);
-	    bignum.ImportHexStr(testv[i].Qy, pub.y, K);
-	    bignum.ImportHexStr(testv[i].R,  R, K);
-	    bignum.ImportHexStr(testv[i].S,  S, K);
+	    bignum.Import(h, hash, sha224.DigestSize);
+	    bignum.ImportHexStr(pub.x, testv[i].Qx, K);
+	    bignum.ImportHexStr(pub.y, testv[i].Qy, K);
+	    bignum.ImportHexStr(R, testv[i].R,  K);
+	    bignum.ImportHexStr(S, testv[i].S,  K);
 	    ok = Validate(pub, h, R, S);
 	    Check(ok == testv[i].ok, name, "bad validate");
 	}
@@ -388,13 +388,13 @@ package secp256r1
 	    n = _zlen(tests[i].Msg@) / 2;	// assume no nibble stragler
 	    FromHex(tests[i].Msg, n, msg);
 	    sha256.Hash(msg, n, hash);
-	    bignum.Import(hash, h, sha256.DigestSize);
-	    bignum.ImportHexStr(tests[i].d,  priv, K);
-	    bignum.ImportHexStr(tests[i].Qx, pub.x, K);
-	    bignum.ImportHexStr(tests[i].Qy, pub.y, K);
-	    bignum.ImportHexStr(tests[i].k,  rand, K);
-	    bignum.ImportHexStr(tests[i].R,  R, K);
-	    bignum.ImportHexStr(tests[i].S,  S, K);
+	    bignum.Import(h, hash, sha256.DigestSize);
+	    bignum.ImportHexStr(priv, tests[i].d,  K);
+	    bignum.ImportHexStr(pub.x, tests[i].Qx, K);
+	    bignum.ImportHexStr(pub.y, tests[i].Qy, K);
+	    bignum.ImportHexStr(rand, tests[i].k,  K);
+	    bignum.ImportHexStr(R, tests[i].R,  K);
+	    bignum.ImportHexStr(S, tests[i].S,  K);
 	    ok = Sign(priv, h, rand, myR, myS);
 	    if Check(ok, name, "bad sign") then
 	    {
@@ -423,11 +423,11 @@ package secp256r1
 	    n = _zlen(testv[i].Msg@) / 2;	// assume no nibble stragler
 	    FromHex(testv[i].Msg, n, msg);
 	    sha256.Hash(msg, n, hash);
-	    bignum.Import(hash, h, sha256.DigestSize);
-	    bignum.ImportHexStr(testv[i].Qx, pub.x, K);
-	    bignum.ImportHexStr(testv[i].Qy, pub.y, K);
-	    bignum.ImportHexStr(testv[i].R,  R, K);
-	    bignum.ImportHexStr(testv[i].S,  S, K);
+	    bignum.Import(h, hash, sha256.DigestSize);
+	    bignum.ImportHexStr(pub.x, testv[i].Qx, K);
+	    bignum.ImportHexStr(pub.y, testv[i].Qy, K);
+	    bignum.ImportHexStr(R, testv[i].R,  K);
+	    bignum.ImportHexStr(S, testv[i].S,  K);
 	    ok = Validate(pub, h, R, S);
 	    Check(ok == testv[i].ok, name, "bad validate");
 	}
@@ -557,13 +557,13 @@ package secp384r1
 	    n = _zlen(tests[i].Msg@) / 2;	// assume no nibble stragler
 	    FromHex(tests[i].Msg, n, msg);
 	    sha384.Hash(msg, n, hash);
-	    bignum.Import(hash, h, sha384.DigestSize);
-	    bignum.ImportHexStr(tests[i].d,  priv, K);
-	    bignum.ImportHexStr(tests[i].Qx, pub.x, K);
-	    bignum.ImportHexStr(tests[i].Qy, pub.y, K);
-	    bignum.ImportHexStr(tests[i].k,  rand, K);
-	    bignum.ImportHexStr(tests[i].R,  R, K);
-	    bignum.ImportHexStr(tests[i].S,  S, K);
+	    bignum.Import(h, hash, sha384.DigestSize);
+	    bignum.ImportHexStr(priv, tests[i].d,  K);
+	    bignum.ImportHexStr(pub.x, tests[i].Qx, K);
+	    bignum.ImportHexStr(pub.y, tests[i].Qy, K);
+	    bignum.ImportHexStr(rand, tests[i].k,  K);
+	    bignum.ImportHexStr(R, tests[i].R,  K);
+	    bignum.ImportHexStr(S, tests[i].S,  K);
 	    ok = Sign(priv, h, rand, myR, myS);
 	    if Check(ok, name, "bad sign") then
 	    {
@@ -592,11 +592,11 @@ package secp384r1
 	    n = _zlen(testv[i].Msg@) / 2;	// assume no nibble stragler
 	    FromHex(testv[i].Msg, n, msg);
 	    sha384.Hash(msg, n, hash);
-	    bignum.Import(hash, h, sha384.DigestSize);
-	    bignum.ImportHexStr(testv[i].Qx, pub.x, K);
-	    bignum.ImportHexStr(testv[i].Qy, pub.y, K);
-	    bignum.ImportHexStr(testv[i].R,  R, K);
-	    bignum.ImportHexStr(testv[i].S,  S, K);
+	    bignum.Import(h, hash, sha384.DigestSize);
+	    bignum.ImportHexStr(pub.x, testv[i].Qx, K);
+	    bignum.ImportHexStr(pub.y, testv[i].Qy, K);
+	    bignum.ImportHexStr(R, testv[i].R,  K);
+	    bignum.ImportHexStr(S, testv[i].S,  K);
 	    ok = Validate(pub, h, R, S);
 	    Check(ok == testv[i].ok, name, "bad validate");
 	}
@@ -727,13 +727,13 @@ package secp521r1
 	    FromHex(tests[i].Msg, n, msg);
 	    sha512.Hash(msg, n, hash[pad:]);
 	    hash[0:pad] = { 0 };
-	    bignum.Import(hash, h, K*4);
-	    bignum.ImportHexStr(tests[i].d,  priv, K);
-	    bignum.ImportHexStr(tests[i].Qx, pub.x, K);
-	    bignum.ImportHexStr(tests[i].Qy, pub.y, K);
-	    bignum.ImportHexStr(tests[i].k,  rand, K);
-	    bignum.ImportHexStr(tests[i].R,  R, K);
-	    bignum.ImportHexStr(tests[i].S,  S, K);
+	    bignum.Import(h, hash, K*4);
+	    bignum.ImportHexStr(priv, tests[i].d,  K);
+	    bignum.ImportHexStr(pub.x, tests[i].Qx, K);
+	    bignum.ImportHexStr(pub.y, tests[i].Qy, K);
+	    bignum.ImportHexStr(rand, tests[i].k,  K);
+	    bignum.ImportHexStr(R, tests[i].R,  K);
+	    bignum.ImportHexStr(S, tests[i].S,  K);
 	    ok = Sign(priv, h, rand, myR, myS);
 	    if Check(ok, name, "bad sign") then
 	    {
@@ -764,11 +764,11 @@ package secp521r1
 	    FromHex(testv[i].Msg, n, msg);
 	    sha512.Hash(msg, n, hash[pad:]);
 	    hash[0:pad] = { 0 };
-	    bignum.Import(hash, h, K*4);
-	    bignum.ImportHexStr(testv[i].Qx, pub.x, K);
-	    bignum.ImportHexStr(testv[i].Qy, pub.y, K);
-	    bignum.ImportHexStr(testv[i].R,  R, K);
-	    bignum.ImportHexStr(testv[i].S,  S, K);
+	    bignum.Import(h, hash, K*4);
+	    bignum.ImportHexStr(pub.x, testv[i].Qx, K);
+	    bignum.ImportHexStr(pub.y, testv[i].Qy, K);
+	    bignum.ImportHexStr(R, testv[i].R,  K);
+	    bignum.ImportHexStr(S, testv[i].S,  K);
 	    ok = Validate(pub, h, R, S);
 	    Check(ok == testv[i].ok, name, "bad validate");
 	}

@@ -8,34 +8,60 @@
 package bignum
 {
     type Base: _uint32;
+    type SBase: _int32;
     type Basex2: _uint64;
+    type SBasex2: _int64;
     type BigNum: []Base;
 
-    proc Import(key: @[]_byte, out: @BigNum, len: _uint)
+    proc Import(out: @BigNum, in: @[]_byte, len: _uint)
     {	var i, j: _uint;
 
 	j = 0;
 	i = len;
 	while i > 0 do
 	{   i -= Base?size;
-	    out[j] = _unpkbe(key[i:Base?size]);
+	    out[j] = _unpkbe(in[i:Base?size]);
 	    j += 1;
 	}
     }
 
-    proc Export(key: @BigNum, out: @[]_byte, len: _uint)
+    proc ImportLE(out: @BigNum, key: @[]_byte, len: _uint)
+    {	var i, j: _uint;
+
+	j = 0;
+	i = 0;
+	while i < len do
+	{   out[j] = _unpkle(key[i:Base?size]);
+	    j += 1;
+	    i += Base?size;
+	}
+    }
+
+    proc Export(out: @[]_byte, in: @BigNum, len: _uint)
     {	var i, j: _uint;
 
 	j = 0;
 	i = len;
 	while i > 0 do
 	{   i -= Base?size;
-	    _packbe(out[i:Base?size], key[j]);
+	    _packbe(out[i:Base?size], in[j]);
 	    j += 1;
 	}
     }
 
-    proc ImportHexStr(s: @[]_byte, r: @BigNum, n: _uint)
+    proc ExportLE(out: @[]_byte, in: @BigNum, len: _uint)
+    {	var i, j: _uint;
+
+	j = 0;
+	i = 0;
+	while i < len do
+	{   _packle(out[i:Base?size], in[j]);
+	    j += 1;
+	    i += Base?size;
+	}
+    }
+
+    proc ImportHexStr(r: @BigNum, s: @[]_byte, n: _uint)
     {	var i: _uint;	// index into s
 	var j: _uint;	// index into r
 	var k: _uint;	// index into hex digits in BigBase
@@ -48,7 +74,7 @@ package bignum
 	p = 0;
 	if (n * h) > i then p = (n * h) - i;	// need 0 padding
 	i = 0;
-	j = n;	
+	j = n;
 	do
 	{   tmp = 0;
 	    for k from 0 to h-1 do
@@ -65,7 +91,7 @@ package bignum
 	    }
 	    j -= 1;
 	    r[j] = tmp;
-	} while j > 0;	
+	} while j > 0;
     }
 
     // s.len must be >= 8*n + 1;
@@ -143,7 +169,21 @@ if USE32 then {
 	    r[i] = _uint32(c);	// low 32 bits
 	    c = c >> 32;
 	}
-	return _uint32(c);
+	return Base(c);
+    }
+
+    proc AddC(r: @BigNum, x: @BigNum, ac: Base, n: _uint): Base
+    {   var i: _uint;
+	var c: Basex2;		// carry
+
+	c = Basex2(ac);
+	for i from 0 to n-1 do
+	{
+	    c = _uint64(x[i]) + c;
+	    r[i] = Base(c);	// low 32 bits
+	    c = c >> 32;
+	}
+	return Base(c);
     }
 
     proc Sub(r: @BigNum, x: @BigNum, y: @BigNum, n: _uint): Base
@@ -156,7 +196,45 @@ if USE32 then {
 	    r[i] = _uint32(c);	// low 32 bits
 	    c = (c >> 32) & 1;
 	}
-	return _uint32(c);
+	return Base(c);
+    }
+
+    proc SubC(r: @BigNum, x: @BigNum, ac: Base, n: _uint): Base
+    {   var i: _uint;
+	var c: Basex2;		// carry
+
+	c = Basex2(ac);
+	for i from 0 to n-1 do
+	{   c = Basex2(x[i]) - c;
+	    r[i] = Base(c);	// low 32 bits
+	    c = (c >> 32) & 1;
+	}
+	return Base(c);
+    }
+
+    proc MulStep(r: @BigNum, b: Basex2, n: _uint)
+    {   var i: _uint;
+    	var t: Basex2;
+
+	for i from 0 to n-1 do
+	{   t = Basex2(r[i]) + Base(b);
+	    r[i] = Base(t);
+	    b = (b >> 32) + (t >> 32);
+	}
+    }
+
+    // r = x * y,  r is double length
+    proc Mul(r: @BigNum, x: @BigNum, y: @BigNum, n: _uint)
+    {   var i, j: _uint;
+	var t: Basex2;
+
+	_zero(r[0:n*2]);
+	for i from 0 to n-1 do
+	{   for j from 0 to n-1 do
+	    {	t = x[j] * y[i];
+		MulStep(r[i+j:], t, n*2 - (i+j));
+	    }
+	}
     }
 }
 
@@ -175,7 +253,7 @@ if USE32 then {
 	// if olen > i then _zero(out[i:olen-i];
     }
 
-    // Right shift by one, in place
+    // Right shift by one bit, in place
     proc RShf1(x: @BigNum, n: _uint)
     {   var i: _uint;
 	var c, t: Base;

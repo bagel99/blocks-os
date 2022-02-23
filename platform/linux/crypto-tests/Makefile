@@ -30,8 +30,11 @@ GCCARCH=
 	$(ESLC) -m$(ARCH) $(DBG) $(INC) $(OPT) -c $<
 
 all:	test-sha2.out test-sha3.out \
-	test-aesccm.out test-aesgcm.out test-chacha.out \
-	test-field.out test-ecdh.out test-ecdsa.out
+	test-aesccm.out test-aesgcm.out test-aescmac.out \
+	test-chacha.out \
+	test-ecdh.out test-ecdsa.out \
+	test-field.out \
+	test-ed25519.out test-ed25519dsa.out
 
 clean:
 	rm -f *.ll *.s *.o *.out *.dis *.map

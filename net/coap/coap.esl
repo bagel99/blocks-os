@@ -3,131 +3,223 @@
  *
  * If over UDP, uses port 5683.
  * References:
- *   1.  draft-ietf-core-coap-12, 1 Oct 2012.
+ *   1.  RFC 7252.
+ *   2.  RFC 7959
+ *   3.  RFC 8974
  *
- * Copyright (c) 2012, Brian G. Lucas.  See LICENSE file.
- * $Id$
+ * Copyright (c) 2012-2022, Brian G. Lucas.  See LICENSE file.
  */
 
 import mbuf;
+import block;
+import inet;
+
+import coapdef;
 
 package coap
 {
-    // Codes
-    type Code:
-    (	// request codes
-	GET=			  1,
-	POST=			  2,
-	PUT=			  3,
-	DELETE=			  4,
-	// response codes, good
-	Created=		 65,
-	Deleted=		 66,
-	Valid=			 67,
-	Changed=		 68,
-	Content=		 69,
-	// response codes, bad
-	BadRequest=		128,
-	Unauthorized=		129,
-	BadOption=		130,
-	Forbidden=		131,
-	NotFound=		132,
-	MethodNotAllowed=	133,
-	NotAcceptable=		134,
-	PreconditionFailed=	140,
-	RequestEntityTooLarge=	141,
-	UnsupportedMediaType=	143,
-	// response codes, ugly
-	InternalServerError=	160,
-	NotImplemented=		161,
-	BadGateway=		162,
-	ServiceUnavailable=	163,
-	GatewayTimeout=		164,
-	ProxyingNotSupported=	165
-    ): bits(8);
+    if !_defined(db) then
+    {   if _defined(debug.db_coap) then
+	    alias debug.db_coap as db;
+	else
+	    const db = 0;
+    }
 
-    type Type: (CON, NON, ACK, RST);	
-    type Header:
-    {   version: 0..3;
-        type:    Type;
-        optlen:  0..15;
-        code:    Code;
-        msgid:   _uint16: be;
-    }: packed, msb;
-    type pHeader: @Header;
+    const UDPPort = 5683;
 
-    type OptionID:
-    (
-	IfMatch=		  1,
-	UriHost=		  3,
-	ETag=			  4,
-	IfNoneMatch=		  5,
-	UriPort=		  7,
-	LocationPath=		  8,
-	UriPath=		 11,
-	ContentFormat=		 12,
-	MaxAge=			 14,
-	UriQuery=		 15,
-	Accept=			 16,
-	Token=			 19,
-	LocationQuery=		 20,
-	ProxyUri=		 35
-    );
-    const NumOptionsMax = 32;	// maximum number of options per packet
-
-    type OptHdr:	// first byte of an option
-    {   delta:	0..15;
-    	len:    0..15;
-    }: packed, msb;
-    const OptEnd: OptHdr = { 15, 0 };	// end of options marker
-
-    type MediaType:
-    (
-	TextPlain=		  0,	// text/plain;charset=utf-8
-	AppLinkFormat=		 40,	// application/link-format
-	AppXML=			 41,	// application/xml
-	AppOctets=		 42,	// application/octet-stream
-	AppExi=			 47,	// application/exi
-	AppJSON=		 50	// application/json
-    );
-
+    alias event.Event as Event;
+    alias event.pEvent as pEvent;
+    alias block.BlockID as BlockID;
+    alias block.Block as Block;
+    alias block.pBlock as pBlock;
     alias mbuf.MBuf as MBuf;
     alias mbuf.pMBuf as pMBuf;
 
-    proc ParseOptions(opt: @[]_byte, nopt: _uint)
-    {   var i, n, delta, len: _uint;
+    type Lower:
+    {   bid:    BlockID;
+	isup:   boolean;
+	hdr:    _uint8;
+	trl:    _uint8;
+	mtu:    _uint16;
+    };
+
+    type CoapBlock(Block):
+    {   lower:  Lower;
+	msgid:  _uint16;	// for requests
+    };
+    type pCoapBlock: @CoapBlock;
+
+
+    proc (cb: pCoapBlock) Send(mb: pMBuf,
+		to: @inet.IPv6Addr, fm: @inet.IPv6Addr)
+    {
+	var uh: inet.pULHeader6;
+	var dp: inet.pUDPHeader;
+
+if db > 2 then {
+debug.str("coap.Send len="); debug.uint(mb.Size()); debug.nl(); }
+	dp = inet.pUDPHeader(mb.GrowHead(inet.UDPHeader?size));
+	dp.dstport = UDPPort;
+	dp.srcport = UDPPort;
+	// UDP length includes UDP header size
+	dp.len = mb.Size() + inet.UDPHeader?size;
+	uh = inet.pULHeader6(mb.GrowHead(inet.ULHeader6?size));
+	uh.info = {.isipv6=true};
+	uh.dstaddr = to@;
+	uh.srcaddr = fm@;
+debug.str("dst: "); ipv6.AddrPrint(uh.dstaddr); debug.nl();
+debug.str("src: "); ipv6.AddrPrint(uh.srcaddr); debug.nl();
+	mb.tag = 0;
+	mb.code = SEND;
+	cb.lower.bid.Send(mb);
+    }
+
+    proc (cb: pCoapBlock) SendReply(hdr: pHeader,
+		to: @inet.IPv6Addr, fm: @inet.IPv6Addr)
+    {   var mb: pMBuf;
+	var bp: @[]_uint8;
+	var ch: pHeader;
+	var n: _uint;
+	const HdrSize = 8 + inet.ULHeader6?size + inet.UDPHeader?size;
+	const MyHdrSize = 11;		// FIXME
+	const MsgSize = 32;		// FIXME
+
+	mb = mbuf.Alloc(HdrSize + MyHdrSize + MsgSize, HdrSize);
+	bp = mb.Data();
+	// FIXME - the rest of this is fake
+	var toklen: _uint = hdr.vtl.toklen;
+	ch = pHeader(mb.Data());
+	if hdr.vtl.type == CON then
+	    ch.vtl = {.version=1, .type=ACK};
+	else
+	    ch.vtl = {.version=1, .type=NON};
+	ch.vtl.toklen = toklen;
+	ch.code = Content;
+	ch.msgid = hdr.msgid;
+	n = Header?size;
+	bp[n:toklen] = hdr.token[0:toklen];
+	n += toklen;
+	bp[n] = 0xFF;	// end options
+	bp[n+1] = 0x30;	// bogus data
+	mb.GrowTail(n+2);
+
+	cb.Send(mb, to, fm);
+    }
+
+if _defined(debug) then {
+    proc ProcessOption(oid: OptionID, len: _uint, s: @[]_byte)
+    {	var i, n: _uint;
+if db > 2 then {
+debug.str("Option "); debug.uint(_uint(oid));
+debug.str(" len "); debug.uint(len);
+debug.chr(':'); }
+	if oid
+	is UriHost, LocationPath, UriPath, UriQuery,
+	   LocationQuery, ProxyUri, ProxyScheme then
+	{   if len > 0 then
+		debug.strn(s, len);
+	}
+	is UriPort, ContentFormat, Accept then
+	{   n = 0;
+	    i = 0;
+	    assert len <= 2;
+	    while i < len do
+	    {	n = (n << 8) | s[i];
+		i += 1;
+	    }
+	    debug.uint(n);
+	}
+	is MaxAge, Size1, Size2 then
+	{   n = 0;
+	    i = 0;
+	    assert len <= 4;
+	    while i < len do
+	    {	n = (n << 8) | s[i];
+		i += 1;
+	    }
+	    debug.uint(n);
+	}
+debug.nl();
+    }
+}
+
+    proc ParseOptions(opt: @[]_byte, n: _uint)
+    {   var i, delta, len: _uint;
 	var oid: OptionID;
 	var oh: OptHdr;
-   
-	if nopt == 15 then nopt = NumOptionsMax;
+
 	oid = OptionID(0);		// start with option ID of zero
 	i = 0;
-	n = 0;
-	while n < nopt-1 do
+	while i < n do
 	{   oh = OptHdr(opt[i]);
+	    i += 1;
 	  exit oh == OptEnd;
 	    delta = oh.delta;
 	    len = oh.len;
-	    if delta == 15 then		// special, e.g. jumps
-	    {   if len
-	    	is 1 then delta = 15;
-	    	is 2 then delta = (opt[i+1] + 2) * 8;
-	    	is 3 then delta = ((opt[i+1])<<8 + opt[i+2] + 258) * 8;
-	    	else return; 	// error, do something
-	    	i += oh.len;
+if db > 2 then {
+debug.str("#"); debug.uint(i+1);
+debug.str(" delta="); debug.uint(delta);
+debug.str(" len=");debug.uint(len);
+debug.nl(); }
+	    // FIXME - need to check buffer overrun
+	    if delta
+	    is 13 then		// 8-bit delta
+	    {	delta = opt[i] + 13;
+		i += 1;
 	    }
-	    oid = OptionID(_uint8(oid) + delta);
-	    if len == 15 then		// extended length
-	    {
+	    is 14 then		// 16-bit be delta
+	    {	delta = ((opt[i]<<8) | opt[i+1]) + 269;
+		i += 2;
 	    }
+	    is 15 then ;	// format error
+
+	    delta += _uint8(oid);
+	    if delta > 0xFFFF then ;	// format error
+	    oid = OptionID(delta);
+	    if len
+	    is 13 then		// 8-bit delta
+	    {	len = opt[i] + 13;
+		i += 1;
+	    }
+	    is 14 then		// 16-bit be delta
+	    {	len = ((opt[i]<<8) | opt[i+1]) + 269;
+		i += 2;
+	    }
+	    is 15 then ;	// format error
+	    // Found option oid with option length=len
+	    ProcessOption(oid, len, opt[i:]);
+	    i += len;
 	}
     }
 
-    proc Recv(mb: pMBuf)
-    {   var ph: pHeader;
 
-	ph = pHeader(mb.Data());
-	if ph.type
+    proc (cb: pCoapBlock) Recv(mb: pMBuf)
+    {   var ch: pHeader;
+	var uh: inet.pULHeader6;
+	var dp: inet.pUDPHeader;
+	var bp:  @[]_uint8;
+	var len: _uint;
+	var tkl: _uint;
+	var mid: _uint16;
+
+	// FIXME - what if IPv4?
+	uh = inet.pULHeader6(mb.Data());
+	dp = inet.pUDPHeader(mb.ShrinkHead(inet.ULHeader6?size));
+	bp = mb.ShrinkHead(inet.UDPHeader?size);
+	len = mb.Size();
+	ch = pHeader(bp);
+	tkl = ch.vtl.toklen;
+	mid = ch.msgid;
+if db > 2 then {
+debug.str("coap.Recv len="); debug.uint(len);
+debug.str(" ver="); debug.uint8(ch.vtl.version);
+debug.str(" type="); debug.uint(_uint8(ch.vtl.type));
+debug.str(" tkl="); debug.uint8(tkl);
+debug.str(" mid="); debug.uint16(mid);
+debug.str(" code="); debug.uint8(_uint8(ch.code)>>5);
+debug.chr('.'); debug.uint8(_uint8(ch.code)&0x1F);
+debug.nl(); }
+	if ch.vtl.type
 	is ACK then
 	{
 //	    Remove(ph.msgid);
@@ -142,7 +234,52 @@ package coap
 	is CON then
 	{
 	}
-	
-    }  
+	ParseOptions(bp[Header?size+tkl:], len - Header?size - tkl);
+	// FIXME - temporary testing hack
+	cb.SendReply(ch, uh.srcaddr, uh.dstaddr);
+    }
+
+
+    proc Run(b: pBlock, e: pEvent)
+    {   var mb: pMBuf;
+	var cb: pCoapBlock;
+
+if db > 1 then {
+debug.str("coap.Run ");  debug.uint8(_uint8(e.code));
+debug.chr(','); debug.uint8(e.tag); debug.nl(); }
+	cb = pCoapBlock(b);
+	if e.code
+	is RCVD then
+	{
+	    mb = pMBuf(e);
+	    cb.Recv(mb);
+	    mbuf.Free(mb);
+	}
+	is CONNECT then
+	{   var ce: event.pConnEvent;
+	    ce = event.pConnEvent(e);
+	    if ce.type == LOWER then
+		cb.lower.bid = ce.tag;
+if db > 1 then {debug.str("coap.Connect lower: bid=");
+debug.uint8(cb.lower.bid); debug.nl();}
+	    _delete(ce);
+	}
+	else
+	{
+	    _delete(e);
+	}
+    }
+
+    proc NewBlock(id: BlockID): pBlock
+    {   var cb: pCoapBlock;
+
+	cb = _new(CoapBlock);
+	_zero(cb);
+if db > 0 then {debug.str("coap.NewBlock ");
+debug.uint8(id); debug.chr(' ');
+debug.hex(_uint(cb)); debug.nl(); }
+	cb.BlockInit(id, Run);
+	return cb;
+    }
 }
 

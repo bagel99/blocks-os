@@ -1,0 +1,60 @@
+package ieee802154
+{
+    const MTU = 127;	// max length of frame
+    const FCS = 2;	// length of FCS
+
+    type PANId:	_uint16;
+    const BroadcastPAN: _uint16 = 0xFFFF;
+
+    type AddrShort: _uint16;
+    const UnallocAddr:   _uint16 = 0xFFFE;
+    const BroadcastAddr: _uint16 = 0xFFFF;
+
+    type AddrLong:  [8]_uint8;
+    // The short UUID prefix has the local bit set, which will get flipped
+    // when generating the IPv6 address.
+    const ShortUUID: [6]_uint8 = { 0x02, 0, 0, 0xFF, 0xFE, 0};
+
+    // Security definitions
+    type SecLevel:	// encypt auth algorithm
+    (	NONE,		//    n    n
+	MIC32,		//    n    y   AES-CBC-MAC-32
+	MIC64,		//    n    y   AES-CBC-MAC-64
+	MIC128,		//    n    y   AES-CBC-MAC-128
+	ENC,		//    y    n   AES-CTR
+	ENC_MIC32,      //    y    y   AES-CCM-32
+	ENC_MIC64,      //    y    y   AES-CCM-64
+	ENC_MIC128      //    y    y   AES-CCM-128
+    );
+    type KeyMode:	// keyindex keyidlen
+    (   IMPLICIT,	//    n        0
+	KEY0,		//    y        0
+	KEY4,		//    y        4
+	KEY8		//    y        8
+    );
+    type SecurityControl:
+    {   level:   SecLevel;	// .00-02
+	keymode: KeyMode;	// .03-04
+	rsvd:    0..0b111;	// .05-07
+    }:packed, lsb;
+
+    type FrameInfo:	// FIXME - move elsewhere?
+    {   srcadr:  AddrLong;	// 00
+	dstadr:  AddrLong;	// 08
+	srcpan:  PANId;		// 10
+	dstpan:  PANId;		// 12
+	frmctr:  _uint32;	// 14
+	flags:			// 18
+	{   fcserr: boolean;	// FCS error
+	    rack:   boolean;	// recv ack frame
+	    sack:   boolean;	// need to send ack frame
+	    wack:   boolean;	// want ACK to this send
+	    secctl: SecurityControl;	// security wanted on this send
+	}: packed, bits(16);
+	misc:    _uint16;	// 1A rssi (signed) for Recv, keyid
+	index:	 _uint8;	// 1C key index
+	seqno:   _uint8;	// 1D
+	datoff:  _uint8;	// 1E
+	datlen:  _uint8;	// 1F
+    };
+}

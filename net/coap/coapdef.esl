@@ -1,0 +1,142 @@
+/*
+ * Definitions for CoAP
+ * If over UDP, uses port 5683.
+ * References:
+ *   1.  RFC 7252.
+ *   2.  RFC 7959
+ *   3.  RFC 8974
+ *
+ * Copyright (c) 2012-2022, Brian G. Lucas.  See LICENSE file.
+ */
+
+package coap
+{
+    // Codes
+    type Code:
+    (	// Method 0..31
+	EMPTY=			  0,	// 0.00
+	GET=			  1,	// 0.01
+	POST=			  2,	// 0.02
+	PUT=			  3,	// 0.03
+	DELETE=			  4,	// 0.04
+	// Success 64..96
+	Created=		 65,	// 2.01
+	Deleted=		 66,	// 2.02
+	Valid=			 67,	// 2.03
+	Changed=		 68,	// 2.04
+	Content=		 69,	// 2.05
+	// Client Error 128..159
+	BadRequest=		128,	// 4.00
+	Unauthorized=		129,	// 4.01
+	BadOption=		130,	// 4.02
+	Forbidden=		131,	// 4.03
+	NotFound=		132,	// 4.04
+	MethodNotAllowed=	133,	// 4.05
+	NotAcceptable=		134,	// 4.06
+	PreconditionFailed=	140,
+	RequestEntityTooLarge=	141,
+	UnsupportedContentFormat=143,
+	// Server Error 160..191
+	InternalServerError=	160,
+	NotImplemented=		161,
+	BadGateway=		162,
+	ServiceUnavailable=	163,
+	GatewayTimeout=		164,
+	ProxyingNotSupported=	165,
+	// Signaling Codes 224..255
+	Unassigned=		224,
+	CSM=			225,
+	Ping=			226,
+	Pong=			227,
+	Release=		228,
+	Abort=			229
+    ): bits(8);
+
+    type Type:
+    (	CON, 	// Confirmable
+	NON,	// Non-confirmable
+	ACK,	// Acknowledgement
+	RST	// Reset
+    ): bits(2);
+
+    /*
+     * HEADER
+     * The header is followed by 0..8 tokens of length given
+     * by toklen (9..15 illegal).  Then zero or more options
+     * followed by the payload marker (0xFF) which can be
+     * viewed as the terminal option.
+     */
+    type Header:
+    {   vtl:
+	{   version: 0..3;	// 0.0..1
+	    type:    Type;	// 0.2..3
+	    toklen:  0..15;	// 0.4..7 see RFC8974
+	}: packed, msb;
+        code:    Code;		// 1
+        msgid:   _uint16: be;	// 2-3
+	token:	 []_byte;
+    };
+    type pHeader: @Header;
+
+    /*
+     * OPTIONS
+     */
+    const NumOptionsMax = 32;	// maximum number of options per packet
+    type OptHdr:	// first byte of an option
+    {   delta:	0..15;
+    	len:    0..15;
+    }: packed, msb;
+    const OptEnd: OptHdr = { 15, 15 };	// end of options marker (0xFF)
+
+    type OptionID:
+    (					// kkkUC
+	IfMatch=		  1,	// 00001
+	UriHost=		  3,	// 00011
+	ETag=			  4,	// 00100
+	IfNoneMatch=		  5,	// 00101
+	UriPort=		  7,	// 00111
+	LocationPath=		  8,	// 01000
+	UriPath=		 11,	// 01011
+	ContentFormat=		 12,	// 01100
+	MaxAge=			 14,	// 01110
+	UriQuery=		 15,	// 01111
+	Accept=			 16,	// 10000
+	Token=			 19,	// 10011
+	LocationQuery=		 20,	// 10100
+	Block2=			 23,	// 10111 RFC7959
+	Block1=			 27,	// 11011 RFC7959
+	Size2=			 28,	// 11100 RFC7959
+	ProxyUri=		 35,	// 00011
+	ProxyScheme=		 39,	// 00111
+	Size1=			 60,	// 11100
+	FirstPublic=		256,
+	FirstVendor=	       2048,
+	FirstExperimental=    65000,
+	Final=		      65535
+    );
+
+    proc (oid: OptionID) IsCritical(): boolean: inline
+    {
+	return (_uint(oid) & 1) != 0;
+    }
+
+    proc (oid: OptionID) IsUnsafe(): boolean: inline
+    {
+	return (_uint(oid) & 2) != 0;
+    }
+
+    proc (oid: OptionID) IsCacheKey(): boolean: inline
+    {
+	return (_uint(oid) & 0x1E) == 0x1C;
+    }
+
+    type ContentFormats:
+    (
+	TextPlain=		  0,	// text/plain;charset=utf-8
+	AppLinkFormat=		 40,	// application/link-format
+	AppXML=			 41,	// application/xml
+	AppOctets=		 42,	// application/octet-stream
+	AppExi=			 47,	// application/exi
+	AppJSON=		 50	// application/json
+    );
+}

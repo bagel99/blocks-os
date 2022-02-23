@@ -87,7 +87,6 @@ package phy
 
     proc PhyInit(en: eth.Enet): boolean
     {
-    	var to: _uint32: in, out;
 	var pv, id1, id2: _uint16;
 	var ok: boolean;
 	var i: _uint;
@@ -117,7 +116,7 @@ package phy
 	}
 	// Reset PHY and wait for reset bit to clear
 	en.PhyWrite(BMCR, _uint16(BMCR_REG{.reset=true})); // reset PHY chip
-	to = PhyRSTTimeout;
+	var to: _uint32: in, out = PhyRSTTimeout;
 	while to > 0 do
 	{   pv, ok = en.PhyRead(BMCR);
 	  exit ok && (pv & 0x8000) == 0;

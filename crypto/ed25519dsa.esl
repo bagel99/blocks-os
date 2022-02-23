@@ -1,0 +1,333 @@
+/*
+ * Digital Signature Algorithm for curve 25519
+ * Reference:
+ *   1. RFC 8032
+ */
+
+import ed25519;
+
+import sha512;
+
+package ed25519
+{
+    package bpo
+    {	// Base Point Order operations
+    	// Base Point Order is
+    	// 0x10000000_00000000_00000000_00000000_14DEF9DE_A2F79CD6_5812631A_5CF5D3ED
+	const bpoxn: [16]Vect =	// Base Point multiples
+	{   { 0, 0, 0, 0, 0, 0, 0, 0 },
+	    { 0x5CF5D3ED,0x5812631A,0xA2F79CD6,0x14DEF9DE,0,0,0,0x10000000 },
+	    { 0xB9EBA7DA,0xB024C634,0x45EF39AC,0x29BDF3BD,0,0,0,0x20000000 },
+	    { 0x16E17BC7,0x0837294F,0xE8E6D683,0x3E9CED9B,0,0,0,0x30000000 },
+	    { 0x73D74FB4,0x60498C69,0x8BDE7359,0x537BE77A,0,0,0,0x40000000 },
+	    { 0xD0CD23A1,0xB85BEF83,0x2ED6102F,0x685AE159,0,0,0,0x50000000 },
+	    { 0x2DC2F78E,0x106E529E,0xD1CDAD06,0x7D39DB37,0,0,0,0x60000000 },
+	    { 0x8AB8CB7B,0x6880B5B8,0x74C549DC,0x9218D516,0,0,0,0x70000000 },
+	    { 0xE7AE9F68,0xC09318D2,0x17BCE6B2,0xA6F7CEF5,0,0,0,0x80000000 },
+	    { 0x44A47355,0x18A57BED,0xBAB48389,0xBBD6C8D3,0,0,0,0x90000000 },
+	    { 0xA19A4742,0x70B7DF07,0x5DAC205F,0xD0B5C2B2,0,0,0,0xA0000000 },
+	    { 0xFE901B2F,0xC8CA4221,0x00A3BD35,0xE594BC91,0,0,0,0xB0000000 },
+	    { 0x5B85EF1C,0x20DCA53C,0xA39B5A0C,0xFA73B66F,0,0,0,0xC0000000 },
+	    { 0xB87BC309,0x78EF0856,0x4692F6E2,0x0F52B04E,1,0,0,0xD0000000 },
+	    { 0x157196F6,0xD1016B71,0xE98A93B8,0x2431AA2C,1,0,0,0xE0000000 },
+	    { 0x72676AE3,0x2913CE8B,0x8C82308F,0x3910A40B,1,0,0,0xF0000000 }
+	};
+
+	proc ReduceHi(r: @Vect, b: Base, x: @Vect)
+	{   var t: Vect;
+	    var c: Basex2;
+	    var h: Base;
+	    const minusR: [8]Base = {
+		0xCF5D3ED0, 0x812631A5, 0x2F79CD65, 0x4DEF9DEA,
+		1, 0, 0, 0 };
+
+	    // FIXME - make a for loop?
+	    c = Basex2(b) * minusR[0];
+	    t[0] = Base(c);
+	    c = Basex2(b) * minusR[1] + (c >> Base?bits);
+	    t[1] = Base(c);
+	    c = Basex2(b) * minusR[2] + (c >> Base?bits);
+	    t[2] = Base(c);
+	    c = Basex2(b) * minusR[3] + (c >> Base?bits);
+	    t[3] = Base(c);
+	    c = Basex2(b) + (c >> Base?bits);	// minusR[4] == 1
+	    t[4] = Base(c);
+	    t[5] = Base(c >> Base?bits);
+	    t[6] = 0;
+	    t[7] = 0;
+
+	    h = bn.Sub(r, x, t, K);
+	    _ = bn.Add(r, r, bpoxn[h], K);
+
+	}
+
+	proc Reduce(r: @Vect, x: @Vect2)
+	{
+	// FIXME - make a for loop?
+	    ReduceHi(x[7:8], x[15], x[7:8]);
+	    ReduceHi(x[6:8], x[14], x[6:8]);
+	    ReduceHi(x[5:8], x[13], x[5:8]);
+	    ReduceHi(x[4:8], x[12], x[4:8]);
+	    ReduceHi(x[3:8], x[11], x[3:8]);
+	    ReduceHi(x[2:8], x[10], x[2:8]);
+	    ReduceHi(x[1:8], x[09], x[1:8]);
+	    ReduceHi(r,      x[08], x[0:8]);
+	}
+
+	proc AddRed(r: @Vect, x: @Vect, y: @Vect)
+	{   var c: Base;
+
+	    c = bn.Add(r, x, y, K);
+	    ReduceHi(r, c, r);
+	}
+
+	proc MulRed(r: @Vect, x: @Vect, y: @Vect)
+	{   var t: Vect2;
+
+	    bn.Mul(t, x, y, K);
+	    Reduce(r, t);
+	}
+
+	proc ModP(x: @Vect)
+	{	var c: Base;
+
+	    c = bn.Sub(x, x, bpoxn[x[7] >> 28], K);
+	    _ = bn.Add(x, x, bpoxn[c], K);
+	}
+    }
+    // precomputed: (y+x,y-x,2dxy)
+
+    type APoint:	// Affine point coordinates
+    {	x: Vect;
+	y: Vect;
+    };
+    type PPoint:	// Projective coordinates, X=x/z, Y=y/z
+    {	x: Vect;
+	y: Vect;
+	z: Vect;
+    };
+    type XPoint:	// Extended coordinates, X=x/z, Y=y/z, xy=zt
+    {	x: Vect;
+	y: Vect;
+	z: Vect;
+	t: Vect;
+    };
+    const Point1: XPoint =
+    {	.x = { 0, 0, 0, 0, 0, 0, 0, 0 },
+	.y = { 1, 0, 0, 0, 0, 0, 0, 0 },
+	.z = { 1, 0, 0, 0, 0, 0, 0, 0 },
+	.t = { 0, 0, 0, 0, 0, 0, 0, 0 }
+    };
+
+proc PrintXPoint(s: @[]_byte, p: @XPoint)
+{
+    err.str(s); err.str(" =\n");
+    PrintWords("x", p.x);
+    PrintWords("y", p.y);
+    PrintWords("z", p.z);
+    PrintWords("t", p.t);
+}
+
+    // Extented coordinates of the base point
+    const BasePoint: XPoint =
+    {   .x = // 216936D3CD6E53FEC0A4E231FDD6DC5C692CC7609525A7B2C9562D608F25D51A
+	    { 0x8F25D51A,0xC9562D60,0x9525A7B2,0x692CC760,
+	      0xFDD6DC5C,0xC0A4E231,0xCD6E53FE,0x216936D3 },
+	.y = // 6666666666666666666666666666666666666666666666666666666666666658
+	    { 0x66666658,0x66666666,0x66666666,0x66666666,
+	      0x66666666,0x66666666,0x66666666,0x66666666 },
+	.z = // 0000000000000000000000000000000000000000000000000000000000000001
+	    { 0x00000001,0x00000000,0x00000000,0x00000000,
+	      0x00000000,0x00000000,0x00000000,0x00000000 },
+	.t = //
+	    { 0xa5b7dda3,0x6dde8ab3,0x775152f5,0x20f09f80,
+	      0x64abe37d,0x66ea4e8e,0xd78b7665,0x67875f0f }
+    };
+
+    // Point addition
+    proc Add(r: @XPoint, p: @XPoint, q: @XPoint)
+    {	var a, b, c, d, e: Vect;
+
+	f.SubRed(a, p.y, p.x);		// py-px
+	f.SubRed(b, q.y, q.x);		// qy-qx
+	f.MulRed(a, a, b);		// A = (py-px)(qy-qx)
+	f.AddRed(b, p.y, p.x);		// py+px
+	f.AddRed(c, q.y, q.x);		// qy+qx
+	f.MulRed(b, b, c);		// B = (py+px)(qy+qx)
+	f.AddRed(c, p.t, p.t);		// 2pt
+	f.AddRed(d, p.z, p.z);		// 2pz
+	f.SubRed(e, b, a);		// E = B-A
+	f.AddRed(b, b, a);		// H = B+A
+	f.SubRed(a, d, c);		// F = D-C
+	f.AddRed(d, d, c);		// G = D+C
+	f.MulRed(r.x, e, a);		// E*F
+	f.MulRed(r.y, b, d);		// H*G
+	f.MulRed(r.z, d, a);		// G*F
+	f.MulRed(r.t, e, b);		// E*H
+    }
+
+var once: boolean = true;
+    // Point doubling
+    proc Double(r: @XPoint, p: @XPoint)
+    {	var a, b, c, d, e: Vect;
+
+	f.SqrRed(a, p.x);		// A = x²
+	f.SqrRed(b, p.y);		// B = y²
+	f.SqrRed(c, p.z);		// z²
+if once then { PrintWords("A", a); PrintWords("B", b); }
+	f.AddRed(c, c, c);		// C = 2z²
+//	f.SubRed(d, maxP, a);		// D = -A
+if once then { PrintWords("C", c); }
+	f.AddRed(e, p.x, p.y);		// x+y
+	f.SqrRed(e, e);			// (x+y)²
+if once then { PrintWords("e1", e); }
+//	f.AddRed(e, e, a);		// E = (x+y)²+H
+	f.SubRed(e, a, e);
+if once then { PrintWords("e2", e); }
+	f.SubRed(e, e, b);
+	f.SubRed(a, d, b);		// H = D-B
+	f.AddRed(d, d, b);		// G = D+B
+	f.SubRed(b, d, c);		// F = G-C
+if once then { PrintWords("E", e); PrintWords("F", b);
+	       PrintWords("G", d); PrintWords("H", a); }
+	f.MulRed(r.x, e, b);		// E*F
+	f.MulRed(r.y, a, d);		// H*G
+	f.MulRed(r.z, d, b);		// G*F
+	f.MulRed(r.t, e, a);		// E*H
+once = false;
+    }
+
+    proc PointMultiply(r: @XPoint, p: @XPoint, e: @Vect)
+    {   var s, t: XPoint;
+    	var b: Base;
+	var i, j: _uint;
+
+	t = Point1;
+	// start with most significant
+	i = K;
+	while i > 0 do
+	{   i -= 1;
+	    b = e[i];
+	    j = Base?bits;
+	    while j > 0 do
+	    {	j -= 1;
+		Double(t, t);
+		Add(s, t, p);
+{ var n: _uint;
+  n = 32*i + j;
+  if n > 254 then
+  {   err.uint(n); err.str(": ");
+      PrintXPoint("t1", t);
+      PrintXPoint("s1", s);
+  }
+}
+		if (b >> j) & 1 != 0 then	// FIXME - timing
+		    t = s;
+{ //var n: _uint;
+  n = 32*i + j;
+  if n > 254 || n < 8 then
+  {   err.uint(n); err.str(": ");
+      PrintXPoint("t2", t);
+  }
+}
+	    }
+	}
+	r@ = t;
+    }
+
+    proc BasePointMultiply(r: @XPoint, x: @Vect)
+    {
+	PointMultiply(r, BasePoint, x);
+/*
+	// FIXME - temp
+	r.x = { 0x157F7361,0xC577AAD3,0x6F67ED33,0xE38DC7BE,
+		0x00014FEC,0xC2165CA5,0xCEE9EEE1,0x9FE4D2C1 };
+	r.y = { 0x5A69DBEB,0x232276B3,0x8F3F5016,0x547BB2A2,
+		0x4025645F,0x0B820E72,0xB8CAD4F0,0xA909A092 };
+*/
+    }
+
+    proc ImportDigest(r: @Vect, x: @[sha512.DigestSize]_byte)
+    {
+	var t: [16]Base;
+
+	bn.ImportLE(t[0:8], x[0:32], 32);
+	bn.ImportLE(t[8:8], x[32:32], 32);
+	bpo.Reduce(r, t);
+    }
+
+    proc ExportPoint(r: @[32]_byte, p: @XPoint)
+    {
+	var i, j: _uint;
+	j = 8;
+	for i from 0 to 7 do
+	{   j -= 1;
+	    _packle(r[i*4:4], p.y[j]);
+	}
+	r[31] = (r[31] & 0x7F) | (p.x[0] << 7);
+    }
+
+    proc GenKeyPair(prvk: @Key, pubk: @Key, skey: @Key)
+    {   var hash: [sha512.DigestSize]_byte;
+
+	sha512.Hash(skey, Key?len, hash);
+	TrimKey(hash[0:Key?len]);
+    }
+
+    proc Sign(
+	      sign: @[2*Key?len]_byte,	// R is sign[0:32], S is sign[32:32]
+	      prvk: @Key,		// private key
+	      pubk: @Key,
+	      msg: @[]_byte,		// the message
+	      len: _uint)		// length of the message
+    {
+	var hash: [sha512.DigestSize]_byte;
+	var ctx: sha512.Context;
+	var a, r, t: Vect;
+	var R: XPoint;
+
+	ctx.Start();
+PrintHexBytes("prvk", prvk, Key?len);
+PrintHexBytes("pubk", pubk, Key?len);
+	ctx.Update(prvk, Key?len);
+	ctx.Finish(hash);
+PrintHexBytes("hash1L", hash[0:32], 32);
+PrintHexBytes("hash1R", hash[32:32], 32);
+	TrimKey(hash[0:Key?len]);			// left half of hash
+	bn.ImportLE(a, hash[0:Key?len], 32);
+PrintWords("a", a);
+
+	ctx.Start();
+	ctx.Update(hash[Key?len:Key?len], Key?len);	// right half of hash
+	ctx.Update(msg, len);
+	ctx.Finish(hash);
+PrintHexBytes("hash2L", hash[0:32], 32);
+PrintHexBytes("hash2R", hash[32:32], 32);
+	ImportDigest(r, hash);
+PrintWords("r1", r);
+	bpo.ModP(r);
+PrintWords("r2", r);
+	BasePointMultiply(R, r);
+	ExportPoint(sign[0:Key?len], R);
+
+	ctx.Start();
+	ctx.Update(sign[0:Key?len], Key?len);
+	ctx.Update(pubk, Key?len);
+	ctx.Update(msg, len);
+	ctx.Finish(hash);
+PrintHexBytes("hash3L", hash[0:32], 32);
+PrintHexBytes("hash3R", hash[32:32], 32);
+	ImportDigest(t, hash);
+PrintWords("t1", t);
+	bpo.MulRed(t, t, a);
+PrintWords("t2", t);
+	bpo.AddRed(t, t, r);
+PrintWords("3", t);
+	bpo.ModP(t);
+PrintWords("t4", t);
+	bn.ExportLE(sign[Key?len:Key?len], t, Key?len);
+PrintHexBytes("R", sign[0:32], 32);
+PrintHexBytes("S", sign[32:32], 32);
+    }
+
+}

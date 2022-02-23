@@ -1,0 +1,974 @@
+/*
+ * Mesh Link Establishment (MLE)
+ * In terms of protocol layer, MLE is a disaster.  It needs the IP address
+ * and the link level address.
+ * References:
+ * 1. RFC Draft - draft-kelsey-6lo-mesh-link-establishment-00 (2015 Jul 15)
+ * 2. Openthread sources. Copyright (c) 2016, Nest Labs, Inc.
+ *
+ * MLE runs atop UDP and uses port 19788.
+ * If encrypted it uses AES-CCM.
+ */
+
+import aesccm;
+import thread;		// FIXME
+
+package mle
+{
+    alias mbuf.pMBuf as pMBuf;
+    alias event.Event as Event;
+    alias event.pEvent as pEvent;
+    alias block.Block as Block;
+    alias block.pBlock as pBlock;
+    alias block.BlockID as BlockID;
+    alias ieee802154.AddrShort as AddrShort;
+    alias ieee802154.AddrLong as AddrLong;
+
+    const UDPPort: _uint16 = 19788;
+    const MLEVersion: _uint16 = 3;
+
+    // 1st octet is security suite
+    type SecuritySuite: (CCM=0, NONE=255);
+
+    // 2nd octet is security control ala 802.15.4
+    alias ieee802154.SecurityControl as SecurityControl;
+
+    const KeyNone:  SecurityControl = {.level=NONE};
+    const KeyKind1: SecurityControl = {.level=ENC_MIC32, .keymode=KEY0};
+    const KeyKind2: SecurityControl = {.level=ENC_MIC32, .keymode=KEY4};
+
+    /*
+     * MLE Message Header, unencrypted part
+     */
+    type Header:
+    {   secsuite: SecuritySuite;
+	seccntl:  SecurityControl;
+	frmcntr:  [4]_uint8;
+    };
+    type pHeader: @Header;
+
+    type Header0(Header):
+    {   data:     []_uint8;
+    };
+    type pHeader0: @Header0;
+
+    type Header1(Header):
+    {   keyid:    _uint8;
+	data:     []_uint8;
+    };
+    type pHeader1: @Header1;
+
+    type Header2(Header):
+    {   keyid:    [4]_uint8;
+	data:     []_uint8;
+    };
+    type pHeader2: @Header2;
+
+    // command octet
+    type Command:
+    (	LinkRequest		= 0,
+	LinkAccept		= 1,
+	LinkAcceptRequest	= 2,
+	LinkReject		= 3,
+	Advertisement		= 4,
+	Update			= 5,
+	UpdateRequest		= 6,
+	DataRequest		= 7,
+	DataResponse		= 8,
+	ParentRequest		= 9,
+	ParentResponse		= 10,
+	ChildIdRequest		= 11,
+	ChildIdResponse		= 12,
+	ChildUpdateRequest	= 13,
+	ChildUpdateResponse	= 14,
+	Announce		= 15,
+	DiscoveryRequest	= 16,
+	DiscoveryResponse	= 17
+    );
+
+    // data is TLV triples (Type (1 octet), Length (1 octet), Value)
+    // all values are in network byte order
+    type TLVType:
+    (	SourceAddr	    = 0,	// 16-bit MAC address
+	Mode		    = 1,	// see CapabilityInfo
+	Timeout		    = 2,	// 32-bit unsigned
+	Challenge	    = 3,	// >= 4 octets
+	Response	    = 4,	// response to a challenge
+	LinkFrameCounter    = 5,	// 32-bit unsigned
+	LinkQuality	    = 6,
+	NetworkParameter    = 7,	// see Parameter
+	MleFrameCounter	    = 8,	// 32-bit unsigned
+	Route64		    = 9,
+	Address16	    = 10,
+	LeaderData	    = 11,
+	NetworkData	    = 12,
+	TlvRequest	    = 13,
+	ScanMask	    = 14,	// see ScanMask
+	Connectivity	    = 15,
+	LinkMargin	    = 16,	// 8-bit unsigned
+	Status		    = 17,
+	Version		    = 18,
+	AddressRegistration = 19,
+	Channel		    = 20,
+	PanID		    = 21,
+	ActiveTimestamp	    = 22,
+	PendingTimestamp    = 23,
+	ActiveOperDataset   = 24,
+	PendingOperDataset  = 25,
+	ThreadDiscover	    = 26,
+	Invalid		    = 255
+    );
+
+    // network parameters, the only payload of Update commands
+    type ParameterID:
+    (	Channel		= 0,
+	PANID		= 1,
+	PermitJoining	= 2,
+	BeaconPayload	= 3
+    );
+
+    type Parameter:
+    {   param:	ParameterID;
+	delay:  [4]_uint8;	// delay in milliseconds
+	value:  []_uint8;
+    };
+
+    alias thread.DeviceMode as CapabilityInfo;
+
+    // timeouts and retransmission counts
+    const URT = 1;	// unicast retransmission timeout, 1 second
+    const MRT = 5;	// multicast retransmission timeout, 5 seconds
+    const MRC = 3;	// maximum retransmission count
+
+
+    type ScanMask:
+    {	router:   boolean;	// .7
+	enddevice:boolean;	// .6
+    }: packed, msb, bits(8);
+
+    type LeaderData:
+    {   partitionid:   _uint32;
+	weighting:     _uint8;
+	dataversion:   _uint8;
+	stableversion: _uint8;
+	routerid:      _uint8;
+    };
+
+    type TimeStamp: _uint64;
+    // The hi 48 bits is Unix time, the next 15 bits is ticks,
+    // the low bit is 1 if authoritive (e.g. GPS or NTP).
+
+    type AddressRegistration:
+    {	kind:
+	{   compressed: boolean;
+	    _:          0..7;		// must be zero
+	    cid:	0..15;		// zero if not compressed
+	}:packed, msb;
+    };
+    type AddressRegistration0(AddressRegistration):
+    {	addr:		inet.IPv6Addr;
+    };
+    type AddressRegistartion1(AddressRegistration):
+    {	addr:		AddrLong;
+    };
+
+    //********
+    // STATE *
+    //********
+
+    type MLEBlock(Block):
+    {   lower:	     BlockID;
+	mode:	     CapabilityInfo;
+	state:	     (NONE, REQP, GOTP, REQCID, REQL, CHILD, REED);
+	keyid:       _uint8;
+	saddr:	     AddrShort;
+	keyseq:     _uint32;
+	framectr:   _uint32;	// for MLE security FIXME - per neighbor?
+	challenge:  [8]_byte;	// current outgoing challenge
+	response:   [8]_byte;	// current incoming challenge
+	leaderdata: LeaderData;
+    };
+    type pMLEBlock: @MLEBlock;
+
+    var timestamp: _uint32;	// FIXME, where does this go
+
+    proc (eb: pMLEBlock) SetMode(m: CapabilityInfo)
+    {
+	eb.mode = m;
+    }
+
+    proc DumpTLVs(bp: @[]_uint8, n: _uint)
+    {   var i: _uint;
+	const TLVname: []@[]_byte =
+	{ "SourceAddr",  "Mode\t",       "Timeout\t",   "Challenge",
+	  "Response",    "LinkFrameCtr", "LinkQuality", "NetworkParm",
+	  "MleFrameCtr", "Route64\t",      "Address16",   "LeaderData",
+	  "NetworkData", "TlvRequest",   "ScanMask",    "Connectivity",
+	  "LinkMargin",  "Status",       "Version\t",   "AddrRegist",
+	  "Channel",	 "PanID\t",	 "ActiveTimeS", "PendingTimeS",
+	  "ActiveOperDS","PendingOperDS","ThreadDisc",
+	};
+
+	i = 0;
+	while i < n-1 do
+	{
+	    if bp[i] < TLVname?len then
+		debug.str(TLVname[bp[i]]);
+	    else
+		debug.str("?TLV?");
+	    debug.chr('\t');
+	    if bp[i+1] != 0 then
+		debug.dumpb("", bp[i+2:], bp[i+1]);
+	    else
+		debug.nl();
+	    i += bp[i+1] + 2;
+	}
+    }
+
+    proc DumpMessage(bp: @[]_uint8, n: _uint)
+    {
+	const Cmdname: []@[]_byte =
+	{ "LinkRequest", "LinkAccept",
+	  "LinkAcceptRequest", "LinkReject",
+	  "Advertisement", "Update",
+	  "UpdateRequest", "DataRequest",
+	  "DataResponse", "ParentRequest",
+	  "ParentResponse", "ChildIdRequest",
+	  "ChildIdResponse", "ChildUpdateRequest",
+	  "ChildUpdateResponse", "Announce",
+	  "DiscoveryRequest", "DiscoveryResponse"
+	};
+
+	if bp[0] < Cmdname?len then
+	    debug.str(Cmdname[bp[0]]);
+	else
+	    debug.str("?CMD?");
+	debug.nl();
+	DumpTLVs(bp[1:], n-1);
+    }
+
+    proc MakeNonce(addr: @[8]_uint8, cntr: _uint32, security: _uint8,
+		   out: @[13]_uint8)
+    {
+	out[0]   = addr[0] ^ 0x02;	// flip local/global
+	out[1:7] = addr[1:7];
+	_packbe(out[8:4], cntr);
+	out[12]  = security;
+    }
+
+    /*
+     ***********************
+     * MLE Receive routines
+     ***********************
+     */
+
+    proc FindTLV(bp: @[]_byte, len: _uint, type: TLVType): boolean, _uint
+    {   var i: _uint;
+
+	i = 0;
+	while i < len-1 do
+	{   if TLVType(bp[i]) == type then
+		return true, i;
+	    i += bp[i+1] + 2;
+	}
+	return false, 0;
+    }
+
+    proc GetSourceAddress(bp: @[]_byte, len: _uint, result: @AddrShort): boolean
+    {   var i: _uint;
+	var ok: boolean;
+
+	ok, i = FindTLV(bp, len, SourceAddr);
+	if !ok || bp[i+1] != 2 then return false;
+	result@ = _unpkbe(bp[i+2:2]);
+	return true;
+    }
+
+    proc GetAddress16(bp: @[]_byte, len: _uint, result: @AddrShort): boolean
+    {   var i: _uint;
+	var ok: boolean;
+
+	ok, i = FindTLV(bp, len, Address16);
+	if !ok || bp[i+1] != 2 then return false;
+	result@ = _unpkbe(bp[i+2:2]);
+	return true;
+    }
+
+    proc GetMode(bp: @[]_byte, len: _uint): boolean, CapabilityInfo
+    {
+    }
+
+    proc GetScanMask(bp: @[]_byte, len: _uint): boolean, ScanMask
+    {
+    }
+
+    proc GetChallenge(bp: @[]_byte, len: _uint, result: @[8]_uint8): boolean
+    {   var i: _uint;
+	var ok: boolean;
+
+	ok, i = FindTLV(bp, len, Challenge);
+	if !ok || bp[i+1] != 8 then return false;
+	result@ = bp[i+2:8];
+	return true;
+    }
+
+    proc IsResponseCorrect(bp: @[]_uint8, len: _uint, good: @[8]_uint8): boolean
+    {   var i: _uint;
+	var ok: boolean;
+
+	ok, i = FindTLV(bp, len, Response);
+//debug.str("i="); debug.uint(i);
+//debug.dumpb("\n\tfound=", bp[i+2:] ,8);
+//debug.dumpb("\n\tgood="), good, 8);
+	return ok && bp[i+1] == 8 &&  bp[i+2:8] == good@;
+    }
+
+    proc GetLinkFrameCounter(bp: @[]_byte, len: _uint, result: @_uint32): boolean
+    {   var i: _uint;
+	var ok: boolean;
+
+	ok, i = FindTLV(bp, len, TLVType.LinkFrameCounter);
+	if !ok || bp[i+1] != 4 then return false;
+	result@ = _unpkbe(bp[i+2:4]);
+	return true;
+    }
+
+    proc GetMleFrameCounter(bp: @[]_byte, len: _uint, result: @_uint32): boolean
+    {   var i: _uint;
+	var ok: boolean;
+
+	ok, i = FindTLV(bp, len, TLVType.MleFrameCounter);
+	if !ok || bp[i+1] != 4 then return false;
+	result@ = _unpkbe(bp[i+2:4]);
+	return true;
+    }
+
+    proc GetLeaderData(bp: @[]_byte, len: _uint, result: @LeaderData): boolean
+    {   var i: _uint;
+	var ok: boolean;
+
+	ok, i = FindTLV(bp, len, TLVType.LeaderData);
+	if !ok || bp[i+1] != 8 then return false;
+	result.partitionid = _unpkbe(bp[i+2:4]);
+	result.weighting = bp[i+6];
+	result.dataversion = bp[i+7];
+	result.stableversion = bp[i+8];
+	result.routerid = bp[i+9];
+	return true;
+    }
+
+    proc GetLinkMargin(bp: @[]_byte, len: _uint, result: @_uint8): boolean
+    {   var i: _uint;
+	var ok: boolean;
+
+	ok, i = FindTLV(bp, len, TLVType.LinkMargin);
+	if !ok || bp[i+1] != 1 then return false;
+	result@ = bp[i+2];
+	return true;
+    }
+
+    proc IsVersionCorrect(bp: @[]_byte, len: _uint): boolean
+    {   var i: _uint;
+	var ok: boolean;
+
+	ok, i = FindTLV(bp, len, Version);
+	return ok && bp[i+1] == 2 &&
+	    _unpkbe(bp[i+2:2]) >= 1;	// accept >= 1
+    }
+
+    proc (eb: pMLEBlock) RecvParentResponse(src: @inet.IPv6Addr, mb: pMBuf,
+			    bp: @[]_uint8, len: _uint)
+    {   var ok: boolean;
+
+	if !IsVersionCorrect(bp, len) then
+	{
+debug.str("ParentResponse: Bad version\n");
+//	    return;	// FIXME - ignore for debugging
+	}
+	// verify that reponse to challenge is present and correct
+	if !IsResponseCorrect(bp, len, eb.challenge) then
+	{
+debug.str("ParentResponse: Bad challenge reponse\n");
+//	    return;	// FIXME - ignore for debugging
+	}
+	// require source address
+	var newsrc: _uint16;
+	if !GetSourceAddress(bp, len, newsrc) then
+	{
+debug.str("ParentResponse: No source address\n");
+//	    return;	// FIXME - ignore for debugging
+	}
+	// require leader data
+	var ldrdata: LeaderData;
+	if !GetLeaderData(bp, len, ldrdata) then
+	{
+debug.str("ParentResponse: No leader data\n");
+//	    return;	// FIXME - ignore for debugging
+	}
+	// require link frame counter
+	var linkctr, mlectr: _uint32;
+	if !GetLinkFrameCounter(bp, len, linkctr) then
+	{
+debug.str("ParentResponse: No link frame counter\n");
+//	    return;	// FIXME - ignore for debugging
+	}
+	// optional MLE frame counter
+	if !GetMleFrameCounter(bp, len, mlectr) then
+	    mlectr = linkctr;
+	// require their challenge
+	if !GetChallenge(bp, len, eb.response) then
+	{
+debug.str("ParentResponse: No challenge\n");
+//	    return;	// FIXME - ignore for debugging
+	}
+	thread.parent.ipaddr = src@;
+	thread.parent.macfrmctr = linkctr;
+	thread.parent.saddr = newsrc;
+	eb.state = GOTP;
+    }
+
+    proc (eb: pMLEBlock) RecvChildIdResponse(src: @inet.IPv6Addr,
+			     mb: pMBuf, bp: @[]_uint8, len: _uint)
+    {
+	// require source address
+	var newsrc: _uint16;
+	if !GetSourceAddress(bp, len, newsrc) then
+	{
+debug.str("ChildIdResponse: No source address\n");
+//	    return;	// FIXME - ignore for debugging
+	}
+	// should newsrc be the same as returned in ParentResponse?
+	// require leader data
+	var ldrdata: LeaderData;
+	if !GetLeaderData(bp, len, ldrdata) then
+	{
+debug.str("ChildIdResponse: No leader data\n");
+//	    return;	// FIXME - ignore for debugging
+	}
+	// require address16
+	var saddr: AddrShort;
+	if !GetAddress16(bp, len, saddr) then
+	{
+debug.str("ChildIdResponse: No address16\n");
+//	    return;	// FIXME - ignore for debugging
+	}
+	// optional network data
+	// optional address registration
+	// optional active operational dataset
+	// optional pending operational dataset
+	eb.leaderdata = ldrdata;
+	eb.saddr = saddr;
+	eb.state = CHILD;
+    }
+
+    proc (eb: pMLEBlock) RecvLinkAccept(src: @inet.IPv6Addr,
+			     mb: pMBuf, bp: @[]_uint8, len: _uint)
+    {
+	if !IsVersionCorrect(bp, len) then
+	{
+debug.str("LinkAccept: Bad version\n");
+//	    return;	// FIXME - ignore for debugging
+	}
+	// require source address
+	var newsrc: _uint16;
+	if !GetSourceAddress(bp, len, newsrc) then
+	{
+debug.str("LinkAccept: No source address\n");
+//	    return;	// FIXME - ignore for debugging
+	}
+	// should newsrc be the same as returned in ParentResponse?
+	// verify that reponse to challenge is present and correct
+	if !IsResponseCorrect(bp, len, eb.challenge) then
+	{
+debug.str("LinkAccept: Bad challenge reponse\n");
+//	    return;	// FIXME - ignore for debugging
+	}
+	// require link margin
+	var linkmargin: _uint8;
+	if !GetLinkMargin(bp, len, linkmargin) then
+	{
+debug.str("LinkAccept: No link margin\n");
+//	    return;	// FIXME - ignore for debugging
+	}
+	// require link frame counter
+	var linkctr, mlectr: _uint32;
+	if !GetLinkFrameCounter(bp, len, linkctr) then
+	{
+debug.str("LinkAccept: No link frame counter\n");
+//	    return;	// FIXME - ignore for debugging
+	}
+	// optional MLE frame counter
+	if !GetMleFrameCounter(bp, len, mlectr) then
+	    mlectr = linkctr;
+	eb.state = REED;
+    }
+
+    proc (eb: pMLEBlock) RecvLinkAcceptRequest(src: @inet.IPv6Addr,
+			     mb: pMBuf, bp: @[]_uint8, len: _uint)
+    {
+    }
+
+    proc RecvAdvertisement(src: @inet.IPv6Addr,
+			     mb: pMBuf, bp: @[]_uint8, len: _uint)
+    {
+	// require source address
+	var newsrc: _uint16;
+	if !GetSourceAddress(bp, len, newsrc) then
+	{
+debug.str("Advertisement: No source address\n");
+//	    return;	// FIXME - ignore for debugging
+	}
+	// require leader data
+	var ldrdata: LeaderData;
+	if !GetLeaderData(bp, len, ldrdata) then
+	{
+debug.str("Advertisement: No leader data\n");
+//	    return;	// FIXME - ignore for debugging
+	}
+    }
+
+    proc (eb: pMLEBlock) Recv(mb: pMBuf)
+    {
+	var uh: inet.pULHeader6;
+	var dp: inet.pUDPHeader;
+	var keyinx: _uint8;
+	var keyseq: _uint32;
+	var bp:  @[]_uint8;
+	var cmd: mle.Command;
+	var frmctr: _uint32;
+	var nh, nb: _uint;
+	var nonce: [13]_uint8;
+	var tag: [4]_uint8;
+	var ctx: aesccm.State;
+
+debug.dumpb("mle.Recv\n", mb.Data(), mb.Size());
+	uh = inet.pULHeader6(mb.Data());
+	dp = inet.pUDPHeader(mb.ShrinkHead(inet.ULHeader6?size));
+	bp = mb.ShrinkHead(inet.UDPHeader?size);
+debug.str("fm: "); ipv6.AddrPrint(uh.srcaddr);  debug.nl();
+debug.str("to: "); ipv6.AddrPrint(uh.dstaddr);  debug.nl();
+	// 1st octet is security suite
+	if SecuritySuite(bp[0]) != CCM then
+	{   // unencrypted is unexpected
+	    return;
+	}
+	// 2nd octet is security control
+	if SecurityControl(bp[1]) == KeyKind1 then	// depricated?
+	{   keyinx = bp[6];
+	    nh = 6;
+	}
+	elif SecurityControl(bp[1]) == KeyKind2 then
+	{   keyseq = _unpkbe(bp[6:4]);
+	    keyinx = bp[10];
+	    nh = 10;
+	}
+	else
+	{
+	    return;
+	}
+	frmctr = _unpkle(bp[2:4]);	// Frame Counter is little endian
+	nb = mb.Size() - nh - 1 - 4;
+debug.str("mle.Recv nb="); debug.uint(nb);
+debug.str(" nh="); debug.uint(nh); debug.nl();
+	// Decrypt the payload
+	MakeNonce(uh.srcaddr[8:8], frmctr, _uint8(ieee802154.SecLevel.ENC_MIC32), nonce);
+debug.str("nonce: "); debug.hex8n(nonce, 13); debug.nl();
+	// FIXME - where to get key?
+	ctx.SetKey(thread.keys.GetMleKey(), KEY128);
+	ctx.Start(inet.IPv6AddrLen+inet.IPv6AddrLen+nh, nb, 4, nonce, 13);
+	ctx.Header(uh.srcaddr, inet.IPv6AddrLen);
+	ctx.Header(uh.dstaddr, inet.IPv6AddrLen);
+	ctx.Header(bp[1:], nh);
+	ctx.Decrypt(bp[nh+1:], bp[nh+1:], nb);
+debug.dumpb("payload\n", bp[nh+1:], nb);
+	ctx.Finish(tag, 4);
+	// FIXME - check tag matches
+//debug.dumpb("tag", tag, 4);
+
+	// reset buffer pointer to the payload
+	bp = bp[nh+1:];
+
+	DumpMessage(bp, nb);
+
+	if Command(bp[0])
+	is LinkRequest then {}
+	is LinkAccept  then
+	    eb.RecvLinkAccept(uh.srcaddr, mb, bp[1:], nb-1);
+	is LinkAcceptRequest then
+	    eb.RecvLinkAcceptRequest(uh.srcaddr, mb, bp[1:], nb-1);
+	is LinkReject  then {}
+	is Advertisement then
+	    RecvAdvertisement(uh.srcaddr, mb, bp[1:], nb-1);
+	is Update then {}
+	is UpdateRequest then {}
+	is DataRequest then {}
+	is DataResponse then {}
+	is ParentRequest then {}
+	is ParentResponse then
+	    eb.RecvParentResponse(uh.srcaddr, mb, bp[1:], nb-1);
+	is ChildIdRequest then {}
+	is ChildIdResponse then
+	    eb.RecvChildIdResponse(uh.srcaddr, mb, bp[1:], nb-1);
+	is ChildUpdateRequest then {}
+	is ChildUpdateResponse then {}
+    }
+
+    /*
+     ***********************
+     * MLE Transmit routines
+     ***********************
+     */
+
+    proc AppendSourceAddress(buf: @[]_byte, len: _uint, adr: AddrShort): _uint
+    {
+	// assert len >= 4
+	buf[0] = _uint8(TLVType.SourceAddr);
+	buf[1] = 2;
+	_packbe(buf[2:2], adr);
+	return 4;
+    }
+
+    proc AppendVersion(buf: @[]_byte, len: _uint): _uint
+    {
+	// assert len >= 4
+	buf[0] = _uint8(TLVType.Version);
+	buf[1] = 2;
+	_packbe(buf[2:2], MLEVersion);
+	return 4;
+    }
+
+    proc AppendMode(buf: @[]_byte, len: _uint, mode: CapabilityInfo): _uint
+    {
+	// assert len >= 3
+	buf[0] = _uint8(TLVType.Mode);
+	buf[1] = 1;
+	buf[2] = _uint8(mode);
+	return 3;
+    }
+
+    proc AppendTimeout(buf: @[]_byte, len: _uint, value: _uint32): _uint
+    {
+	// assert len >= 6
+	buf[0] = _uint8(TLVType.Timeout);
+	buf[1] = 4;
+	_packbe(buf[2:4], value);
+	return 6;
+    }
+
+    proc AppendChallenge(buf: @[]_byte, len: _uint, value: @[8]_uint8): _uint
+    {
+	// assert len >= 10
+	buf[0] = _uint8(TLVType.Challenge);
+	buf[1] = 8;
+	buf[2:8] = value@;
+	return 10;
+    }
+
+    proc AppendResponse(buf: @[]_byte, len: _uint, value: @[8]_uint8): _uint
+    {
+	// assert len >= 10
+	buf[0] = _uint8(TLVType.Response);
+	buf[1] = 8;
+	buf[2:8] = value@;
+	return 10;
+    }
+
+
+    proc (eb: pMLEBlock) AppendLinkFrameCtr(buf: @[]_byte, len: _uint): _uint
+    {
+	// assert len >= 6
+	buf[0] = _uint8(TLVType.LinkFrameCounter);
+	buf[1] = 4;
+	_packbe(buf[2:4], thread.GetMACFrameCounter(0));
+	return 6;
+    }
+
+    proc (eb: pMLEBlock) AppendMleFrameCtr(buf: @[]_byte, len: _uint): _uint
+    {
+	// assert len >= 6
+	buf[0] = _uint8(TLVType.MleFrameCounter);
+	buf[1] = 4;
+	_packbe(buf[2:4], eb.framectr);
+	return 6;
+    }
+
+    proc (eb: pMLEBlock) AppendLeaderData(buf: @[]_byte, len: _uint): _uint
+    {
+	// assert len >= 10
+	buf[0] = _uint8(TLVType.LeaderData);
+	buf[1] = 8;
+	_packbe(buf[2:4], eb.leaderdata.partitionid);
+	buf[6] = eb.leaderdata.weighting;
+	buf[7] = eb.leaderdata.dataversion;
+	buf[8] = eb.leaderdata.stableversion;
+	buf[9] = eb.leaderdata.routerid;
+	return 10;
+    }
+
+    proc AppendTlvRequest(buf: @[]_byte, len: _uint,
+			  tlvs: @[]TLVType, ntlvs: _uint): _uint
+    {
+	buf[0] = _uint8(TLVType.TlvRequest);
+	buf[1] = ntlvs;
+	buf[2:ntlvs] = tlvs[0:ntlvs];
+	return ntlvs+2;
+    }
+
+    proc AppendScanMask(buf: @[]_byte, len: _uint, mask: ScanMask): _uint
+    {
+	// assert len >= 3
+	buf[0] = _uint8(TLVType.ScanMask);
+	buf[1] = 1;
+	buf[2] = _uint8(mask);
+	return 3;
+    }
+
+    proc AppendAddrRegistration(buf: @[]_byte, len: _uint): _uint
+    {
+	// assert len >= 11
+	buf[0] = _uint8(TLVType.AddressRegistration);
+	buf[1] = 9;
+	buf[2] = 0x80;		// compressed flag
+	buf[3:8] = thread.myiid;
+	return 11;
+    }
+
+    proc AppendActiveTimestamp(buf: @[]_byte, len: _uint): _uint
+    {
+	buf[0] = _uint8(TLVType.ActiveTimestamp);
+	buf[1] = 8;
+	buf[2:2] = {0,0};	// high 16 of 48
+	timestamp += 1;		// hack
+	_packbe(buf[4:4], timestamp);
+	buf[8:2] = {0,0};	// ticks and U flag
+	return 10;
+    }
+
+    proc (eb: pMLEBlock) AppendMessageHeader(buf: @[]_byte, len: _uint,
+		    comd: Command, keykind: SecurityControl ): _uint
+    {   var n: _uint;
+
+	if keykind == KeyNone then
+	{   buf[0] = _uint8(SecuritySuite.NONE);
+	    n = 0;
+	}
+	else
+	{   buf[0] = _uint8(SecuritySuite.CCM);
+	    buf[1] = _uint8(keykind);
+	    _packle(buf[2:4], eb.framectr);
+	    n = 6;
+	    if keykind == KeyKind2 then
+	    {   _packle(buf[6:4], eb.keyseq);
+		n += 4;
+	    }
+	    buf[n] = eb.keyid + 1;
+	}
+	buf[n+1] = _uint8(comd);
+	return n+2;
+    }
+
+    proc MakeChallenge(buf: @[8]_uint8)
+    {   var i: _uint;
+
+//	for i from 0 to 7 do
+//	    buf[i] = _uint8(thread.GetRandom());
+	buf[0:8] = { 0x25,0x90,0x66,0xC5,0x82,0xE7,0x1B,0x47 };
+    }
+
+    proc (eb: pMLEBlock) Send(mb: pMBuf, to: @inet.IPv6Addr)
+    {
+	var uh: inet.pULHeader6;
+	var dp: inet.pUDPHeader;
+	var bp, tag: @[]_uint8;
+	var nh, nb: _uint;
+	var nonce: [13]_uint8;
+	var ctx: aesccm.State;
+
+	bp = mb.Data();
+	nb = mb.Size();
+	if SecurityControl(bp[1]) == KeyKind1 then
+	    nh = 6;
+	elif SecurityControl(bp[1]) == KeyKind2 then
+	    nh = 10;
+	else	// no security
+	    nh = 2;
+debug.str("mle.Send nb="); debug.uint(nb);
+debug.str(" nh="); debug.uint(nh); debug.nl();
+	dp = inet.pUDPHeader(mb.GrowHead(inet.UDPHeader?size));
+	dp.dstport = UDPPort;
+	// UDP length includes UDP header size
+	dp.len = nb + 4 + inet.UDPHeader?size;	// add tag length
+	uh = inet.pULHeader6(mb.GrowHead(inet.ULHeader6?size));
+	uh.info = {.isipv6=true};
+	uh.dstaddr = to@;
+	uh.srcaddr = thread.myipaddr;
+debug.str("dst: "); ipv6.AddrPrint(uh.dstaddr); debug.nl();
+debug.str("src: "); ipv6.AddrPrint(uh.srcaddr); debug.nl();
+	nb -= nh + 1;
+	MakeNonce(uh.srcaddr[8:8], eb.framectr, _uint8(ieee802154.SecLevel.ENC_MIC32), nonce);
+debug.str("nonce: "); debug.hex8n(nonce, 13); debug.nl();
+	ctx.SetKey(thread.keys.GetMleKey(), KEY128);
+	ctx.Start(inet.IPv6AddrLen+inet.IPv6AddrLen+nh, nb, 4, nonce, 13);
+	ctx.Header(uh.srcaddr, inet.IPv6AddrLen);
+	ctx.Header(uh.dstaddr, inet.IPv6AddrLen);
+	ctx.Header(bp[1:], nh);
+	ctx.Encrypt(bp[nh+1:], bp[nh+1:], nb);
+	tag = mb.GrowTail(4);
+	ctx.Finish(tag, 4);
+	mb.tag = 0;
+	mb.code = SEND;
+mb.Dump(true);
+	eb.framectr += 1;
+	eb.lower.Send(mb);
+    }
+
+    proc (eb: pMLEBlock) SendParentRequest()
+    {   var mb: pMBuf;
+	var bp: @[]_uint8;
+	var i, n: _uint;
+	var mask: ScanMask;
+	const HdrSize = 8 + inet.ULHeader6?size + inet.UDPHeader?size;
+	const MyHdrSize = 11;
+	const MsgSize = 32;		// FIXME
+
+debug.str("mle.SendParentRequest\n");
+	MakeChallenge(eb.challenge);
+	mask = {.router=true};		// FIXME
+
+	mb = mbuf.Alloc(HdrSize + MyHdrSize + MsgSize, HdrSize);
+	bp = mb.Data();
+	n = mb.Size();
+	i = 0;
+	i += eb.AppendMessageHeader(bp, n, ParentRequest, KeyKind2);
+var j: _uint;
+j = i - 1;
+	i += AppendMode(bp[i:], n-i, eb.mode);
+	i += AppendChallenge(bp[i:], n-i, eb.challenge);
+	i += AppendScanMask(bp[i:], n-i, mask);
+	i += AppendVersion(bp[i:], n-i);
+DumpMessage(bp[j:], i-j);
+	mb.GrowTail(i);
+	eb.state = REQP;
+	eb.Send(mb, ipv6.AllRoutersAddr);
+    }
+
+    proc (eb: pMLEBlock) SendChildIdRequest()
+    {   var mb: pMBuf;
+	var bp: @[]_uint8;
+	var i, n: _uint;
+	const tlvsF: []TLVType = {Address16, NetworkData, Route64};
+	const tlvsR: []TLVType = {Address16, NetworkData};
+	const HdrSize = 8 + inet.ULHeader6?size + inet.UDPHeader?size;
+	const MyHdrSize = 11;
+	const MsgSize = 32;		// FIXME
+
+	mb = mbuf.Alloc(HdrSize + MyHdrSize + MsgSize, HdrSize);
+	bp = mb.Data();
+	n = mb.Size();
+	i = 0;
+	i += eb.AppendMessageHeader(bp, n, ChildIdRequest, KeyKind2);
+var j: _uint;
+j = i - 1;
+	i += AppendResponse(bp[i:], n-i, eb.response);
+	i += eb.AppendLinkFrameCtr(bp[i:], n-i);
+	i += eb.AppendMleFrameCtr(bp[i:], n-i);
+	i += AppendMode(bp[i:], n-i, eb.mode);
+	i += AppendTimeout(bp[i:], n-i, 100);			// FIXME
+	i += AppendVersion(bp[i:], n-i);
+	if eb.mode.devtype == RFD then
+	{   i += AppendAddrRegistration(bp[i:], n-i);
+	    i += AppendTlvRequest(bp[i:], n-i, tlvsR, tlvsR?len);
+	}
+	else
+	    i += AppendTlvRequest(bp[i:], n-i, tlvsF, tlvsF?len);
+	i += AppendActiveTimestamp(bp[i:], n-i);
+DumpMessage(bp[j:], i-j);
+	mb.GrowTail(i);
+	eb.state = REQCID;
+	eb.Send(mb, thread.parent.ipaddr);
+    }
+
+    // FIXME - REEDs that want to be routers
+    proc (eb: pMLEBlock) SendLinkRequest()
+    {   var mb: pMBuf;
+	var bp: @[]_uint8;
+	var i, n: _uint;
+	const routertlvs: []TLVType = {LinkMargin};
+	const HdrSize = 8 + inet.ULHeader6?size + inet.UDPHeader?size;
+	const MyHdrSize = 11;
+	const MsgSize = 32;		// FIXME
+
+	mb = mbuf.Alloc(HdrSize + MyHdrSize + MsgSize, HdrSize);
+	bp = mb.Data();
+	n = mb.Size();
+	i = 0;
+	i += eb.AppendMessageHeader(bp, n, LinkRequest, KeyKind2);
+var j: _uint;
+j = i - 1;
+	i += AppendVersion(bp[i:], n-i);
+	i += AppendSourceAddress(bp[i:], n-i, eb.saddr);
+	i += AppendTlvRequest(bp[i:], n-i, routertlvs, routertlvs?len);
+	i += eb.AppendLeaderData(bp[i:], n-i);
+	MakeChallenge(eb.challenge);
+	i += AppendChallenge(bp[i:], n-i, eb.challenge);
+DumpMessage(bp[j:], i-j);
+	mb.GrowTail(i);
+	eb.state = REQL;
+	eb.Send(mb, ipv6.AllRoutersAddr);
+    }
+
+    // FIXME - routers only
+    proc (eb: pMLEBlock) SendLinkAccept(/* to: Neighbor*/)
+    {
+    }
+
+    // FIXME - routers only
+    proc (eb: pMLEBlock) SendLinkReject(/* to: Neighbor*/)
+    {
+    }
+
+    proc Run(b: pBlock, e: pEvent)
+    {   var mb: pMBuf;
+	var eb: pMLEBlock;
+
+{debug.str("mle.Run ");  debug.uint8(_uint8(e.code));
+debug.chr(','); debug.uint8(e.tag); debug.nl();}
+	eb = pMLEBlock(b);
+	if e.code
+	is RCVD then
+	{
+	    mb = pMBuf(e);
+debug.str("mle.Recv: len=");  debug.uint(mb.Size()); debug.nl();
+	    eb.Recv(mb);
+	    mbuf.Free(mb);
+	    if eb.state
+	    is GOTP then
+		eb.SendChildIdRequest();
+	    is CHILD then
+	    {	thread.devstate = Child;
+		if eb.mode.devtype == FFD then
+		    eb.SendLinkRequest();
+	    }
+	}
+	is CONNECT then
+	{   var ce: event.pConnEvent;
+	    ce = event.pConnEvent(e);
+	    if ce.type == LOWER then
+		eb.lower = ce.tag;
+	    _delete(ce);
+	}
+	else
+	{
+	    _delete(e);
+	}
+    }
+
+   proc NewBlock(id: BlockID): pBlock
+    {   var eb: pMLEBlock;
+
+	eb = _new(MLEBlock);
+	eb.BlockInit(id, Run);
+	return eb;
+    }
+}
+

@@ -178,7 +178,7 @@ package sha512
 	}
 	// process any complete blocks
 	while len >= 128 do
-	{   ctx.Process(data[i:64]);
+	{   ctx.Process(data[i:128]);
 	    i += 128;
 	    len -= 128;
 	}

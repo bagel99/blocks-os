@@ -36,7 +36,7 @@ package ipv6	// continue with implementation
 	proto:   Proto;
     };
     type pUpper: @Upper;
-    
+
 
     if _defined(sys.NIPv6Lower) then
 	alias sys.NIPv6Lower as NIPv6Lower;
@@ -92,7 +92,7 @@ package ipv6	// continue with implementation
     const LinkAddrLen: [comm.LinkType]_uint8 =
 	{   [UNKN]=0,  [ENET]=6,  [PPP]=8,   [WPAN]=8  };
     const EnetMulticast: [2]_byte = { 0x33, 0x33 };
-
+    const WPANMulticast: [8]_byte = {0x02,0x00,0x00,0xff,0xfe,0x00,0xff,0xff};
 
 // BEGIN DEBUG
     proc DumpIntfID(intf: pLower)
@@ -108,14 +108,14 @@ package ipv6	// continue with implementation
     proc (intf: pLower) DumpAllAddr()
     {   var pa: pIntfAddrEntry;
 
-	debug.str("Interface: "); debug.uint(intf.ifn); 
+	debug.str("Interface: "); debug.uint(intf.ifn);
 	debug.str("\nUnicast:\n");
 	pa = intf.prefixes;
 	while pa != 0 do
 	{   AddrPrint(pa.addr); debug.nl();
 	    pa = pa.next;
 	}
-	debug.str("Multicast:\n");   
+	debug.str("Multicast:\n");
 	pa = intf.multicast;
 	while pa != 0 do
 	{   AddrPrint(pa.addr); debug.nl();
@@ -136,7 +136,7 @@ package ipv6	// continue with implementation
 	debug.str("\n\tfm="); AddrPrint(ip.srcaddr);
 	debug.str("\n\tto="); AddrPrint(ip.dstaddr);
 	debug.nl();
-if db > 4 then debug.dumpb("data", mb.Data(), mb.Size());
+if db > 4 then debug.dumpb("\tdata\n", mb.Data(), mb.Size());
     }
 //END DEBUG
 
@@ -289,6 +289,7 @@ if db > 3 then {debug.str("\tnew entry\n");}
 	}
 	is WPAN then
 	{   pnc.age = 0;    // FIXME
+	    pnc.laddr[0:8] = linkaddr[0:8];
 	    pnc.state = REACHABLE;
 	}
 	is ENET then
@@ -310,7 +311,7 @@ if db > 3 then {debug.str("\tlinkaddr="); MACPrint(linkaddr, adrlen); debug.nl()
 		intf.SendNS(myaddr, toaddr, ipaddr);
 	    }
 	}
-if db > 5 then {intf.NCacheDump();}	
+if db > 5 then {intf.NCacheDump();}
 	return pnc;
     }
 
@@ -517,6 +518,9 @@ debug.nl();}
 	is MULTICAST then pa = intf.multicast;
 	while pa != 0 do
 	{   if AddrSame(dst, pa.addr) then return true;
+if db > 3 then {
+debug.str("ToUs: "); AddrPrint(pa.addr); debug.nl();
+}
 	    pa = pa.next;
 	}
 	return false;
@@ -531,22 +535,34 @@ debug.nl();}
 	{   // Build link destination header
 	    la = pEUI64(mb.GrowHead(EUI64?size));
 	    if IsMulticast(ip.dstaddr) then
-	    {   la@[0:2] = EnetMulticast;
-		la@[2:4] = ip.dstaddr[12:4];
+	    {	if intf.type == WPAN then
+		    la@[0:8] = WPANMulticast;
+		else	// assume ENET
+		{   la@[0:2] = EnetMulticast;
+		    la@[2:4] = ip.dstaddr[12:4];
+		}
 	    }
 	    else
 	    {   pnc = intf.NCacheFind(ip.dstaddr);
-		if pnc == 0 then
-		{   pnc = intf.NCacheAdd(ip.dstaddr, 0);
-		    if pnc != 0 then
-		    {   mb.ShrinkHead(EUI64?size);
-			mb.SetNext(pnc.queue);
-			pnc.queue = mb;
+		if intf.type == WPAN then
+		{   if pnc == 0 then
+		    {   pnc = intf.NCacheAdd(ip.dstaddr, ip.dstaddr[8:8]);
 		    }
-		    return;     // queued until address resolution
+		    la@[0:8] = pnc.laddr[0:8];
 		}
-		la@[0:6] = pnc.laddr[0:6];
-		// FIXME
+		else	// assume ENET
+		{   if pnc == 0 then
+		    {   pnc = intf.NCacheAdd(ip.dstaddr, 0);
+			if pnc != 0 then
+			{   mb.ShrinkHead(EUI64?size);
+			    mb.SetNext(pnc.queue);
+			    pnc.queue = mb;
+			}
+			return;     // queued until address resolution
+		    }
+		    la@[0:6] = pnc.laddr[0:6];
+		    // FIXME
+		}
 	    }
 	}
 if db > 2 then DumpPacket("ipv6.ISend", mb, ip, 0);
@@ -932,7 +948,7 @@ debug.nl();}
 	else
 	    event.Free(te);
     }
-    
+
     proc Run(b: pBlock, e: pEvent)
     {   var ib: pIPv6Block;
 
@@ -998,7 +1014,7 @@ if db > 0 then {debug.str("ipv6.Connect upper: intf="); debug.uint8(ce.chan); de
 	    }
 	    _delete(e);
 	}
-	    
+
     }
 
 

@@ -86,9 +86,9 @@ package secp192r1
 
 	for i from 0 to tests?len-1 do
 	{
-	    bignum.ImportHexStr(tests[i].d,  priv, K);
-	    bignum.ImportHexStr(tests[i].Sx, pub.x, K);
-	    bignum.ImportHexStr(tests[i].Sy, pub.y, K);
+	    bignum.ImportHexStr(priv, tests[i].d,  K);
+	    bignum.ImportHexStr(pub.x, tests[i].Sx, K);
+	    bignum.ImportHexStr(pub.y, tests[i].Sy, K);
 	    ECDH(pub, priv, out);
 	    bignum.ExportHexStr(pmsecret, out.x, K);
 	    if !Check(pmsecret[0:K*8] == tests[i].Z@, which, i+1) then
@@ -139,9 +139,9 @@ package secp224r1
 
 	for i from 0 to tests?len-1 do
 	{
-	    bignum.ImportHexStr(tests[i].d,  priv, K);
-	    bignum.ImportHexStr(tests[i].Sx, pub.x, K);
-	    bignum.ImportHexStr(tests[i].Sy, pub.y, K);
+	    bignum.ImportHexStr(priv, tests[i].d,  K);
+	    bignum.ImportHexStr(pub.x, tests[i].Sx, K);
+	    bignum.ImportHexStr(pub.y, tests[i].Sy, K);
 	    ECDH(pub, priv, out);
 	    bignum.ExportHexStr(pmsecret, out.x, K);
 	    if !Check(pmsecret[0:K*8] == tests[i].Z@, which, i+1) then
@@ -191,9 +191,9 @@ package secp256r1
 
 	for i from 0 to tests?len-1 do
 	{
-	    bignum.ImportHexStr(tests[i].d,  priv, K);
-	    bignum.ImportHexStr(tests[i].Sx, pub.x, K);
-	    bignum.ImportHexStr(tests[i].Sy, pub.y, K);
+	    bignum.ImportHexStr(priv, tests[i].d,  K);
+	    bignum.ImportHexStr(pub.x, tests[i].Sx, K);
+	    bignum.ImportHexStr(pub.y, tests[i].Sy, K);
 	    ECDH(pub, priv, out);
 	    bignum.ExportHexStr(pmsecret, out.x, K);
 	    if !Check(pmsecret[0:K*8] == tests[i].Z@, which, i+1) then
@@ -261,9 +261,9 @@ package secp384r1
 
 	for i from 0 to tests?len-1 do
 	{
-	    bignum.ImportHexStr(tests[i].d,  priv, K);
-	    bignum.ImportHexStr(tests[i].Sx, pub.x, K);
-	    bignum.ImportHexStr(tests[i].Sy, pub.y, K);
+	    bignum.ImportHexStr(priv, tests[i].d,  K);
+	    bignum.ImportHexStr(pub.x, tests[i].Sx, K);
+	    bignum.ImportHexStr(pub.y, tests[i].Sy, K);
 	    ECDH(pub, priv, out);
 	    bignum.ExportHexStr(pmsecret, out.x, K);
 	    if !Check(pmsecret[0:K*8] == tests[i].Z@, which, i+1) then
@@ -350,9 +350,9 @@ package secp521r1
 
 	for i from 0 to tests?len-1 do
 	{
-	    bignum.ImportHexStr(tests[i].d,  priv, K);
-	    bignum.ImportHexStr(tests[i].Sx, pub.x, K);
-	    bignum.ImportHexStr(tests[i].Sy, pub.y, K);
+	    bignum.ImportHexStr(priv, tests[i].d,  K);
+	    bignum.ImportHexStr(pub.x, tests[i].Sx, K);
+	    bignum.ImportHexStr(pub.y, tests[i].Sy, K);
 	    ECDH(pub, priv, out);
 	    bignum.ExportHexStr(pmsecret, out.x, K);
 	    if !Check(pmsecret[0:K*8] == tests[i].Z@, which, i+1) then

@@ -16,12 +16,14 @@
  * as defined by the IEEE Registration Authority.
  */
 
-if !_defined(EnableEncryption) then 
+if !_defined(EnableEncryption) then
     const EnableEncryption: boolean = false;
 
 import crc_itut16;
 
 if EnableEncryption then import aesccm;
+
+import ieee802154def;
 
 package ieee802154
 {
@@ -30,37 +32,6 @@ package ieee802154
     else
 	const db = 0;
     alias crc_itut16 as crc;
-    const MTU = 127;	// max length of frame
-    const FCS = 2;	// length of FCS
-
-    type PANId:	_uint16;
-    const BroadcastPAN: _uint16 = 0xFFFF;
-
-    type AddrShort: _uint16;
-    const UnallocAddr:   _uint16 = 0xFFFE;
-    const BroadcastAddr: _uint16 = 0xFFFF;
-
-    type AddrLong:  [8]_uint8;
-    // The short UUID prefix has the local bit set, which will get flipped
-    // when generating the IPv6 address.
-    const ShortUUID: [6]_uint8 = { 0x02, 0, 0, 0xFF, 0xFE, 0};
-
-    type FrameInfo:	// FIXME - move elsewhere?
-    {   srcadr:  AddrLong;
-	dstadr:  AddrLong;
-	srcpan:  PANId;
-	dstpan:  PANId;
-	flags:
-	{   fcserr: boolean;	// FCS error
-	    rack:   boolean;	// recv ack frame
-	    sack:   boolean;	// need to send ack frame
-	    wack:   boolean;	// want ACK to this send
-	}: packed, bits(8);
-	seqno:   _uint8;
-	misc:    _uint8;	// rssi (signed) for Recv
-	datoff:  _uint8;
-	datlen:  _uint8;
-    };
 
     /*
      * IEEE 802.15.4 addresses and pan ids are little-endian in the frame.
@@ -120,42 +91,16 @@ package ieee802154
     };
     type pHeader: @Header;
 
-    // Security Header
-    type SecLevel:	// encypt auth algorithm
-    (	NONE,		//    n    n
-	MIC32,		//    n    y   AES-CBC-MAC-32
-	MIC64,		//    n    y   AES-CBC-MAC-64
-	MIC128,		//    n    y   AES-CBC-MAC-128
-	ENC,		//    y    n   AES-CTR
-	ENC_MIC32,      //    y    y   AES-CCM-32
-	ENC_MIC64,      //    y    y   AES-CCM-64
-	ENC_MIC128      //    y    y   AES-CCM-128
-    );
-    type KeyMode:	// keyindex keyidlen
-    (   IMPLICIT,	//    n        0
-	KEY0,		//    y        0
-	KEY4,		//    y        4
-	KEY8		//    y        8
-    );
     type CryptoAlg:    (NONE, CBC, CTR, CCM);
+    const Algorithm:   [SecLevel]CryptoAlg =
+	{ NONE,CBC, CBC, CBC, CTR, CCM, CCM, CCM };
+    const MICLength:   [SecLevel]_uint8 =
+	{ 0,   4,   8,   16,  0,   4,   8,   16 };
 
     const HasKeyIndex: [KeyMode]boolean = { false, true, true, true };
     const KeyIDLength: [KeyMode]_uint8  = { 0, 0, 4, 8 };
-    const TagLength:   [SecLevel]_uint8 = { 0, 4, 8, 16, 0, 4, 8, 16 };
-    const Algorithm:   [SecLevel]CryptoAlg =
-	{ NONE, CBC, CBC, CBC, CTR, CCM, CCM, CCM };
-
-    type SecurityControl:
-    {   level:   SecLevel;	// .00-02
-	keymode: KeyMode;	// .03-04
-	rsvd:    0..0b111;	// .05-07
-    }:packed, lsb;
-    type SecHeader:
-    {   cntl:    SecurityControl;
-	frmctr: _uint32: align(1);
-	keyid:  []_uint8;
-    };
-    type pSecHeader: @SecHeader;
+    // Total size of auxiliary security header
+    const SecuritySize:[KeyMode]_uint8  = { 5, 6,10,14 };
 
     /*
      * Type Intra Dst  Src | Dst Dst Src Src  Tot
@@ -186,68 +131,180 @@ package ieee802154
 	nonce[12] = lvl;
     }
 
+if EnableEncryption then
+{
     proc Decrypt(frame: @[]_byte, info: @FrameInfo)
     {
-	var sh: pSecHeader;
-	var n, len: _uint;
-	var srcadr: [8]_uint8;
+	var h: pHeader;
+	var sh: SecurityControl;
+	var n, len, miclen: _uint;
+	var frmctr: _uint32;
+	var key: @[16]_uint8;
+	var srcadr: @[8]_uint8;
+	var mic: [16]_uint8;	// maximum size
 	var nonce: [13]_uint8;
-	var ctx: aes.ccm.State;
-	const taglen = 4;		// FIXME
-	var tag: [taglen]_uint8;
+	var ctx: aesccm.State;
 
 	n = info.datoff;
 	len = info.datlen;
-	sh = pSecHeader(frame[n:5]);
+	sh = frame[n];
+	frmctr = _unpkle(frame[n+1:4]);
 if db > 1 then {
-//debug.dumpb("secure", frame, len);
-debug.str("secure lvl="); debug.uint8(_uint8(sh.cntl.level));
-debug.str(" keymode="); debug.uint8(_uint8(sh.cntl.keymode));
-debug.str(" frmctr="); debug.uint32(sh.frmctr); }
-	if sh.cntl.level != ENC_MIC32 then
+debug.str("secure lvl="); debug.uint8(_uint8(sh.level));
+debug.str(" keymode="); debug.uint8(_uint8(sh.keymode));
+debug.str(" frmctr="); debug.uint32(frmctr); debug.nl(); }
+	n += 5;		// size of fixed part of security stuff
+	if sh.level < ENC then
 	{
 if db > 0 then { debug.str("Unimplemented security level\n"); }
 	    return;
 	}
-
-	n += 5;
-	if HasKeyIndex[sh.cntl.keymode] then
-	{
-if db > 1 then {
-debug.str(" keyidx="); debug.uint8(frame[n]); }
-	    n += 1;
+	srcadr = 0;	// check this later
+	if sh.keymode
+	is IMPLICIT then
+	{   key = GetMacKeyImplicit(info.srcadr);
 	}
-	n += KeyIDLength[sh.cntl.keymode];
+	is KEY0 then
+	{   key = GetMacKeyIndex(frame[n]);
+	    n += 1;	// index only
+	}
+	is KEY4 then
+	{   key,srcadr = GetMacKeyId(frame[n], _uint64(_unpkbe(frame[n+1:4])));
+	    n += 5;	// index plus 4 byte
+	}
+	is KEY8 then
+	{   key,srcadr = GetMacKeyId(frame[n], _uint64(_unpkbe(frame[n+1:8])));
+	    n += 9;	// index plus 8 byte
+	}
 	len -= n - info.datoff;		// datoff increased by this
-	len -= taglen;
-if db > 1 then {
-debug.str(" alen="); debug.uint(n);
-debug.str(" plen="); debug.uint(len);
-debug.str(" tlen="); debug.uint(taglen);
-debug.nl();
-}
+	miclen = MICLength[sh.level];
+	len -= miclen;
+	// At this point we know the offset and size of the payload
 	info.datoff = n;
 	info.datlen = len;
-
 	/*
 	 * In order to decrypt, we need the laddr of the source.
 	 * If the frame only had a saddr, then we need to look it up.
 	 */
-	srcadr = info.srcadr;
-	if srcadr[3:2] == {0xFF, 0xFE} then
-	    GetLongAddr(srcadr);
-	MakeNonce(srcadr, sh.frmctr, _uint8(sh.cntl.level), nonce);
-//debug.dumpb("nonce", nonce, 13);
-//debug.dumpb("key", GetMacKey(), 16);
-	ctx.SetKey(GetMacKey(), KEY128);
-	ctx.Start(n, len, taglen, nonce, 13);
-//debug.dumpb("header", frame[0:], n);
+	if srcadr == 0 then
+	    srcadr = info.srcadr;
+	MakeNonce(srcadr, frmctr, _uint8(sh.level), nonce);
+if db > 1 then
+{ debug.dumpb("nonce: ", nonce, 13);
+  debug.dumpb("key: ", key, 16);
+}
+	/*
+	 *  Command frames with frame version < 2 do not encrypt
+	 *  the first payload byte but use it as last byte of header.
+	 */
+	h = pHeader(frame);
+	if h.f0.ft == Comd && h.f1.vers < 2 then
+	{   n += 1;		// temporarily expand header
+	    len -= 1;		// and contract payload
+	}
+if db > 1 then {
+debug.str("alen="); debug.uint(n);
+debug.str(" plen="); debug.uint(len);
+debug.str(" mlen="); debug.uint(miclen);
+debug.dumpb("\nencrypted data\n", frame[n:], len);
+}
+	ctx.SetKey(key, KEY128);
+	ctx.Start(n, len, miclen, nonce, 13);
 	ctx.Header(frame[0:], n);
 	ctx.Decrypt(frame[n:], frame[n:], len);
-	ctx.Finish(tag, 4);
-	// FIXME - check tag
-//debug.dumpb("tag", tag, 4);
-if db > 3 then { debug.dumpb("decrypted", frame[n:], len); }		
+	ctx.Finish(mic, miclen);
+if db > 1 then {
+debug.dumpb("\ndecrypted data\n", frame[n:], len);
+}
+	if miclen > 0 && mic[0:miclen] != frame[n+len:miclen] then
+	{
+if db > 0 then {
+debug.str("message integrity check failed\n");
+debug.dumpb("computed mic: ", mic, miclen);
+debug.dumpb("actual mic:   ", frame[n+len:], miclen); }
+	    info.datlen = 0;
+	}
+    }
+
+    proc Encrypt(frame: @[]_byte, info: @FrameInfo): _uint
+    {   var k, n, miclen: _uint;
+	var nonce: [13]_uint8;
+	var sh: SecurityControl;
+	var ctx: aesccm.State;
+	var key: @[16]_byte;
+	var mic: [16]_uint8;	// maximum size
+
+if db > 1 then {
+debug.str("ieee820154.Encrypt off="); debug.uint8(info.datoff);
+debug.str(" len="); debug.uint8(info.datlen); debug.nl(); }
+	sh = info.flags.secctl;
+	n = info.datlen;
+	k = info.datoff;
+if db > 2 then debug.dumpb("plain\n", frame[n:], info.datlen);
+	k -= SecuritySize[sh.keymode];
+	// build the security header
+	frame[k] = _uint8(sh);
+	_packle(frame[k+1:4], info.frmctr);
+	k += 5;
+	if sh.keymode
+	is IMPLICIT then
+	{   // FIXME
+debug.str("ieee820154.Encrypt: key mode 0 not implemented\n");
+	}
+	is KEY0 then
+	{   key = GetMacKeyIndex(info.index);
+	    frame[k] = info.index;
+	    k += 1;	// index only
+	}
+	is KEY4 then
+	{   key = GetMacKeyId(info.index, _uint64(info.misc));
+	    frame[k] = info.index;
+	    _packbe(frame[k+1:4], info.misc);
+	    k += 5;	// index plus 4 byte
+	}
+	is KEY8 then
+	{   //key = GetMacKeyId(frame[n], _uint64(_unpkbe(frame[n+1:8])));
+	    frame[k] = info.index;
+debug.str("ieee820154.Encrypt: key mode 3 not implemented\n");
+	    k += 9;	// index plus 8 byte
+	}
+
+	miclen = MICLength[sh.level];
+if db > 1 then {
+debug.str(" alen="); debug.uint(k);
+debug.str(" plen="); debug.uint(n);
+debug.str(" mlen="); debug.uint(miclen); debug.nl();
+}
+	MakeNonce(info.srcadr, info.frmctr, _uint8(sh.level), nonce);
+if db > 1 then
+{ debug.dumpb("nonce: ", nonce, 13);
+  debug.dumpb("key: ", key, 16);
+}
+	ctx.SetKey(key, KEY128);
+	ctx.Start(k, n, miclen, nonce, 13);
+//debug.dumpb("header:\n", frame[0:], k);
+	ctx.Header(frame[0:], k);
+	ctx.Encrypt(frame[k:], frame[k:], n);
+	ctx.Finish(mic, miclen);
+	if miclen > 0 then
+	{   frame[k+n:miclen] = mic[0:miclen];
+	    k += miclen;
+	}
+	return k+n;
+    }
+
+
+}	// end if EnableEncryption
+
+    var ackframe: [5]_uint8;
+
+    proc SendAck(info: @FrameInfo)
+    {
+
+	ackframe[0] = _uint8(FrameCF0{.ft=Ack});
+	ackframe[1] = 0;
+	ackframe[2] = info.seqno;
+	RadioSend(ackframe, 3);
     }
 
     proc Recv(frame: @[]_uint8, len: _uint, info: @FrameInfo)
@@ -267,6 +324,7 @@ debug.str("fcs error="); debug.hex16(fcs); debug.nl();
 		info.flags = {.fcserr = true};
 		return;
 	    }
+	    len -= 2;	// snip fcs
 	}
 	h = pHeader(frame);
 if db > 1 then {
@@ -276,6 +334,7 @@ debug.str(" se="); debug.uint8(_uint8(h.f0.se));
 debug.str(" ip="); debug.uint8(_uint8(h.f0.ip));
 debug.str(" dm="); debug.uint8(_uint8(h.f1.dm));
 debug.str(" sm="); debug.uint8(_uint8(h.f1.sm));
+debug.str(" ver="); debug.uint8(_uint8(h.f1.vers));
 debug.str(" seqno="); debug.uint8(h.seqno);
 debug.str(" len="); debug.uint(len);
 debug.nl(); }
@@ -286,7 +345,9 @@ debug.nl(); }
 	    return;
 	}
 	if h.f0.ar && !radio.autoack then
-	    info.flags = {.sack = true};
+	{   info.flags = {.sack = true};
+	    SendAck(info);
+	}
 	n = 0;		// offset to data from start of address fields
 	if h.f1.dm != None then
 	{   dstpan = _unpkle(h.addr[n:2]);
@@ -327,12 +388,29 @@ debug.nl(); }
 	info.datlen = len - n;
 	info.dstpan = dstpan;
 	info.srcpan = srcpan;
-	if h.f0.se && EnableEncryption then
+	if h.f0.se then
+	{   if EnableEncryption then
+		Decrypt(frame, info);
+	    else
+	    {
+if db > 0 then debug.str("ieee820154 cannot decrypt\n");
+		info.datlen = 0;
+	    }
+	}
+	if h.f0.ft
+	is Beacon then
 	{
-	    Decrypt(frame, info);
+if db > 0 then debug.dumpb("ieee820154 beacon received\n",
+frame[info.datoff:], info.datlen);
+	    info.datlen = 0;
+	}
+	is Comd then
+	{
+if db > 0 then debug.dumpb("ieee820154 command received\n",
+frame[info.datoff:], info.datlen);
+	    info.datlen = 0;
 	}
     }
-
 
     proc Xmit(data: @[]_uint8, len: _uint, info: @FrameInfo)
     {   var h0: FrameCF0;
@@ -341,6 +419,8 @@ debug.nl(); }
 	var n: _uint;
 
 	h0 = {.ft=Data, .ar=info.flags.wack};
+	if info.flags.secctl != {.level=NONE} then
+	    h0.se = true;
 	h1 = {.vers=1};
 	n = 3;
 	if info.dstpan != 0 then
@@ -380,34 +460,36 @@ debug.nl(); }
 	frame[0] = _uint8(h0);
 	frame[1] = _uint8(h1);
 	frame[2] = info.seqno;
+	if EnableEncryption && info.flags.secctl != {.level=NONE} then
+	{   n += SecuritySize[info.flags.secctl.keymode]; // security header
+	    info.datoff = n;
+	    info.datlen = len;
+	}
 	frame[n:len] = data[0:len];
-	RadioSend(frame, n+len);
-    }
-
-    proc SendAck(info: @FrameInfo)
-    {   var frame: [3]_uint8;
-
-	frame[0] = _uint8(FrameCF0{.ft=Ack});
-	frame[1] = 0;
-	frame[2] = info.seqno;
-	RadioSend(frame, 3);
+	n += len;
+	if EnableEncryption && info.flags.secctl != {.level=NONE} then
+	    n = Encrypt(frame, info);
+	RadioSend(frame, n);
     }
 
     proc HeaderLength(fcf: FrameCF): _uint
     {   var n: _uint;
 	const AddrLen: [boolean][AddrMode]_uint8  =
 	    {{ 0, 0, 4,10 },{ 0, 0, 2, 8 }};
- 
+
 	n = 3 + AddrLen[false][fcf.f1.dm] + AddrLen[fcf.f0.ip][fcf.f1.sm];
 	if fcf.f0.se then n += 1;
 	return n;
     }
 
 
-    proc MaxPayload(fcf: FrameCF): _uint
-    {
-    	// FIXME - security stuff if enabled
-	return MTU - FCS - HeaderLength(fcf);
+    proc MaxPayload(fcf: FrameCF, secctl: SecurityControl): _uint
+    {   var max: _uint;
+
+	max = MTU - FCS - HeaderLength(fcf);
+	if secctl != {.level=NONE} then
+	    max -= SecuritySize[secctl.keymode];
+	return max;
     }
 
 

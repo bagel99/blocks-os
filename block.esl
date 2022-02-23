@@ -82,7 +82,7 @@ package block
     {
 
 	if Ready != 0 then
-	    return Ready?bits - _clz(Ready);
+	    return Ready?bits - _clznz(Ready);
 	return 0;
     }
 
@@ -98,7 +98,7 @@ package block
 	    if b != 0 then      // FIXME - impossible?
 	    {
 		if b.pintr != 0 then    // interrupt(s) pending
-		{   n = _ctz(b.pintr);
+		{   n = _ctznz(b.pintr);
 		    b.nintr = n;
 		    b.IntrClr(n);
 		    if b.pintr == 0 && b.head == 0 then

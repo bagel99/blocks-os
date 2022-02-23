@@ -31,10 +31,11 @@ proc sqrt(x: _uint32): _uint32
 
 proc main()
 {   var i: _uint;
-    type Axis: (X, Y, Z);
-    var mdps: [Axis]_int32;
-    var accdata: [Axis]_int32;
-    var magdata: [Axis]_int32;
+//    type Axis: (X, Y, Z);
+    const X=0; const Y=1; const Z=2;
+    var mdps: [3]_int32;
+    var accdata: [3]_int32;
+    var magdata: [3]_int32;
 
     sys.Init();
     debug.Init();

@@ -6,34 +6,13 @@
  *   2. RFC6282
  *
  * Copyright (c) 2014-2016, Brian G. Lucas.  See LICENSE file.
- *
- * LoWPAN Dispatch Header Byte
- * 00xxxxxx - Not a LoWPAN frame
- * 01000000 - Escape (RFC6282)
- * 01000001 - Uncompressed IPV6
- * 01000010 - HC1 compressed (deprecated)
- * 01010000 - Broadcast
- * 011ftnhh - IPHC compressed (RFC6282)
- * 10xxxxxx - Mesh
- * 11000xxx - FRAG1
- * 11100xxx - FRAGn
- * All others reserved
- *
- * LoWPAN Next Header Byte if IPHC compressed (RFC6282)
- * 1110000n - Hop-by-Hop
- * 1110001n - Routing
- * 1110010n - Fragment
- * 1110011n - Dest options
- * 1110100n - Mobility
- * 1110101n - IPv6 header
- * 11110cpp - UDP
  */
 
 import mbuf;
 import block;
 import ipv6def;
 import ieee802154;
- 
+
 package lowpan
 {
     if _defined(debug.db_lowpan) then
@@ -52,8 +31,30 @@ package lowpan
     alias ieee802154.AddrLong as AddrLong;
 
     // Payloads of size MinCompress or larger will be compressed
-    const MinCompress = 63;
+    const MinCompress = 48;
 
+    /*
+     * LoWPAN Dispatch Header Byte
+     * 00xxxxxx - Not a LoWPAN frame
+     * 01000000 - Escape (RFC6282)
+     * 01000001 - Uncompressed IPV6
+     * 01000010 - HC1 compressed (deprecated)
+     * 01010000 - Broadcast
+     * 011ftnhh - IPHC compressed (RFC6282)
+     * 10xxxxxx - Mesh
+     * 11000xxx - FRAG1
+     * 11100xxx - FRAGn
+     * All others reserved
+     *
+     * LoWPAN Next Header Byte if IPHC compressed (RFC6282)
+     * 1110000n - Hop-by-Hop
+     * 1110001n - Routing
+     * 1110010n - Fragment
+     * 1110011n - Dest options
+     * 1110100n - Mobility
+     * 1110101n - IPv6 header
+     * 11110cpp - UDP
+     */
     // First 2 bits (msb) are major type:
     type HeaderType:
     (   BAD,			// not a LowPAN frame
@@ -78,8 +79,8 @@ package lowpan
     {   type:    HeaderType;	// 01
 	dispatch: DispatchType;
     }: packed, msb;
-    
-    type MeshHeader:		// Mesh Header	
+
+    type MeshHeader:		// Mesh Header
     {   type:    HeaderType;	// 10
 	v:       boolean;	// originator address is short
 	f:       boolean;	// destination address is short
@@ -90,7 +91,7 @@ package lowpan
     {   type:    HeaderType;	// 11
 	subtype: FragType;
     	sizehi:  0..0x7;	// hi bits of total size
-    }: packed, msb;    	
+    }: packed, msb;
 
     type FragHdr1:
     {   disp: FragHeader;
@@ -126,7 +127,7 @@ package lowpan
 	dac:     boolean;	// .05 - true if dst addr stateful compression
 	dam:     AddrMode;	// .06-07 - dst addr mode
     }: packed, msb;
- 
+
     type TF00:
     {   ecn:     0..3;
 	dscp:    0..0x3F;
@@ -145,7 +146,7 @@ package lowpan
 	dscp:    0..0x3F;
     }: packed, msb;
 
-   
+
     type IPHCHeader:
     {	h0:	IPHCHeader0;
 	h1:	IPHCHeader1;
@@ -161,7 +162,7 @@ package lowpan
         tcflzero:boolean;
         nexthdr: (NC, UDP, ICMP, TCP);
         hc2:     boolean;
-    }: packed, msb;    	
+    }: packed, msb;
 
     const mtu = 1280;	// This is for the IPv6 layer
     const MulticastAddr: [16]_byte: align(8) =
@@ -203,11 +204,9 @@ package lowpan
     type pFragDesc: @FragDesc;
 
 
-    /*
-     **************
-     * LowPAN state
-     **************
-     */
+    //**************
+    // LowPAN state
+    //**************
     type LPBlock(Block):
     {   ubid:     BlockID;      // block ID of upper block (IPv6)
 	uifn:     _uint8;       // upper interface number
@@ -215,6 +214,7 @@ package lowpan
 	fragtag:  _uint16;      // unique tag for fragments
 	panid:    _uint16;      // PAN ID
 	saddr:    _uint16;      // short address, 0 => invalid
+	frmctr:   _uint32;	// frame counter for security
 	laddr:    [8]_uint8;    // long address
 	adrtable: [NumAdrContexts] AdrContext;
 	fraglist: [MaxFragSources] FragDesc;
@@ -224,13 +224,20 @@ package lowpan
 
     proc (ib: pLPBlock) SetLongAddr(adr: @[8]_uint8)
     {
-if db > 0 then { debug.dumpb("lowpan.SetLongAddr: ", adr, 8); }
+if db > 0 then { debug.str("lowpan.SetLongAddr: "); debug.hex8n(adr, 8); debug.nl();}
 	ib.laddr = adr@;
     }
 
     proc (ib: pLPBlock) SetShortAddr(adr: _uint16)
     {
+if db > 0 then { debug.str("lowpan.SetShortAddr: "); debug.hex16(adr); debug.nl();}
 	ib.saddr = adr;
+    }
+
+    proc (ib: pLPBlock) SetPanId(adr: _uint16)
+    {
+if db > 0 then { debug.str("lowpan.SetPanId: "); debug.hex16(adr); debug.nl();}
+	ib.panid = adr;
     }
 
     proc (ib: pLPBlock) SetContext(pfx: @[8]_uint8, inx: _uint)
@@ -255,7 +262,7 @@ if db > 0 then { debug.dumpb("lowpan.SetLongAddr: ", adr, 8); }
 	}
 	return 0;
     }
-    
+
     proc (ib: pLPBlock) FindContext(pfx: @[8]_uint8): @AdrContext
     {   var i: _uint;
 
@@ -266,6 +273,9 @@ if db > 0 then { debug.dumpb("lowpan.SetLongAddr: ", adr, 8); }
 	return 0;
     }
 
+    //**************
+    // LowPAN recv
+    //**************
 
     proc (ib: pLPBlock) RecvMesh(mb: pMBuf): boolean
     {   var hops: _uint;
@@ -349,30 +359,6 @@ debug.str("mesh route not yet implemented\n");
 	return 0;
     }
 
-    proc (ib: pLPBlock) UnicastPack(ipaddr: @inet.IPv6Addr, prefix: @[8]_byte,
-			linkaddr: AddrLong,bp: @_memory): AddrMode, _uint
-    {
-
-	if ipaddr[0:8] == prefix@ then
-	{   if ipaddr[8:8] == linkaddr then
-		return AM0, 0;
-	    if ipaddr[8:6] == {0x00,0x00,0x00,0xFF,0xFE,0x00} then
-	    {   if ib.saddr != 0 then
-		{   var tmp: _uint16;
-		    tmp = _unpkbe(ipaddr[14:2]);
-		    if ib.saddr == tmp then
-		    {   bp[0:2] = ipaddr[14:2];
-			return AM16, 2;
-		    }
-		}
-	    }
-	    bp[0:8] = ipaddr[8:8];
-	    return AM64, 8;
-	}
-	bp[0:16] = ipaddr[0:16];
-	return AM128, 16;		// full address
-    }
-
     proc MulticastUnpack(mode: AddrMode, bp: @_memory, ipaddr: @inet.IPv6Addr): _uint
     {
 
@@ -395,28 +381,8 @@ debug.str("mesh route not yet implemented\n");
 	return 6;
     }
 
-    proc MulticastAddrMode(ipaddr: @inet.IPv6Addr): AddrMode
-    {   var i: _uint;
-
-	i = 2;
-	loop
-	{ exit ipaddr[i] != 0;	// stop on non-zero byte
-	    i += 1;
-	  exit i == 15;		// don't bother with the last byte
-	}
-	if i == 15 then return AM0;
-	if i >= 13 then return AM16;
-	if i >= 11 then return AM64;
-	return AM128;
-    }
-
-    /*
-     * UDP Header Compression
-     *
-     * Since the UDP header and the compressed header are both big-endian
-     * we can just copy fields.
-     */
-
+    // Since the UDP header and the compressed header are both big-endian
+    // we can just copy fields.
     proc UDPHeaderUnpack(bp: @_memory, up: @_memory): _uint
     {   var n: _uint;
 
@@ -449,40 +415,9 @@ debug.str("mesh route not yet implemented\n");
 	return n+2;
     }
 
-    proc UDPHeaderPack(up: @_memory, bp: @_memory): _uint
-    {   var n: _uint;
-
-	if up[0] == 0xF0 && (up[1] & 0xF0) == 0xB0 &&
-	   up[2] == 0xF0 && (up[2] & 0xF0) == 0xB0 then
-	{   bp[0] = NHC_UDP|3;
-	    bp[1] = ((up[3] & 0xF) << 4) | (up[1] & 0xF);
-	    n = 2;
-	}
-	elif up[2] == 0xF0 then
-	{   bp[0] = NHC_UDP|2;
-	    bp[1:2] = up[0:2];			    // srcport
-	    bp[3] = up[3];			    // dstport, lo
-	    n = 4;
-	}
-	elif up[0] == 0xF0 then
-	{   bp[0] = NHC_UDP|1;
-	    bp[1] = up[1];			    // srcport, lo
-	    bp[2:2] = up[2:2];			    // dstport
-	    n = 4;
-	}
-	else
-	{   bp[0] = NHC_UDP|0;
-	    bp[1:2] = up[0:2];			    // srcport
-	    bp[3:2] = up[2:2];			    // dstport
-	    n = 5;
-	}
-	bp[n:2] = up[6:2];			    // checksum
-	return n+2;
-    }
-
 
     /*
-     * The newmb receives the unpacked information.  It is alread pregrown
+     * The newmb receives the unpacked information.  It is already pregrown
      * to the full MTU size, so that the fragment reassembly routine can
      * use it incrementally.  The amount copied in is returned.
      */
@@ -501,9 +436,21 @@ debug.str("mesh route not yet implemented\n");
 	bp = mb.Data();
 	h0 = IPHCHeader0(bp[0]);
 	h1 = IPHCHeader1(bp[1]);
-if db > 2 then { debug.str("h0="); debug.hex8(_uint8(h0));
-debug.str(" h1="); debug.hex8(_uint8(h1));
-debug.str(" cid="); debug.uint8(_uint8(h1.cid)); }
+if db > 2 then {
+debug.str("h0="); debug.hex8(_uint8(h0));
+debug.str(" tc="); debug.uint8(_uint8(h0.tc));
+debug.str(" fc="); debug.uint8(_uint8(h0.fc));
+debug.str(" nh="); debug.uint8(_uint8(h0.nh));
+debug.str(" hlim="); debug.uint8(_uint8(h0.hlim));
+debug.str("\nh1="); debug.hex8(_uint8(h1));
+debug.str(" cid="); debug.uint8(_uint8(h1.cid));
+debug.str(" sac="); debug.uint8(_uint8(h1.sac));
+debug.str(" sam="); debug.uint8(_uint8(h1.sam));
+debug.str(" m="); debug.uint8(_uint8(h1.m));
+debug.str(" dac="); debug.uint8(_uint8(h1.dac));
+debug.str(" dam="); debug.uint8(_uint8(h1.dam));
+debug.nl();
+}
 	n = 2;
 	cid = 0;		// default to this
 	if h1.cid then
@@ -513,17 +460,15 @@ debug.str(" cid="); debug.uint8(_uint8(h1.cid)); }
 	ph6.vtf.version = 6;	// gotta be
 
 	// 1. uncompress flow and traffic
-if db > 2 then { debug.str(" tc="); debug.uint8(_uint8(h0.tc)); }
 	if h0.tc then
 	{   ph6.vtf.dscp = 0;
-	    ph6.vtf.ecn  = 0;   
+	    ph6.vtf.ecn  = 0;
 	}
 	else
 	{   ph6.vtf.dscp = bp[n] & 0x3F;
 	    ph6.vtf.ecn  = bp[n] >> 6;
 	    n += 1;
 	}
-if db > 2 then { debug.str(" fc="); debug.uint8(_uint8(h0.fc)); }
 	if h0.fc then
 	    ph6.vtf.flow = 0;
 	else
@@ -534,24 +479,22 @@ if db > 2 then { debug.str(" fc="); debug.uint8(_uint8(h0.fc)); }
 	}
 
 	// 2. uncompress next protocol
-if db > 2 then { debug.str(" nh="); debug.uint8(_uint8(h0.nh)); }
 	if h0.nh then   ph6.proto = UDP;
 	         else { ph6.proto = inet.Proto(bp[n]); n += 1; }
+if db > 2 then { debug.str("proto=");
+debug.uint(_uint8(ph6.proto)); }
 
 	// 3. uncompress hop limit
 	// FIXME - table driven?
-if db > 2 then { debug.str(" hlim="); debug.uint8(_uint8(h0.hlim)); }
 	if h0.hlim
 	is IL then { ph6.hops = bp[n]; n += 1; }
 	is H1 then   ph6.hops = 1;
 	is H64 then  ph6.hops = 64;
 	is H255 then ph6.hops = 255;
+if db > 2 then { debug.str(" hops=");
+debug.uint(ph6.hops); debug.nl(); }
 
 	// 4. uncompress source address
-if db > 2 then { debug.str(" sac="); debug.uint8(_uint8(h1.sac));
-debug.str(" sam="); debug.uint8(_uint8(h1.sam));
-debug.str(" dac="); debug.uint8(_uint8(h1.dac));
-debug.str(" dam="); debug.uint8(_uint8(h1.dam)); debug.nl(); }
 	if h1.sac then
 	{   if h1.sam == AM128 then
 		ph6.srcaddr = ipv6.UnspecAddr;
@@ -570,7 +513,7 @@ if db > 0 then { debug.str("src context not found\n"); }
 	else
 	    n += UnicastUnpack(h1.sam, bp[n:], ipv6.LinkLocalPrefix[0:8],
 			       info.srcadr, ph6.srcaddr);
-
+if db > 3 then { debug.str("src="); debug.hex8n(ph6.srcaddr, 16); }
 	// 5. uncompress destination address
 	if h1.dac then
 	{   ctx = ib.GetContext(cid&0xF);
@@ -589,6 +532,8 @@ if db > 0 then { debug.str("dst context not found\n"); }
 		n += UnicastUnpack(h1.dam, bp[n:], ipv6.LinkLocalPrefix[0:8],
 				   info.dstadr, ph6.dstaddr);
 	}
+if db > 3 then { debug.str(" dst="); debug.hex8n(ph6.dstaddr, 16);
+debug.nl(); }
 	offs = ipv6.Header?size;
 
 	// 6. uncompress UDP header
@@ -710,7 +655,7 @@ if db > 1 then _zero(bp(size));	// testing
     	    return 0;
     	}
 if db > 0 then {
-debug.str("\n\nFragment size="); debug.uint(size);
+debug.str("Fragment size="); debug.uint(size);
 debug.str(" tag="); debug.hex16(tag);
 debug.str(" offs=");  debug.uint(offs); debug.nl(); }
 	fd = ib.GetFragInfo(info.srcadr, tag, size);
@@ -726,7 +671,8 @@ if db > 2 then fd.DumpFragList(size);
 	    {	// first fragment, must expand headers
 		len = ib.HeaderUnpack(fmb, mb, size, info);
 		fd.remain -= len;
-if db > 1 then { debug.str("len=");  debug.uint(len); debug.nl(); }
+if db > 1 then { debug.str("after header unpack len=");  debug.uint(len); debug.nl(); }
+if db > 2 then debug.dumpb("new frag\n", mb.Data(), mb.Size());
 		if len <= flen then
 		{
 if db > 1 then {
@@ -734,7 +680,7 @@ debug.str("match fprv="); debug.uint(fprv);
 debug.str(" frag="); debug.uint(frag);
 debug.str(" flen="); debug.uint(flen);
 debug.str(" fnxt="); debug.uint(fnxt);
-debug.nl(); } 
+debug.nl(); }
 		    bp[len] = (flen - len)/8;
 		    bp[len+1] = fnxt/8;
 		    fd.list = len/8;	// always head of the list
@@ -770,9 +716,9 @@ debug.str("match fprv="); debug.uint(fprv);
 debug.str(" frag="); debug.uint(frag);
 debug.str(" flen="); debug.uint(flen);
 debug.str(" fnxt="); debug.uint(fnxt);
-debug.nl(); } 
+debug.nl(); }
 	        if frag < offs then
-	        {   // shrink freespace before this new fragment	            	
+	        {   // shrink freespace before this new fragment
 if db > 1 then { debug.str("split before="); debug.uint(offs-frag); debug.nl(); }
 		    bp[frag] = (offs - frag)/8;	// new length
 		    flen -= (offs - frag);
@@ -794,15 +740,18 @@ if db > 1 then { debug.str("split after="); debug.uint(offs+len); debug.nl(); }
 	    }
 	    else
 	    {
-if db > 0 then { debug.str("nomatch offs="); debug.uint(offs); debug.nl(); } 
+if db > 0 then { debug.str("nomatch offs="); debug.uint(offs); debug.nl(); }
 	    }
 	}
 	mbuf.Free(fmb);
 	if fd.remain == 0 then	// reassembly complete
 	{   fd.mb = 0;
+if db > 0 then debug.str("reassembly complete\n");
 	    return mb;
 	}
-	return 0;	
+if db > 0 then { debug.str("reassembly incomplete remain=");
+debug.uint(fd.remain); debug.nl(); }
+	return 0;
     }
 
     proc (ib: pLPBlock) Recv(mb: pMBuf, info: @FrameInfo)
@@ -871,7 +820,116 @@ if db > 0 then debug.str("HC1 frame not handled\n");
 	    }
     	}
     	else
+{
+if db > 0 then
+{  debug.dumpb("lowpan frame not handled\n", mb.Data(), mb.Size()); }
 	    mbuf.Free(mb);		// not a valid header, ignore
+}
+    }
+
+    proc (ib: pLPBlock) LRecv(mb: mbuf.pMBuf)
+    {
+        var info: ieee802154.FrameInfo;
+
+	ieee802154.Recv(mb.Data(), mb.Size(), info);
+if db > 3 then
+{
+debug.str("datoff="); debug.uint8(info.datoff);
+debug.str(" datlen="); debug.uint8(info.datlen);
+debug.nl();
+debug.str("dstpan="); debug.hex16(info.dstpan);
+debug.str(" dstadr="); debug.hex8n(info.dstadr, 8);
+debug.nl();
+debug.str("srcpan="); debug.hex16(info.srcpan);
+debug.str(" srcadr="); debug.hex8n(info.srcadr, 8);
+debug.nl();
+}
+	mb.ShrinkHead(_uint(info.datoff));	// 802.15.4 header
+	mb.ShrinkTail(mb.Size()-info.datlen);	// remove any trailers
+	if info.datlen > 0 then
+	    ib.Recv(mb, info);
+	else
+	    mbuf.Free(mb);
+    }
+
+    //**************
+    // LowPAN xmit
+    //**************
+
+    proc MulticastAddrMode(ipaddr: @inet.IPv6Addr): AddrMode
+    {   var i: _uint;
+
+	i = 2;
+	loop
+	{ exit ipaddr[i] != 0;	// stop on non-zero byte
+	    i += 1;
+	  exit i == 15;		// don't bother with the last byte
+	}
+	if i == 15 then return AM0;
+	if i >= 13 then return AM16;
+	if i >= 11 then return AM64;
+	return AM128;
+    }
+
+    proc (ib: pLPBlock) UnicastPack(ipaddr: @inet.IPv6Addr, prefix: @[8]_byte,
+			linkaddr: AddrLong,bp: @_memory)(am:AddrMode, n:_uint)
+    {
+if db > 3 then {
+debug.str("UnicastPack\nipaddr:\t"); debug.hex8n(ipaddr, 16);
+debug.str("\nprefix:\t"); debug.hex8n(prefix, 8);
+debug.str("\nlinkaddr:\t\t"); debug.hex8n(linkaddr, 8); debug.nl(); }
+	linkaddr[0] ^= 0x02;	// flip L/G bit for compares
+	if ipaddr[0:8] == ipv6.LinkLocalPrefix then
+        {   if ipaddr[8:8] == linkaddr then
+	    {	am = AM0; n = 0;
+	    }
+	    elif linkaddr[0:6] == {0x00,0x00,0x00,0xFF,0xFE,0x00} then
+	    {	bp[0:2] = linkaddr[6:6];
+		am = AM16; n = 2;
+	    }
+	    else
+	    {	bp[0:8] = linkaddr;
+	        am = AM64; n = 8;
+	    }
+	}
+	else
+	{   bp[0:16] = ipaddr[0:16];
+	    am = AM128; n = 16;		// full address
+	}
+	linkaddr[0] ^= 0x02;	// restore L/G bit
+    }
+
+    // Since the UDP header and the compressed header are both big-endian
+    // we can just copy fields.
+    proc UDPHeaderPack(up: @_memory, bp: @_memory): _uint
+    {   var n: _uint;
+
+	if up[0] == 0xF0 && (up[1] & 0xF0) == 0xB0 &&
+	   up[2] == 0xF0 && (up[2] & 0xF0) == 0xB0 then
+	{   bp[0] = NHC_UDP|3;
+	    bp[1] = ((up[3] & 0xF) << 4) | (up[1] & 0xF);
+	    n = 2;
+	}
+	elif up[2] == 0xF0 then
+	{   bp[0] = NHC_UDP|2;
+	    bp[1:2] = up[0:2];			    // srcport
+	    bp[3] = up[3];			    // dstport, lo
+	    n = 4;
+	}
+	elif up[0] == 0xF0 then
+	{   bp[0] = NHC_UDP|1;
+	    bp[1] = up[1];			    // srcport, lo
+	    bp[2:2] = up[2:2];			    // dstport
+	    n = 4;
+	}
+	else
+	{   bp[0] = NHC_UDP|0;
+	    bp[1:2] = up[0:2];			    // srcport
+	    bp[3:2] = up[2:2];			    // dstport
+	    n = 5;
+	}
+	bp[n:2] = up[6:2];			    // checksum
+	return n+2;
     }
 
     proc (ib: pLPBlock) HeaderPack(mb: pMBuf, info:@ieee802154.FrameInfo)
@@ -939,10 +997,10 @@ if db > 2 then { debug.str("src ctx=");  debug.uint(ctx.index); debug.nl(); }
 	    else
 		pfx = ipv6.LinkLocalPrefix[0:8];
 	    h1.sam, k = ib.UnicastPack(ph6.srcaddr, pfx, info.srcadr, cd[n:]);
-if db > 2 then { debug.str("sam="); debug.uint8(_uint8(h1.sam));
-debug.str(" k="); debug.uint(k); debug.nl(); }
 	    n += k;
 	}
+if db > 2 then { debug.str("sac="); debug.uint8(_uint8(h1.sac));
+debug.str(" sam="); debug.uint8(_uint8(h1.sam)); debug.nl(); }
 	// 5. compress destination address
 	if ph6.dstaddr[0] == 0xFF then	// multicast
 	{   h1.m = true;
@@ -982,10 +1040,11 @@ if db > 2 then { debug.str("dst ctx=");  debug.uint(ctx.index); debug.nl(); }
 	    else
 		pfx = ipv6.LinkLocalPrefix[0:8];
 	    h1.dam, k = ib.UnicastPack(ph6.dstaddr, pfx, info.dstadr, cd[n:]);
-if db > 2 then { debug.str("dam="); debug.uint8(_uint8(h1.dam));
-debug.str(" k="); debug.uint(k); debug.nl(); }
 	    n += k;
 	}
+if db > 2 then { debug.str("m="); debug.uint8(_uint8(h1.m));
+debug.str(" dac="); debug.uint8(_uint8(h1.dac));
+debug.str(" dam="); debug.uint8(_uint8(h1.dam)); debug.nl(); }
 	hdrlen = ipv6.Header?size;
 	// 6. compress UDP header if there
 	if ph6.proto == UDP then
@@ -1019,6 +1078,10 @@ debug.str(" grow="); debug.uint(n+2+_uint8(h1.cid)); debug.nl(); }
 
     proc (ib: pLPBlock) LSend(mb: pMBuf, info:@ieee802154.FrameInfo)
     {
+	info.flags.secctl, info.index, info.misc =
+		GetSecurity(mb, info.dstpan == 0xffff);
+	if info.flags.secctl != {.level=NONE} then
+	    info.frmctr = GetMACFrameCounter(1);
 	ieee802154.Xmit(mb.Data(), mb.Size(), info);
     }
 
@@ -1063,8 +1126,8 @@ debug.str(" grow="); debug.uint(n+2+_uint8(h1.cid)); debug.nl(); }
 	    ib.LSend(fmb, pinfo);
 	    offs += fraglen;
 	    remain -= fraglen;
-	} while remain > 0;	
-	
+	} while remain > 0;
+
     }
 
     /*
@@ -1085,7 +1148,7 @@ debug.str(" grow="); debug.uint(n+2+_uint8(h1.cid)); debug.nl(); }
 	 * we only use RFC6282 header compression.
 	 */
 	oldlen = mb.Size();
-	maxlen = mac.MaxPayload(fcf);
+	maxlen = mac.MaxPayload(fcf, info.flags.secctl);
 if db > 1 then { debug.str("lowpan Send len="); debug.uint(oldlen);
 debug.str(" maxlen="); debug.uint(maxlen); debug.nl(); }
 	if oldlen >= MinCompress then
@@ -1099,7 +1162,7 @@ debug.str("\tnewlen="); debug.uint(newlen); debug.nl(); }
 	    }
 	}
 	else
-	{
+	{   // FIXME - this may not work
 	    ib.HeaderIPv6(mb);
 	}
 	// FIXME - check if xmit already busy, if so queue this one
@@ -1110,34 +1173,33 @@ debug.str("\tnewlen="); debug.uint(newlen); debug.nl(); }
     {   var info: ieee802154.FrameInfo;
 	var pb: @[]_byte;
 
-if db > 3 then { debug.dumpb("lowpan SEND", mb.Data(), mb.Size()); }
 	_zero(info);
 	pb = mb.Data();
 if db > 1 then {
 debug.dumpb("lowpan.USend dstadr=", pb[0:8], 8); }
 	info.dstadr = pb[0:8];
-	// flip local/univeral bits
-	info.dstadr[0] = info.dstadr[0] ^ 0x02;
-	if info.dstadr[3:2] == {0xFF,0xFE} then // FIXME - broadcast indicator
-	{   info.srcpan = ieee802154.BroadcastPAN;
-	    info.dstpan = ieee802154.BroadcastPAN;
+	mb.ShrinkHead(8);
+	if info.dstadr == ipv6.WPANMulticast then // multicast/broadcast
 	    info.flags = {.wack=false};
-	}
 	else
-	{
-	    info.dstpan = ib.panid;
-	    info.srcpan = ib.panid;
 	    info.flags = {.wack=true};
-	}
+	info.dstpan = ib.panid;
+	info.srcpan = ib.panid;
 	info.srcadr = ib.laddr;
+	/*
+	 * flip local/univeral bits
+	 * FIXME - Should this be done here or
+	 * when ipv6 calls NCacheAdd()?
+	 */
+	info.dstadr[0] ^= 0x02;
 	info.seqno = ib.seqno;
 	ib.seqno += 1;
-	mb.ShrinkHead(8);
+if db > 3 then { debug.dumpb("lowpan.Send\n", mb.Data(), mb.Size()); }
 	ib.Send(mb, info);
     }
 
     proc (ib: pLPBlock) NotifyLinkState(isup: boolean)
-    {   
+    {
 	var li: comm.pLinkInfo;
 	var e: pEvent;
 

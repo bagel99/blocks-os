@@ -98,8 +98,7 @@ debug.uint(len); debug.nl();}
 sys.ledon(1);
 	s.dev.ccr = { .start=true, .intf=true };
 	s.dev.csr = { .start=true };
-var n: _uint: in, out;
-n = 1000000;
+var n: _uint: in, out = 1000000;
 	while s.busy && n != 0 do { n -= 1;}
 sys.ledoff(1);
     }
@@ -117,8 +116,7 @@ debug.uint(len); debug.nl();}
 sys.ledon(1);
 	s.dev.ccr = { .start=true, .intf=true };
 	s.dev.csr = { .start=true };
-var n: _uint: in, out;
-n = 1000000;
+var n: _uint: in, out = 1000000;
 	while s.busy && n != 0 do { n -= 1;}
 sys.ledoff(1);
     }
