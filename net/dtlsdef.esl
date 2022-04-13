@@ -1,0 +1,136 @@
+package dtls
+{
+    const Version: [2]_uint8 = { 255-1, 255-2 };	// v1.2
+
+    type CipherCode:
+    (
+	FALLBACK_SCSV_VALUE		    = 0x00FF,
+	ECDHE_ECDSA_WITH_AES_128_GCM_SHA256 = 0xC02B,
+	PSK_WITH_AES_128_CCM_8		    = 0xC0A8,
+	PSK_WITH_AES_256_CCM_8              = 0xC0A9,
+	ECDHE_ECDSA_WITH_AES_128_CCM_8      = 0xC0AE,
+	ECDHE_ECDSA_WITH_AES_256_CCM_8      = 0xC0AF,
+	ECJPAKE_WITH_AES_128_CCM_8	    = 0xC0FF,	// experimental?
+	TLS_AES_128_GCM_SHA256		    = 0x1301,	// TLS v1.3
+	TLS_AES_256_GCM_SHA384		    = 0x1302,	// TLS v1.3
+	TLS_CHACHA20_POLY1305_SHA256	    = 0x1303,	// TLS v1.3
+	TLS_AES_128_CCM_SHA256		    = 0x1304,	// TLS v1.3
+	TLS_AES_128_CCM_8_SHA256	    = 0x1305,	// TLS v1.3
+    );
+
+    type ExtensionCode:
+    (	ELLIPTIC_CURVES			= 10,		// RFC 4492
+	EC_POINT_FORMATS		= 11,		// RFC 4492
+	SIG_HASH_ALGO			= 13,		// RFC 5246,8446
+	CLIENT_CERTIFICATE_TYPE		= 19,		// RFC 7250
+	SERVER_CERTIFICATE_TYPE		= 20,		// RFC 7250
+	ENCRYPT_THEN_MAC		= 22,		// RFC 7366
+	EXT_MASTER_SECRET		= 23,
+	ECJPAKE_KKPP			= 256,		// experimental
+	RENEGOTIATION_INFO		= 0xFF01
+    );
+
+    type ExtensionT:
+    (	PSK,
+	CLICERT,
+	SRVCERT,
+	EC,
+	SIGNALGO,
+	CUSTOM
+    );
+
+    type Extension: [ExtensionT]boolean: packed;
+
+    type CurveType:
+    (	NAMED_CURVE			= 3,		// RFC 4492
+    );
+
+    type EllipticCurve:     // Named Curves
+    (
+	SECP192K1			= 0x0012,	//  RFC 4492
+	SECP192R1			= 0x0013,
+	SECP224K1			= 0x0014,
+	SECP224R1			= 0x0015,
+	SECP256K1			= 0x0016,
+	SECP256R1			= 0x0017,
+	SECP384R1			= 0x0018,
+	SECP521R1			= 0x0019,	//  RFC 4492
+	BP256R1				= 0x001A,
+	BP384R1				= 0x001B,
+	BP512R1				= 0x001C,
+	X25519				= 0x001D,
+	X448				= 0x001E,
+    );
+
+    type ECPointFormat:
+    (	UNCOMPRESSED			= 0		// RFC 4492
+    );
+
+    type CertificateType:
+    (	RAW_PUBLIC_KEY			= 2,		// RFC 7250
+	ECDSA_SIGN			= 64,		// RFC 4492
+	RSA_FIXED_ECDH			= 65,		// RFC 4492
+	ECDSA_FIXED_ECDH		= 66		// RFC 4492
+    );
+
+    type SigHashAlgo:					// RFC 5246
+    (	MD5				= 1,
+	SHA1				= 2,
+	SHA224				= 3,
+	SHA256				= 4,
+	SHA384				= 5,
+	SHA512				= 6
+    );
+
+    type SigAlgo:					// RFC 5246
+    (	RSA				= 1,
+	DSA				= 2,
+	ECDSA				= 3,
+    );
+    // Note - TLS v1.3 considers SigHashAlgo+SigAlgo as one 16-bit entity.
+    // Only some combinations are used.
+    type Signature:
+    (	RSA_SHA256	= 0x0401,
+	ECDSA_SHA256	= 0x0403,
+	RSA_SHA384	= 0x0501,
+	ECDSA_SHA384	= 0x0503,
+	RSA_SHA512	= 0x0601,
+	ECDSA_SHA512	= 0x0603,
+    );
+
+    /*
+     * Record layer
+     */
+    type ContentT:
+    (   ChangeCipher=	0x14,
+	Alert=		0x15,
+	Handshake=	0x16,
+	Data=		0x17
+    );
+
+    type HeaderT:
+    {   content: ContentT: bits(8);
+        version: [2]_uint8;
+        seqno:   [8]_uint8;     // 2 bytes epoch, 6 bytes seqno
+        length:  [2]_uint8;
+    };
+    type Header: @HeaderT;
+
+    type CipherSuite:
+    {   code:       CipherCode;
+	extension:  Extension;
+	hellocli:   @_(bp: @[]_byte): _uint;
+	hellosrv:   @_(bp: @[]_byte, len: _uint): boolean;
+	sendcert:   @_();
+	sendkeyx:   @_(bp: @[]_byte): _uint;
+	sendcertv:  @_();
+	recvcert:   @_(msg: @[]_byte, len: _uint);
+	recvkeyx:   @_(msg: @[]_byte, len: _uint): boolean;
+	recvcertr:  @_(msg: @[]_byte, len: _uint);
+	calcpmsec:  @_(pms: @[]_byte): _uint;
+	encrypt:    @_(ph: Header, msg: @[]_byte, len: _uint): _uint;
+	decrypt:    @_(ph: Header, msg: @[]_byte, len: _uint): _uint;
+    };
+
+
+}

@@ -3,6 +3,11 @@
 import out;
 const err: out.OutFD = 2;
 
+proc Rand(out: @[]_byte, len: _uint)	// NOT USED
+{
+}
+
+
 proc Print(x: @[8]_uint32)
 {   var i: _uint;
 
@@ -82,35 +87,35 @@ package secp192r1
     const name = "secp192r1";
     if !_defined(f) then error "f not defined\n";
 
-    const primeminusone: Vect =
+    const primeminusone: MPInt =
     {   0xFFFFFFFE,0xFFFFFFFF,0xFFFFFFFE,0xFFFFFFFF,
 	0xFFFFFFFF,0xFFFFFFFF
     };
-    const orderminusone: Vect = 
+    const orderminusone: MPInt =
     {	0xB4D22830, 0x146BC9B1, 0x99DEF836, 0xFFFFFFFF,
 	0xFFFFFFFF, 0xFFFFFFFF
     };
     // The next is just the bit inverse of P plus 1
-    const resultfulladd: Vect =
+    const resultfulladd: MPInt =
     {   0x00000001,0x00000000,0x00000001,0x00000000,
 	0x00000000,0x00000000
     };
-    const orderresultdoublemod: Vect =		    // WARNING - calculated
+    const orderresultdoublemod: MPInt =		    // WARNING - calculated
     {   0xB4D2282F,0x146BC9B1,0x99DEF836,0xFFFFFFFF,
 	0xFFFFFFFF,0xFFFFFFFF
     };
-    const resultquadmod: Vect2 =
+    const resultquadmod: MPInt2 =
     {   0x00000004,0x00000000,0x00000004,0x00000000,
 	0x00000001,0x00000000,0xFFFFFFFC,0xFFFFFFFF,
 	0xFFFFFFFD,0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF
     };
-    const resultdoublemod: Vect =
+    const resultdoublemod: MPInt =
     {   0xFFFFFFFD,0xFFFFFFFF,0xFFFFFFFE,0xFFFFFFFF,
 	0xFFFFFFFF,0xFFFFFFFF
     };
 
-    var tmp: Vect;
-    var tmp2: Vect2;
+    var tmp: MPInt;
+    var tmp2: MPInt2;
 
     proc TestAdd()
     {
@@ -165,7 +170,7 @@ package secp192r1
 
     proc TestModP()
     {
-	var txx: Vect;
+	var txx: MPInt;
 
 	_zero(tmp2); _zero(txx);
 	f.Mul(tmp2, primeminusone, primeminusone, K);
@@ -242,35 +247,35 @@ package secp224r1
 {
     const name = "secp224r1";
 
-    const primeminusone: Vect =
+    const primeminusone: MPInt =
     {   0x00000000,0x00000000,0x00000000,0xFFFFFFFF,
 	0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF
     };
-    const orderminusone: Vect =
+    const orderminusone: MPInt =
     {   0x5C5C2A3C,0x13DD2945,0xE0B8F03E,0xFFFF16A2,
 	0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF
     };
-    const resultfulladd: Vect =
+    const resultfulladd: MPInt =
     {   0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,0x00000000,
 	0x00000000,0x00000000,0x00000000
     };
-    const orderresultdoublemod: Vect =		    // WARNING - calculated
+    const orderresultdoublemod: MPInt =		    // WARNING - calculated
     {   0x5C5C2A3B,0x13DD2945,0xE0B8F03E,0xFFFF16A2,
 	0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF
     };
-    const resultquadmod: Vect2 =
+    const resultquadmod: MPInt2 =
     {   0x00000000,0x00000000,0x00000000,0x00000000,
 	0x00000000,0x00000000,0x00000001,0x00000000,
 	0x00000000,0x00000000,0xFFFFFFFE,0xFFFFFFFF,
 	0xFFFFFFFF,0xFFFFFFFF
     };
-    const resultdoublemod: Vect2 =
+    const resultdoublemod: MPInt2 =
     {   0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFE,
 	0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF
     };
 
-    var tmp: Vect;
-    var tmp2: Vect2;
+    var tmp: MPInt;
+    var tmp2: MPInt2;
 
     proc TestAdd()
     {
@@ -325,7 +330,7 @@ package secp224r1
 
     proc TestModP()
     {
-	var txx: Vect;
+	var txx: MPInt;
 
 	_zero(tmp2); _zero(txx);
 	f.Mul(tmp2, primeminusone, primeminusone, K);
@@ -403,35 +408,35 @@ package secp256r1
 {
     const name = "secp256r1";
 
-    const primeminusone: Vect =
+    const primeminusone: MPInt =
     {   0xfffffffe,0xffffffff,0xffffffff,0x00000000,
 	0x00000000,0x00000000,0x00000001,0xffffffff
     };
-    const orderminusone: Vect =
+    const orderminusone: MPInt =
     {   0xFC632550,0xF3B9CAC2,0xA7179E84,0xBCE6FAAD,
 	0xFFFFFFFF,0xFFFFFFFF,0x00000000,0xFFFFFFFF
     };
-    const resultfulladd: Vect =
+    const resultfulladd: MPInt =
     {   0x00000001,0x00000000,0x00000000,0xFFFFFFFF,
 	0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFE,0x00000000
     };
-    const orderresultdoublemod: Vect =
+    const orderresultdoublemod: MPInt =
     {   0xFC63254F,0xF3B9CAC2,0xA7179E84,0xBCE6FAAD,
 	0xFFFFFFFF,0xFFFFFFFF,0x00000000,0xFFFFFFFF
     };
-    const resultquadmod: Vect2 =
+    const resultquadmod: MPInt2 =
     {   0x00000004,0x00000000,0x00000000,0xFFFFFFFC,
 	0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFC,0x00000003,
 	0xFFFFFFFC,0x00000001,0xFFFFFFFE,0x00000001,
 	0x00000001,0xFFFFFFFE,0x00000002,0xFFFFFFFE
     };
-    const resultdoublemod: Vect2 =
+    const resultdoublemod: MPInt2 =
     {   0xfffffffd,0xffffffff,0xffffffff,0x00000000,
 	0x00000000,0x00000000,0x00000001,0xffffffff
     };
 
-    var tmp: Vect;
-    var tmp2: Vect2;
+    var tmp: MPInt;
+    var tmp2: MPInt2;
 
     proc TestAdd()
     {
@@ -486,7 +491,7 @@ package secp256r1
 
     proc TestModP()
     {
-	var txx: Vect;
+	var txx: MPInt;
 
 	_zero(tmp2); _zero(txx);
 	f.Mul(tmp2, primeminusone, primeminusone, K);
@@ -563,28 +568,28 @@ package secp384r1
 {
     const name = "secp384r1";
 
-    const primeminusone: Vect =
+    const primeminusone: MPInt =
     {   0xFFFFFFFE, 0x00000000, 0x00000000, 0xFFFFFFFF,
 	0xFFFFFFFE, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF,
 	0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF
     };
-    const orderminusone: Vect =
+    const orderminusone: MPInt =
     {   0xCCC52972, 0xECEC196A, 0x48B0A77A, 0x581A0DB2,
 	0xF4372DDF, 0xC7634D81, 0xFFFFFFFF, 0xFFFFFFFF,
 	0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF
     };
     // The next is just the bit inverse of P plus 1
-    const resultfulladd: Vect =
+    const resultfulladd: MPInt =
     {   0x00000001,0xFFFFFFFF,0xFFFFFFFF,0x00000000,
 	0x00000001,0x00000000,0x00000000,0x00000000,
 	0x00000000,0x00000000,0x00000000,0x00000000
     };
-    const orderresultdoublemod: Vect=		    // WARNING - calculated
+    const orderresultdoublemod: MPInt=		    // WARNING - calculated
     {   0xCCC52971,0xECEC196A,0x48B0A77A,0x581A0DB2,
 	0xF4372DDF,0xC7634D81,0xFFFFFFFF,0xFFFFFFFF,
 	0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF
     };
-    const resultquadmod: Vect2 =
+    const resultquadmod: MPInt2 =
     {   0x00000004,0xFFFFFFFC,0x00000000,0x00000004,
 	0x00000002,0xFFFFFFFE,0x00000000,0x00000002,
 	0x00000001,0x00000000,0x00000000,0x00000000,
@@ -592,14 +597,14 @@ package secp384r1
 	0xFFFFFFFD,0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,
 	0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF
     };
-    const resultdoublemod: Vect =
+    const resultdoublemod: MPInt =
     {   0xfffffffd,0x00000000,0x00000000,0xffffffff,
 	0xfffffffe,0xffffffff,0xffffffff,0xffffffff,
 	0xffffffff,0xffffffff,0xffffffff,0xffffffff
     };
 
-    var tmp: Vect;
-    var tmp2: Vect2;
+    var tmp: MPInt;
+    var tmp2: MPInt2;
 
     proc TestAdd()
     {
@@ -654,7 +659,7 @@ package secp384r1
 
     proc TestModP()
     {
-	var txx: Vect;
+	var txx: MPInt;
 
 	_zero(tmp2); _zero(txx);
 	f.Mul(tmp2, primeminusone, primeminusone, K);
@@ -732,21 +737,21 @@ package secp521r1
     const name = "secp521r1";
 
     // Don't use global value, since there are zeros in high order word
-    const full: Vect =
+    const full: MPInt =
     {   0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,
 	0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,
 	0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,
 	0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,
 	0x000001FF
     };
-    const primeminusone: Vect =
+    const primeminusone: MPInt =
     {   0xFFFFFFFE,0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,
 	0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,
 	0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,
 	0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,
 	0x000001FF
     };
-    const orderminusone: Vect = 
+    const orderminusone: MPInt =
     {	0x91386408, 0xBB6FB71E, 0x899C47AE, 0x3BB5C9B8,
 	0xF709A5D0, 0x7FCC0148, 0xBF2F966B, 0x51868783,
 	0xFFFFFFFA, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF,
@@ -754,21 +759,21 @@ package secp521r1
 	0x000001FF
     };
     // The next is just the bit inverse of P plus 1
-    const resultfulladd: Vect =
+    const resultfulladd: MPInt =
     {   0x00000001,0x00000000,0x00000000,0x00000000,
 	0x00000000,0x00000000,0x00000000,0x00000000,
 	0x00000000,0x00000000,0x00000000,0x00000000,
 	0x00000000,0x00000000,0x00000000,0x00000000,
 	0x00000000
     };
-    const orderresultdoublemod: Vect=		    // WARNING - calculated
+    const orderresultdoublemod: MPInt=		    // WARNING - calculated
     {   0x91386407,0xBB6FB71E,0x899C47AE,0x3BB5C9B8,
 	0xF709A5D0,0x7FCC0148,0xBF2F966B,0x51868783,
 	0xFFFFFFFA,0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,
 	0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,
 	0x000001FF
     };
-    const resultquadmod: Vect2 =
+    const resultquadmod: MPInt2 =
     {   0x00000004,0x00000000,0x00000000,0x00000000,
 	0x00000000,0x00000000,0x00000000,0x00000000,
 	0x00000000,0x00000000,0x00000000,0x00000000,
@@ -779,7 +784,7 @@ package secp521r1
 	0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,
 	0x0003FFFF,0x00000000
     };
-    const resultdoublemod: Vect =
+    const resultdoublemod: MPInt =
     {   0xFFFFFFFD,0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,
 	0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,
 	0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,
@@ -787,8 +792,8 @@ package secp521r1
 	0x000001FF
     };
 
-    var tmp: Vect;
-    var tmp2: Vect2;
+    var tmp: MPInt;
+    var tmp2: MPInt2;
 
     proc TestAdd()
     {
@@ -843,7 +848,7 @@ package secp521r1
 
     proc TestModP()
     {
-	var txx: Vect;
+	var txx: MPInt;
 
 	_zero(tmp2); _zero(txx);
 	f.Mul(tmp2, primeminusone, primeminusone, K);

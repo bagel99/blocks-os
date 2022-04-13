@@ -18,16 +18,16 @@ package secp521r1
 
     const W = 521;					// width in bits
     const K = (W+(bn.Base?bits)-1)/bn.Base?bits;	// width in chunks
-    type Vect: [K]_uint32;
-    type Vect1: [K+1]_uint32;
-    type Vect2: [K*2]_uint32;
-    type Point: { x: Vect; y: Vect; };
-    const P: Vect = {	0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF,
+    type MPInt: [K]_uint32;
+    type MPInt1: [K+1]_uint32;
+    type MPInt2: [K*2]_uint32;
+    type Point: { x: MPInt; y: MPInt; };
+    const P: MPInt = {	0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF,
     			0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF,
     			0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF,
     			0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF,
     			0x000001FF };
-    const B: Vect = {	0x6B503F00, 0xEF451FD4, 0x3D2C34F1, 0x3573DF88,
+    const B: MPInt = {	0x6B503F00, 0xEF451FD4, 0x3D2C34F1, 0x3573DF88,
 			0x3BB1BF07, 0x1652C0BD, 0xEC7E937B, 0x56193951,
 			0x8EF109E1, 0xB8B48991, 0x99B315F3, 0xA2DA725B,
 			0xB68540EE, 0x929A21A0, 0x8E1C9A1F, 0x953EB961,
@@ -42,12 +42,12 @@ package secp521r1
 		        0x273E662C, 0x17AFBD17, 0x579B4468, 0x98F54449,
 		        0x2C7D1BD9, 0x5C8A5FB4, 0x9A3BC004, 0x39296A78,
 		        0x00000118} };
-    const N: Vect1 = {  0x91386409, 0xBB6FB71E, 0x899C47AE, 0x3BB5C9B8,
+    const N: MPInt1 = {  0x91386409, 0xBB6FB71E, 0x899C47AE, 0x3BB5C9B8,
 			0xF709A5D0, 0x7FCC0148, 0xBF2F966B, 0x51868783,
 			0xFFFFFFFA, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF,
 			0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF,
 			0x000001FF, 0x00000000 };
-    const order_mu: Vect1 = 	// µ in Barrett reduction
+    const order_mu: MPInt1 = 	// µ in Barrett reduction
 		    {	0xF501C8D1, 0xE6FDC408, 0x12385BB1, 0xEE145124,
 			0x8D91DD98, 0x968BF112, 0xFFADC23D, 0x1A65200C,
 			0x5E1F1034, 0x00016B9E, 0x00000000, 0x00000000,
@@ -61,8 +61,8 @@ package secp521r1
 	// r = x mod P
 	// double length vector in x (x must be writable)
 	// assert x < P²
-	proc ModP(r: @Vect, x: @Vect2)
-	{   var s: Vect1;
+	proc ModP(r: @MPInt, x: @MPInt2)
+	{   var s: MPInt1;
 
 	    // s2 is low order 521 bits
 	    r@ = x[0:K]; r[K-1] &= 0x1FF;		// s₂

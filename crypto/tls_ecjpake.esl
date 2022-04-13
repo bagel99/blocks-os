@@ -1,0 +1,289 @@
+/*
+ * Elliptic Curve Password Authenticated Key Exchange by Juggling (J-PAKE)
+ * Hash is fixed as SHA256
+ * Curve is fixed as SECP256R1
+ * References:
+ *   1. draft-cragie-tls-ecjpake-01.pdf
+ */
+
+import dtlsdef;
+
+package ecjpake
+{
+    if _defined(debug.db_ecjpake) then
+	alias debug.db_ecjpake as db;
+    else
+	const db = 0;
+    import secp256r1;
+    alias secp256r1 as ecc;
+    alias ecc.NB as NB;	// key length in bytes
+    alias ecc.MPInt as MPInt;
+    alias ecc.Point as Point;
+    alias ecc.bn as bn;
+    const LP = 1 + 2*NB;	// length of exported point
+    import sha256;
+
+    // These are used in the algorithms
+    const CLIENT = 'client';
+    const SERVER = 'server';
+
+    type Role: (CLIENT, SERVER);
+
+    type Context:
+    {
+	role:	Role;		// CLIENT SERVER
+	Xm1:	Point;		//   X1     X3
+	Xm2:	Point;		//   X2     X4
+	Xp1:	Point;		//   X3     X1
+	Xp2:	Point;		//   X4     X2
+	Xp:	Point;		//   Xs     Xc
+	xm1:	MPInt;		//   x1     x3
+	xm2:	MPInt;		//   x2     x4
+	s:	@[]_byte;	// passphrase, NUL terminated
+    };
+
+    var ctx: Context;		// FIXME - should be allocated
+
+
+    proc (ctx: @Context) Init()
+    {
+	_zero(ctx@);
+    }
+
+    proc (ctx: @Context) Setup(role: Role, secret: @[]_byte)
+    {
+	ctx.role = role;
+	ctx.s    = secret;
+    }
+
+    proc Hash(G: @ecc.Point:in, V: @Point:in, X: @Point:in,
+			      id: @[6]_byte:in, h: @MPInt:out)
+    {	const POINTLEN = 2 * ecc.NB + 1;
+	const HASHBUFLEN = 3 * (POINTLEN+4) + 4 + 6;
+	var buf: [HASHBUFLEN]_byte;
+	var hbuf: [sha256.DigestSize]_byte;
+	var i, n: _uint;
+
+	n = G.Export(buf[4:POINTLEN], false);
+	_packbe(buf[0:4], _uint32(n));
+	i = n+4;
+	n = X.Export(buf[i+4:POINTLEN], false);
+	_packbe(buf[i:4], _uint32(n));
+	i += n+4;
+	n = V.Export(buf[i+4:POINTLEN], false);
+	_packbe(buf[i:4], _uint32(n));
+	i += n+4;
+	_packbe(buf[i:4], _uint32(id@?len));
+	buf[i+4:6] = id@;
+	i += 10;
+	sha256.Hash(buf, i, hbuf);
+	assert ecc.NB == HASHBUFLEN;
+	h.Import(hbuf);
+	ecc.ModN(h, h, ecc.K);
+    }
+
+    proc Check(G: @Point, V: @Point, X: @Point, r: @MPInt,
+	       id: @[6]_byte:in): boolean
+    {	var Xh, Gr, Vp: ecc.Point;
+	var h: MPInt;
+
+	Hash(G, X, V, id , h);
+	ecc.PointMul(Xh, X, h);
+	ecc.PointMul(Gr, G, r);
+	ecc.PointAdd(Vp, Xh, Gr);
+	// Vp should be the same as V
+	return ecc.PointEQ(Vp, V);
+    }
+
+    proc SendZKP(bp: @[]_byte, G: @Point, X: @Point, x: @MPInt, id: @[6]_byte):
+		 _uint
+    {   var v, r: MPInt;
+	var V: Point;
+
+	G@.GenerateKeys(v, V);
+	bp[0] = LP;
+	V.Export(bp[1:LP], false);
+	Hash(G,	X, V, id, r);
+	ecc.MulModN(r, r, x);
+	ecc.SubModN(r, v, r);
+	bp[1+LP] = NB;
+	r.Export(bp[2+LP:NB]);
+	return 2+LP+NB;
+    }
+
+    proc RecvZKP(bp: @[]_byte, G: @Point, X: @Point, id: @[6]_byte):
+		 boolean, _uint
+    {   var V: Point;
+	var r: MPInt;
+	const len = 2+LP+NB;
+
+	if bp[0] != LP then return false, len;
+	V.Import(bp[1:LP]);
+	if bp[1+LP] != NB then return false, len;
+	r.Import(bp[2+LP:NB]);
+	return Check(G, V, X, r, id), len;
+    }
+
+    proc ComputeNewGenerator(G: @Point, A: @Point, B: @Point, C: @Point)
+    {
+	ecc.PointAdd(G, A, B);
+	ecc.PointAdd(G, G, C);
+    }
+
+    // FIXME - should save stuff for second round
+    // and save many cycles recomputing Points
+    proc SendClientHello(bp: @[]_byte): _uint
+    {   var i: _uint;
+	const SIZE = 2*(1+LP+1+LP+1+NB);
+
+if db > 0 then debug.str("***ClientHello***\n");
+	_packbe(bp[0:2], _uint16(ExtensionCode.ECJPAKE_KKPP));
+	_packbe(bp[2:2], SIZE);
+	i = 4;
+
+	ecc.G.GenerateKeys(ctx.xm1, ctx.Xm1);
+if db > 1 then ctx.Xm1.Dump("X1:\n");
+	bp[i] = LP;
+	ctx.Xm1.Export(bp[i+1:LP], false);
+	i += 1+LP;
+	i += SendZKP(bp[i:], ecc.G, ctx.Xm1, ctx.xm1, CLIENT);
+
+	ecc.G.GenerateKeys(ctx.xm2, ctx.Xm2);
+if db > 1 then ctx.Xm2.Dump("X2:\n");
+	bp[i] = LP;
+	ctx.Xm2.Export(bp[i+1:LP], false);
+	i += 1+LP;
+	i += SendZKP(bp[i:], ecc.G, ctx.Xm2, ctx.xm2, CLIENT);
+
+	return i;
+    }
+
+    // Parse the server hello info
+    proc RecvServerHello(s: @[]_byte, len: _uint): boolean
+    {	var i, n: _uint;
+	var ok: boolean;
+
+if db > 0 then debug.str("***ServerHello***\n");
+	// expecting the ECJPAKE_KKPP extension
+	if ExtensionCode(_unpkbe(s[0:2])) != ECJPAKE_KKPP then return false;
+	n = _unpkbe(s[2:2]);
+	i = 4;
+
+	if s[i] != LP then return false;
+	ctx.Xp1.Import(s[i+1:LP]);
+	i += 1+LP;
+	ok, n = RecvZKP(s[i:], ecc.G, ctx.Xp1, SERVER);
+if db > 1 then ctx.Xp1.Dump("X3:\n");
+	if !ok then return false;
+	i += n;
+
+	if s[i] != LP then return false;
+	ctx.Xp2.Import(s[i+1:LP]);
+	i += 1+LP;
+
+	ok, n = RecvZKP(s[i:], ecc.G, ctx.Xp2, SERVER);
+if db > 1 then ctx.Xp2.Dump("X4:\n");
+	if !ok then return false;
+
+	return true;
+    }
+
+    // Parse the server key exchange info
+    proc RecvServerKey(s: @[]_byte, len: _uint): boolean
+    {	var GB: Point;
+	var ok: boolean;
+
+if db > 0 then debug.str("***ServerKey***\n");
+	// Compute new generator GB
+	ComputeNewGenerator(GB, ctx.Xm1, ctx.Xm2, ctx.Xp1);
+if db > 2 then {
+ctx.Xm1.Dump("X1:\n"); ctx.Xm2.Dump("X2:\n"); ctx.Xp1.Dump("X3:\n");
+GB.Dump("GB:\n"); }
+	// First thing should be the curve type,
+	// only named curves accepted
+	if s[0] != 0x03 then return false;
+	// Then, currently, we expect SECP256R1
+	var ec: dtls.EllipticCurve = dtls.EllipticCurve(_unpkbe(s[1:2]));
+	if ec != SECP256R1 then return false;
+	// Then, the Xs
+	if s[3] != LP then return false;
+	ctx.Xp.Import(s[4:LP]);
+if db > 1 then ctx.Xp.Dump("Xp:\n");
+	ok, _ = RecvZKP(s[4+LP:], GB, ctx.Xp, SERVER);
+	return ok;
+    }
+
+    proc SendClientKey(bp: @[]_byte): _uint
+    {
+	var GA, Xc: Point;
+	var xc, s: MPInt;
+	var tmp: [NB]_byte;
+	var i, n: _uint;
+
+if db > 0 then debug.str("***ClientKey***\n");
+	// Compute new generator GA
+	ComputeNewGenerator(GA, ctx.Xm1, ctx.Xp1, ctx.Xp2);
+if db > 2 then {
+ctx.Xm1.Dump("X1:\n"); ctx.Xp1.Dump("X3:\n"); ctx.Xp2.Dump("X4:\n");
+GA.Dump("GA:\n"); }
+	i = 0;
+	_zero(tmp);
+	n = _zlen(ctx.s@);
+	tmp[NB-n:n] = ctx.s[0:n];
+	s.Import(tmp);
+	ecc.MulModN(xc, ctx.xm2, s);
+	GA.GenPubKey(xc, Xc);
+	bp[i] = LP;
+	Xc.Export(bp[i+1:LP], false);
+	i += 1+LP;
+	i += SendZKP(bp[i:], GA, Xc, xc, CLIENT);
+if db > 1 then Xc.Dump("Xc:\n");
+	return i;
+    }
+
+    proc CalcPMSecret(pms: @[]_byte): _uint
+    {
+	// Compute the Premaster Secret
+	var T1, T2: Point;
+	var s: MPInt;
+	var t: MPInt;
+	var tmp: [NB]_byte;
+	var n: _uint;
+if db > 0 then debug.str("***Finish***\n");
+if db > 1 then { ctx.Xp.Dump("Xp:\n");  ctx.Xp2.Dump("Xp2:\n");
+ctx.xm2.Dump("xm2:\n"); }
+	_zero(tmp);
+	n = _zlen(ctx.s@);
+	tmp[NB-n:n] = ctx.s[0:n];
+	s.Import(tmp);
+	// This should be done some other way to remove side channels
+	ecc.MulModN(t, s, ctx.xm2);
+	// Negate t so we don't have to do a point subtract later
+	ecc.NegModN(t, t);
+	ecc.PointMul(T1, ctx.Xp2, t);
+	// T2 and T1 must be distinct
+	ecc.PointAdd(T2, ctx.Xp, T1);
+	ecc.PointMul(T1, T2, ctx.xm2);
+	T1.x.Export(tmp);
+	sha256.Hash(tmp, NB, pms);
+	return sha256.DigestSize;
+    }
+
+if !_defined(TESTING) then {
+    const suite: CipherSuite =
+    {	ECJPAKE_WITH_AES_128_CCM_8,
+	{ [EC]=true, [CUSTOM]=true },
+	SendClientHello,
+	RecvServerHello,
+	0,			// SendCertificate
+	SendClientKey,
+	0,			// SendCertificateVerify
+	0,			// RecvCertificate
+	RecvServerKey,		// RecvServerKey
+	0,			// RecvCertificateRequest
+	CalcPMSecret,
+	tls_aesccm.Encrypt,
+	tls_aesccm.Decrypt
+    };
+}
+}

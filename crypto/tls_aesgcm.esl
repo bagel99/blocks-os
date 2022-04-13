@@ -1,0 +1,112 @@
+/*
+ * AES with GCM
+ */
+package tls_aesgcm
+{
+    alias dtls.HeaderT as HeaderT;
+    alias dtls.Header as Header;
+    alias dtls.state as state;
+
+    import aesgcm;		// FIXME - import elsewhere?
+
+    /*
+     * Encryption/Decryption routines
+     * FIXME - this should be configurable
+     */
+	const alen = 13;    // additional header data length
+	const tlen = 16;    // tag (MAC) length
+	const nlen = 12;    // nonce length
+	const hlen = 8;     // explicit header length
+
+    proc Encrypt(ph: Header, msg: @[]_byte, len: _uint): _uint
+    {
+	var tmp: [256]_byte;	// FIXME - what length
+	var nonce: [nlen]_byte;
+	var adata: [alen]_byte;
+	var i, n: _uint;
+	var ctx: aesgcm.State;
+
+	// copy payload
+	tmp[0:len] = msg[HeaderT?size:len];  // header not encrypted
+	// generate nonce
+	nonce[0:4] = state.ouriv;
+	_packbe(nonce[4:2], state.epoch);
+	_packbe(nonce[6:6], state.seqno);   // low 48 bits
+	// explicit part of nonce is sent before payload
+	i = HeaderT?size;
+	msg[i:hlen] = nonce[4:hlen];
+	i += hlen;
+	// generate additional data
+	adata[0:8] = ph.seqno;
+	adata[8]   = _uint8(ph.content);
+	adata[9:2] = ph.version;
+	_packbe(adata[11:2], len);   // length of payload
+debug.dumpb("nonce=\n", nonce, nlen);
+debug.dumpb("adata=\n", adata, alen);
+debug.dumpb("key=\n", state.ourkey, 16);
+debug.dumpb("clear payload=\n", tmp[0:len], len);
+	ctx.SetKey(state.ourkey, KEY128);
+	ctx.Start(nonce, nlen, adata, alen);
+	ctx.Encrypt(tmp[0:len], msg[i:len], len);
+	ctx.Finish(msg[i+len:tlen], tlen);
+	return len + 8 + tlen;
+    }
+
+    proc Decrypt(ph: Header, msg: @[]_byte, len: _uint): _uint
+    {
+	var tmp: [256]_byte;	// FIXME - what length
+	var nonce: [nlen]_byte;
+	var adata: [alen]_byte;
+	var tdata: [tlen]_byte;
+	var i, n: _uint;
+	var ctx: aesgcm.State;
+
+	n = len - (hlen + tlen);	// size of encrypted payload
+	i = HeaderT?size;		// offset into message
+	// generate nonce
+	nonce[0:4] = state.rmtiv;
+	nonce[4:hlen] = msg[i:hlen];
+	i += hlen;
+	// copy ciphertext
+	tmp[0:len] = msg[i:n];
+	// generate additional data
+	adata[0:8] = ph.seqno;
+	adata[8]   = _uint8(ph.content);
+	adata[9:2] = ph.version;
+	_packbe(adata[11:2], n);	// length of payload
+debug.dumpb("nonce=\n", nonce, nlen);
+debug.dumpb("adata=\n", adata, alen);
+debug.dumpb("key=\n", state.rmtkey, 16);
+debug.dumpb("cipher payload\n", tmp[0:n], n);
+	ctx.SetKey(state.rmtkey, KEY128);
+	ctx.Start(nonce, nlen, adata, alen);
+	ctx.Decrypt(tmp[0:n], msg[HeaderT?size:n], n);
+	ctx.Finish(tdata, tlen);
+debug.dumpb("clear payload=\n", msg[HeaderT?size:n], n);
+	// FIXME - check tdata (MAC)
+debug.dumpb("tdata=\n", tdata, tlen);
+	return n;
+    }
+}
+
+/*
+ * Elliptic Curve with AES128GCM
+ */
+ package ec_gcm
+{
+    const suite: dtls.CipherSuite =
+    {   ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+	{ [EC]=true },
+	0,	// hellocli
+	0,	// hellosrv
+	ec_dhe.SendCertificate,
+	ec_dhe.SendKeyExchange,
+	ec_dhe.SendCertificateVerify,
+	ec_dhe.RecvCertificate,
+	ec_dhe.RecvServerKey,
+	ec_dhe.RecvCertificateRequest,
+	ec_dhe.CalcPMSecret,
+	tls_aesgcm.Encrypt,
+	tls_aesgcm.Decrypt
+    };
+}

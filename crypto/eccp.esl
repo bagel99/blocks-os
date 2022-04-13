@@ -2,13 +2,67 @@
  * Common routines for Elliptic Curve routines based on NIST primes
  *
  * Before importing, define the finite field and import ffieldp.
+ *
+ * Also, define a random routine "Rand" needed to generate keys.
  */
 
+    if !_defined(Rand) then error "Rand not defined";
     alias ffieldp as f;
+    const NB = W/8;					// width in bytes
+    type Bytes: [NB]_byte;
+
+    proc (dst: @MPInt) Import(src: @Bytes)
+    {	bn.Import(dst, src, NB);
+    }
+
+    proc (src: @MPInt) Export(dst: @Bytes)
+    {	bn.Export(dst, src, NB);
+    }
+
+    proc (src: @Point) Export(dst: @[NB+NB+1]_byte, compressed: boolean): _uint
+    {
+	if compressed then
+	{   dst[0] = 0x02; // FIXME + low order bit of pt.y
+	    src.x.Export(dst[1:NB]);
+	    return NB + 1;
+	}
+	else	// uncompressed
+	{   dst[0] = 0x04;
+	    src.x.Export(dst[1:NB]);
+	    src.y.Export(dst[NB+1:NB]);
+	    return (NB*2) + 1;
+	}
+    }
+
+    proc (dst: @Point) Import(src: @[NB+NB+1]_byte)
+    {
+	if src[0] == 0x04 then // uncompressed
+	{   dst.x.Import(src[1:NB]);
+	    dst.y.Import(src[1+NB:NB]);
+	}
+	else
+	{   // FIXME - compressed
+	}
+    }
+
+    if _defined(debug.dumpb) then {
+	proc (src: @MPInt) Dump(name: @[]_byte)
+	{   var buf: [NB]_byte;
+	    src.Export(buf);
+	    debug.dumpb(name, buf, NB);
+	}
+
+	proc (src: @Point) Dump(name: @[]_byte)
+	{   var buf: [1+NB+NB]_byte;
+	    src.Export(buf, false);
+	    debug.dumpb(name, buf[1:NB], NB);
+	    debug.dumpb("", buf[1+NB:NB], NB);
+	}
+    }
 
     proc PointDouble(r: @Point, p: @Point)
     {
-	var s, t: Vect;
+	var s, t: MPInt;
 
 	if bn.isZero(p.x, K) && bn.isZero(p.y, K) then
 	{   _zero(r@);
@@ -33,7 +87,7 @@
 
     proc PointAdd(r: @Point, p: @Point, q: @Point)
     {
-	var t, u, v: Vect;
+	var t, u, v: MPInt;
 
 	if bn.isZero(p.x, K) && bn.isZero(p.y, K) then
 	{   r@ = q@;
@@ -51,20 +105,20 @@
 	    }
 	    return;
 	}
-	f.SubModP(t, p.y, q.y);
-	f.SubModP(u, p.x, q.x);
-	f.InvModP(u, u);
-	f.MulModP(v, t, u);
-	f.MulModP(t, v, v);
-	f.SubModP(u, t, p.x);
-	f.SubModP(r.x, u, q.x);
-	f.SubModP(u, q.x, r.x);
-	f.MulModP(v, v, u);
-	f.SubModP(r.y, v, q.y);
+	f.SubModP(t, p.y, q.y);	// t = p.y-q-y
+	f.SubModP(u, p.x, q.x);	// u = p.x-q.x
+	f.InvModP(u, u);	// u = 1/(p.x-q.x)
+	f.MulModP(v, t, u);	// v = (p.y-q-y)/(p.x-q.x)
+	f.MulModP(t, v, v);	// t = v²
+	f.SubModP(u, t, p.x);	// u = v²-p.x
+	f.SubModP(r.x, u, q.x);	// r.x = v²-p.x-q.x
+	f.SubModP(u, q.x, r.x);	// u = q.x-r.x
+	f.MulModP(v, v, u);	// v = v(q.x-r.x)
+	f.SubModP(r.y, v, q.y);	// r.y = v(q.x-r.x)-q.y
     }
 
     // multiply  point (px,py) by scalar sc, result point is (rx,ry)
-    proc PointMul(r: @Point, p: @Point, sc: @Vect)
+    proc PointMul(r: @Point, p: @Point, sc: @MPInt)
     {
 	var q, t: Point;
 	var i: _uint;
@@ -83,25 +137,51 @@
 	r@ = q;
     }
 
-    proc ECDH(pub: @Point, priv: @Vect, result: @Point)
+    proc PointEQ(p1: @Point, p2: @Point): boolean
+    {
+	if bn.Cmp(p1.x, p2.x, K) != 0 then return false;
+	if bn.Cmp(p1.y, p2.y, K) != 0 then return false;
+	return true;
+    }
+
+    proc ECDH(pub: @Point, priv: @MPInt, result: @Point)
     {
 	PointMul(result, pub, priv);
     }
 
-    proc GenPubKey(priv: @Vect, pub: @Point)
+    // Generate public key with specific generator gen
+    proc (gen: Point) GenPubKey(priv: @MPInt, pub: @Point)
+    {
+	PointMul(pub, gen, priv);
+    }
+
+    // Generate public key with default generator G
+    proc GenPubKey(priv: @MPInt, pub: @Point)
     {
 	PointMul(pub, G, priv);
     }
 
-    proc IsKeyValid(key: @Vect): boolean
+    proc IsKeyValid(key: @MPInt): boolean
     {
 	return bn.isGT(N, key, K);
     }
 
+    // Generate public and private keys with specific generator gen
+    proc (gen: Point) GenerateKeys(priv: @MPInt, pub: @Point)
+    {
+	var rand: [NB]_byte: align(4);
+
+	do
+	{   Rand(rand, NB);
+	    priv.Import(rand);
+	} while !IsKeyValid(priv);
+	gen.GenPubKey(priv, pub);
+    }
+
     // r = x mod N where N is the order of the curve
     // uses Barrett's reduction method
-    proc ModN(r: @Vect, x: @Vect2, len: _uint)
-    {   var q1q3: Vect1;
+    proc ModN(r: @MPInt, x: @MPInt2, len: _uint)
+    {   var q1q3: MPInt1;
 	var q2:   [(K+1)*2]_uint32;
 
 	// if x is smaller than the modulus
@@ -120,21 +200,44 @@
 	r@ = q1q3[0:K];
     }
 
-    proc MulModN(r: @Vect, x: @Vect, y: @Vect)
-    {	var t: Vect2;
+    proc MulModN(r: @MPInt, x: @MPInt, y: @MPInt)
+    {	var t: MPInt2;
 
 	f.Mul(t, x, y, K);
 	ModN(r, t, K*2);
     }
 
-    proc Sign(d: @Vect,			// private key on the curve
-	      e: @Vect,			// hash to sign
-	      k: @Vect,			// random data
-	      r: @Vect, s: @Vect	// out, signature
+    // r = (x + y) mod N
+    proc AddModN(r: @MPInt, x: @MPInt, y: @MPInt)
+    {
+	// if carry out or result larger than N then reduce
+	if bn.Add(r, x, y, K) != 0 || bn.isGE(r, N, K) then
+	    bn.Sub(r, r, N, K);
+    }
+
+    // r = (x - y) mod N
+    proc SubModN(r: @MPInt, x: @MPInt, y: @MPInt)
+    {   var tmp: MPInt;
+
+	// if carry out then we wrapped
+	if bn.Sub(r, x, y, K) != 0 then
+	    bn.Add(r, r, N, K);
+    }
+
+    // r = -x mod N
+    proc NegModN(r: @MPInt, x: @MPInt)
+    {
+	bn.Sub(r, N, x, K);
+    }
+
+    proc Sign(d: @MPInt,			// private key on the curve
+	      e: @MPInt,			// hash to sign
+	      k: @MPInt,			// random data
+	      r: @MPInt, s: @MPInt	// out, signature
 	     ):  boolean		// true if all was OK
     {
 	var T: Point;
-	var t1, t2: Vect;
+	var t1, t2: MPInt;
 
 	if bn.isZero(k, K) || !bn.isGT(N, k, K) then
 	    return false;		// 0 < k < N failed
@@ -153,15 +256,15 @@
     }
 
     proc Validate(pub: @Point,		// coordinates of the public key
-		  e: @Vect,		// hash
-	          r: @Vect, s: @Vect	// signature
+		  e: @MPInt,		// hash
+	          r: @MPInt, s: @MPInt	// signature
 	         ):  boolean		// true if all was OK
     {
-	var w: Vect;
-	var u1, u2: Vect;
+	var w: MPInt;
+	var u1, u2: MPInt;
 	var p: Point;
 	var t1, t2, t3: Point;
-	var t3x, t3y: Vect;
+	var t3x, t3y: MPInt;
 
 	f.InvMod(w, s, N);
 	MulModN(u1, e, w);

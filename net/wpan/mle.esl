@@ -12,6 +12,7 @@
 
 import aesccm;
 import thread;		// FIXME
+import mcop;		// mesh commissioning protocol
 
 package mle
 {
@@ -33,7 +34,7 @@ package mle
     // 2nd octet is security control ala 802.15.4
     alias ieee802154.SecurityControl as SecurityControl;
 
-    const KeyNone:  SecurityControl = {.level=NONE};
+    const KeyNone:  SecurityControl = {.level=NONE, .keymode=IMPLICIT};
     const KeyKind1: SecurityControl = {.level=ENC_MIC32, .keymode=KEY0};
     const KeyKind2: SecurityControl = {.level=ENC_MIC32, .keymode=KEY4};
 
@@ -176,10 +177,20 @@ package mle
     // STATE *
     //********
 
+    type MLEState:	// FIXME - see state in thread package
+    (   RESET,		// needs commisioning
+	NONE,		// needs to find a parent
+	REQP,		// sent parent request
+	GOTP,		// got parent reply
+	REQCID,		// sent childID request
+	REQL,		// sent link request
+	CHILD,		// good to go as a child
+	REED		// good to go and router eligible
+    );
     type MLEBlock(Block):
     {   lower:	     BlockID;
 	mode:	     CapabilityInfo;
-	state:	     (NONE, REQP, GOTP, REQCID, REQL, CHILD, REED);
+	state:	     MLEState;
 	keyid:       _uint8;
 	saddr:	     AddrShort;
 	keyseq:     _uint32;
@@ -508,6 +519,39 @@ debug.str("LinkAccept: No link frame counter\n");
     {
     }
 
+    proc (eb: pMLEBlock) RecvDiscoveryResponse(src: @inet.IPv6Addr,
+			     mb: pMBuf, bp: @[]_uint8, len: _uint)
+    {	var i: _uint;
+	var ok: boolean;
+
+	// There's just one MLE TLV that encapsulates MeshCop TLVs
+	ok, i = FindTLV(bp, len, ThreadDiscover);
+	if !ok then
+	{
+debug.str("DiscoveryResponse: No ThreadDiscover\n");
+//	    return;	// FIXME - ignore for debugging
+	}
+	var tdlen: _uint;
+	tdlen = bp[i+1];
+	i += 2;
+	if !mcop.IsDiscResponseOK(bp[i:], tdlen) then
+	{
+debug.str("DiscoveryResponse: Incorrect response\n");
+	    return;
+	}
+	var joinport: _uint16;
+	if !mcop.GetJoinPort(bp[i:], tdlen, joinport) then
+	{
+debug.str("DiscoveryResponse: No Join Port\n");
+	    return;
+	}
+	// Not parsed yet:
+	// CommishPort - not used?
+	// ExtPanID - where is this used?
+	// NetName
+	// Steering
+    }
+
     proc RecvAdvertisement(src: @inet.IPv6Addr,
 			     mb: pMBuf, bp: @[]_uint8, len: _uint)
     {
@@ -563,28 +607,28 @@ debug.str("to: "); ipv6.AddrPrint(uh.dstaddr);  debug.nl();
 	    nh = 10;
 	}
 	else
-	{
-	    return;
+	{   nh = 2;
 	}
 	frmctr = _unpkle(bp[2:4]);	// Frame Counter is little endian
 	nb = mb.Size() - nh - 1 - 4;
 debug.str("mle.Recv nb="); debug.uint(nb);
 debug.str(" nh="); debug.uint(nh); debug.nl();
-	// Decrypt the payload
-	MakeNonce(uh.srcaddr[8:8], frmctr, _uint8(ieee802154.SecLevel.ENC_MIC32), nonce);
+	if nh != 2 then
+	{   // Decrypt the payload
+	    MakeNonce(uh.srcaddr[8:8], frmctr, _uint8(ieee802154.SecLevel.ENC_MIC32), nonce);
 debug.str("nonce: "); debug.hex8n(nonce, 13); debug.nl();
-	// FIXME - where to get key?
-	ctx.SetKey(thread.keys.GetMleKey(), KEY128);
-	ctx.Start(inet.IPv6AddrLen+inet.IPv6AddrLen+nh, nb, 4, nonce, 13);
-	ctx.Header(uh.srcaddr, inet.IPv6AddrLen);
-	ctx.Header(uh.dstaddr, inet.IPv6AddrLen);
-	ctx.Header(bp[1:], nh);
-	ctx.Decrypt(bp[nh+1:], bp[nh+1:], nb);
-debug.dumpb("payload\n", bp[nh+1:], nb);
-	ctx.Finish(tag, 4);
-	// FIXME - check tag matches
+	    // FIXME - where to get key?
+	    ctx.SetKey(thread.keys.GetMleKey(), KEY128);
+	    ctx.Start(inet.IPv6AddrLen+inet.IPv6AddrLen+nh, nb, 4, nonce, 13);
+	    ctx.Header(uh.srcaddr, inet.IPv6AddrLen);
+	    ctx.Header(uh.dstaddr, inet.IPv6AddrLen);
+	    ctx.Header(bp[1:], nh);
+	    ctx.Decrypt(bp[nh+1:], bp[nh+1:], nb);
+	    ctx.Finish(tag, 4);
+	    // FIXME - check tag matches
 //debug.dumpb("tag", tag, 4);
-
+	}
+//debug.dumpb("payload\n", bp[nh+1:], nb);
 	// reset buffer pointer to the payload
 	bp = bp[nh+1:];
 
@@ -611,6 +655,8 @@ debug.dumpb("payload\n", bp[nh+1:], nb);
 	    eb.RecvChildIdResponse(uh.srcaddr, mb, bp[1:], nb-1);
 	is ChildUpdateRequest then {}
 	is ChildUpdateResponse then {}
+	is DiscoveryResponse then
+	    eb.RecvDiscoveryResponse(uh.srcaddr, mb, bp[1:], nb-1);
     }
 
     /*
@@ -805,16 +851,18 @@ debug.str(" nh="); debug.uint(nh); debug.nl();
 debug.str("dst: "); ipv6.AddrPrint(uh.dstaddr); debug.nl();
 debug.str("src: "); ipv6.AddrPrint(uh.srcaddr); debug.nl();
 	nb -= nh + 1;
-	MakeNonce(uh.srcaddr[8:8], eb.framectr, _uint8(ieee802154.SecLevel.ENC_MIC32), nonce);
+	if nh != 2 then		// have security
+	{   MakeNonce(uh.srcaddr[8:8], eb.framectr, _uint8(ieee802154.SecLevel.ENC_MIC32), nonce);
 debug.str("nonce: "); debug.hex8n(nonce, 13); debug.nl();
-	ctx.SetKey(thread.keys.GetMleKey(), KEY128);
-	ctx.Start(inet.IPv6AddrLen+inet.IPv6AddrLen+nh, nb, 4, nonce, 13);
-	ctx.Header(uh.srcaddr, inet.IPv6AddrLen);
-	ctx.Header(uh.dstaddr, inet.IPv6AddrLen);
-	ctx.Header(bp[1:], nh);
-	ctx.Encrypt(bp[nh+1:], bp[nh+1:], nb);
-	tag = mb.GrowTail(4);
-	ctx.Finish(tag, 4);
+	    ctx.SetKey(thread.keys.GetMleKey(), KEY128);
+	    ctx.Start(inet.IPv6AddrLen+inet.IPv6AddrLen+nh, nb, 4, nonce, 13);
+	    ctx.Header(uh.srcaddr, inet.IPv6AddrLen);
+	    ctx.Header(uh.dstaddr, inet.IPv6AddrLen);
+	    ctx.Header(bp[1:], nh);
+	    ctx.Encrypt(bp[nh+1:], bp[nh+1:], nb);
+	    tag = mb.GrowTail(4);
+	    ctx.Finish(tag, 4);
+	}
 	mb.tag = 0;
 	mb.code = SEND;
 mb.Dump(true);
@@ -927,6 +975,38 @@ DumpMessage(bp[j:], i-j);
     {
     }
 
+    proc AppendThreadDiscover(buf: @[]_byte, len: _uint): _uint
+    {
+	// assert len >= 11
+	buf[0] = _uint8(TLVType.ThreadDiscover);
+	buf[1] = 4;
+	buf[2] = _uint8(mcop.TLVType.DiscReq);
+	buf[3] = 2;
+	buf[4] = 0x38;	//version 3, joiner flag
+	buf[5] = 0;
+	return 6;
+    }
+    proc (eb: pMLEBlock) SendDiscoveryRequest()
+    {   var mb: pMBuf;
+	var bp: @[]_uint8;
+	var i, n: _uint;
+	const HdrSize = 8 + inet.ULHeader6?size + inet.UDPHeader?size;
+	const MyHdrSize = 11;
+	const MsgSize = 8;		// FIXME
+
+	mb = mbuf.Alloc(HdrSize + MyHdrSize + MsgSize, HdrSize);
+	bp = mb.Data();
+	n = mb.Size();
+	i = 0;
+	i += eb.AppendMessageHeader(bp, n, DiscoveryRequest, KeyNone);
+var j: _uint;
+j = i - 1;
+	i += AppendThreadDiscover(bp[i:], n-i);
+DumpMessage(bp[j:], i-j);
+	mb.GrowTail(i);
+	eb.Send(mb, ipv6.AllRoutersAddr);
+    }
+
     proc Run(b: pBlock, e: pEvent)
     {   var mb: pMBuf;
 	var eb: pMLEBlock;
@@ -948,6 +1028,16 @@ debug.str("mle.Recv: len=");  debug.uint(mb.Size()); debug.nl();
 	    {	thread.devstate = Child;
 		if eb.mode.devtype == FFD then
 		    eb.SendLinkRequest();
+	    }
+	}
+	is START then
+	{
+debug.str("mle.Start: devstate=");  debug.uint(_uint8(thread.devstate)); debug.nl();
+	    if thread.devstate == Reset then
+	    {	eb.SendDiscoveryRequest();
+	    }
+	    else	// assume normal
+	    {	eb.SendParentRequest();
 	    }
 	}
 	is CONNECT then

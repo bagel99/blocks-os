@@ -16,23 +16,23 @@ package ed25519
     alias bignum.Basex2 as Basex2;
     const W = 256;				// width in bits
     const K = (W+(Base?bits)-1)/Base?bits;	// width in chunks
-    type Vect: [K]_uint32;
-    type Vect1: [K+1]_uint32;
-    type Vect2: [K*2]_uint32;
+    type MPInt: [K]_uint32;
+    type MPInt1: [K+1]_uint32;
+    type MPInt2: [K*2]_uint32;
 
     // curve y² = x³ + 486662x² + x over prime 2²⁵⁵ − 19
     // base point g=9
     const A = 486662;
     const A4 = (A-2) / 4;
-    const P: Vect = {	 0xFFFFFFED, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF,
+    const P: MPInt = {	 0xFFFFFFED, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF,
 			 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0x7FFFFFFF };
-    const maxP: Vect = { 0xFFFFFFDA, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF,
+    const maxP: MPInt = { 0xFFFFFFDA, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF,
 			 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF };
-    const G: Vect = {    0x00000009, 0x00000000, 0x00000000, 0x00000000,
+    const G: MPInt = {    0x00000009, 0x00000000, 0x00000000, 0x00000000,
 			 0x00000000, 0x00000000, 0x00000000, 0x00000000 };
     package ffieldp
     {
-	proc AddModP(r: @Vect, x: @Vect, y: @Vect)
+	proc AddModP(r: @MPInt, x: @MPInt, y: @MPInt)
 	{   var i: _uint;
 	    var c: bn.Base;
 
@@ -41,7 +41,7 @@ package ed25519
 	    _ = bn.AddC(r, r, c, K);
 	}
 
-	proc SubModP(r: @Vect, x: @Vect, y: @Vect)
+	proc SubModP(r: @MPInt, x: @MPInt, y: @MPInt)
 	{   var i: _uint;
 	    var c: bn.Base;
 
@@ -52,7 +52,7 @@ package ed25519
 
 	// r = (c == 0) then 1, (c == 1) then P
 	// constant time
-	proc SetP(r: @Vect, c: Base)
+	proc SetP(r: @MPInt, c: Base)
 	{
 	    // c is either 0 or 1
 	    // change it to either 0 or all 1s
@@ -67,8 +67,8 @@ package ed25519
 	    r[7] = c >> 1;
 	}
 
-	proc ModP(x: @Vect)
-	{   var t: Vect;
+	proc ModP(x: @MPInt)
+	{   var t: MPInt;
 	    var c: Base;
 
 	    c = bn.Sub(x, x, P, K);
@@ -80,7 +80,7 @@ package ed25519
 	}
 
 	// r = y + b*x
-	proc Reduce(r: @Vect, y: @Vect, b: Base, x: @Vect)
+	proc Reduce(r: @MPInt, y: @MPInt, b: Base, x: @MPInt)
 	{   var i: _uint;
 	    var c: Base;
 	    var t: Basex2;
@@ -96,7 +96,7 @@ package ed25519
 	}
 
 	// r = x+y reduced
-	proc AddRed(r: @Vect, x: @Vect, y: @Vect)
+	proc AddRed(r: @MPInt, x: @MPInt, y: @MPInt)
 	{   var c: Base;
 
 	    c = bn.Add(r, x, y, K);
@@ -105,7 +105,7 @@ package ed25519
 	}
 
 	// r = x+y reduced
-	proc SubRed(r: @Vect, x: @Vect, y: @Vect)
+	proc SubRed(r: @MPInt, x: @MPInt, y: @MPInt)
 	{   var c: Base;
 
 	    c = bn.Sub(r, x, y, K);
@@ -113,12 +113,12 @@ package ed25519
 	    _ = bn.SubC(r, r, c*38, K);
 	}
 
-	proc SubRed2(r: @Vect, x: @Vect, y: @Vect)
+	proc SubRed2(r: @MPInt, x: @MPInt, y: @MPInt)
 	{
 	}
 
 	// r = x + b*y
-	proc MulAddRed(r: @Vect, x: @Vect, b: Base, y: @Vect)
+	proc MulAddRed(r: @MPInt, x: @MPInt, b: Base, y: @MPInt)
 	{   var i: _uint;
 	    var c: Base;
 	    var t: Basex2;
@@ -136,32 +136,32 @@ package ed25519
 	}
 
 	// r = x*y reduced
-	proc MulRed(r: @Vect, x: @Vect, y: @Vect)
-	{   var t: Vect2;
+	proc MulRed(r: @MPInt, x: @MPInt, y: @MPInt)
+	{   var t: MPInt2;
 
 	    bn.Mul(t, x, y, K);
 	    Reduce(r, t, 38, t[8:]);
 	}
 
 	// r = x*x reduced
-	proc SqrRed(r: @Vect, x: @Vect)
+	proc SqrRed(r: @MPInt, x: @MPInt)
 	{
 	    MulRed(r, x, x);
 	}
 
 	// r = x*y mod P
-        proc MulModP(r: @Vect, x: @Vect, y: @Vect)
+        proc MulModP(r: @MPInt, x: @MPInt, y: @MPInt)
         {
 	    MulRed(r, x, y);
 	    ModP(r);
         }
 
 	// r = 1/x mod P
-	proc InvModP(r: @Vect, x: @Vect)
+	proc InvModP(r: @MPInt, x: @MPInt)
 	{   var i: _uint;
-	    var x2, x9, x11: Vect;
-	    var x_5_0, x_10_0, x_20_0, x_50_0, x_100_0: Vect;
-	    var t0, t1: Vect;
+	    var x2, x9, x11: MPInt;
+	    var x_5_0, x_10_0, x_20_0, x_50_0, x_100_0: MPInt;
+	    var t0, t1: MPInt;
 
 	    SqrRed(x2, x);		// x2 = x²
 	    SqrRed(t1, x2);		// t1 = x⁴
@@ -238,7 +238,7 @@ package ed25519
     alias ffieldp as f;
 
     // point terminology uses x and z
-    type Point: { x: Vect; z: Vect; };
+    type Point: { x: MPInt; z: MPInt; };
 
     /*
      * The curve 25519 algorithms use keys stored little endian,
@@ -258,7 +258,7 @@ package ed25519
 
     proc MontDouble(r: @Point, q: @Point)
     {
-	var a, b: Vect;
+	var a, b: MPInt;
 
 	f.AddRed(a, q.x, q.z);	// a = qx+qz
 	f.SubRed(b, q.x, q.z);	// b = qx-qz
@@ -271,9 +271,9 @@ package ed25519
     }
 
     // p = p+q, q = 2q
-    proc MontMulStep(p: @Point, q: @Point, base: @Vect)
+    proc MontMulStep(p: @Point, q: @Point, base: @MPInt)
     {
-	var a, b, c, d, e: Vect;
+	var a, b, c, d, e: MPInt;
 
 	f.SubRed(a, p.x, p.z);	// a = px-pz
 	f.AddRed(b, p.x, p.z);	// b = px+pz
@@ -298,9 +298,9 @@ package ed25519
 const my_r = "105FFFF0BF0814B61DC748AFCC8C2BB6653436A31834DF70223B478E6AEF114A";
 
     // not a full point multiply, just the x component
-    proc PointMul(r: @Vect, g: @Vect, k: @Key)
+    proc PointMul(r: @MPInt, g: @MPInt, k: @Key)
     {   var p, q, gp: Point;
-	var rand: Vect;
+	var rand: MPInt;
 	var PP, QP: [0..1]@Point;
 	var i, j, bit: _uint;
 	var t: Base;
@@ -335,7 +335,7 @@ const my_r = "105FFFF0BF0814B61DC748AFCC8C2BB6653436A31834DF70223B478E6AEF114A";
     }
 
     proc GenPubKey(prvk: @Key, pubk : @Key)
-    {   var prv, pub: Vect;
+    {   var prv, pub: MPInt;
 
 	TrimKey(prvk);
 	bn.ImportLE(prv, prvk, 32);
@@ -344,7 +344,7 @@ const my_r = "105FFFF0BF0814B61DC748AFCC8C2BB6653436A31834DF70223B478E6AEF114A";
     }
 
     proc GenShrKey(shrk: @Key, pubk: @Key, prvk: @Key)
-    {   var tmp: Vect;
+    {   var tmp: MPInt;
 
 	TrimKey(prvk);
 	bn.ImportLE(tmp, pubk, 32);

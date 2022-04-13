@@ -7,6 +7,10 @@
 import debug;
 alias debug as err;
 
+proc Rand(out: @[]_byte, len: _uint)	// NOT USED
+{
+}
+
 proc PrintN(msg: @[]_byte, x: @[]_uint32, n: _uint)
 {   var i: _uint;
 
@@ -131,7 +135,7 @@ package secp192r1
      proc TestVerify()
      {	var i, n: _uint;
 	var ok: boolean;
-	var R, S: Vect;
+	var R, S: MPInt;
 	var pub: Point;
 	var hash: [sha224.DigestSize]_byte;	// hash is longer than curve
 	var h: [sha224.DigestSize/bignum.Base?size]bignum.Base;
@@ -237,7 +241,7 @@ package secp224r1
     proc TestSign()
     {   var i, n: _uint;
 	var ok: boolean;
-	var priv, rand, R, S, myR, myS, h: Vect;
+	var priv, rand, R, S, myR, myS, h: MPInt;
 	var pub: Point;
 	var r, s: [K*8+1]_byte;
 	var hash: [sha224.DigestSize]_byte;
@@ -273,7 +277,7 @@ package secp224r1
      proc TestVerify()
      {	var i, n: _uint;
 	var ok: boolean;
-	var R, S, h: Vect;
+	var R, S, h: MPInt;
 	var pub: Point;
 	var hash: [sha224.DigestSize]_byte;
 
@@ -377,7 +381,7 @@ package secp256r1
     proc TestSign()
     {   var i, n: _uint;
 	var ok: boolean;
-	var priv, rand, R, S, myR, myS, h: Vect;
+	var priv, rand, R, S, myR, myS, h: MPInt;
 	var pub: Point;
 	var r, s: [K*8+1]_byte;
 	var hash: [sha256.DigestSize]_byte;
@@ -413,7 +417,7 @@ package secp256r1
     proc TestVerify()
     {	var i, n: _uint;
 	var ok: boolean;
-	var R, S, h: Vect;
+	var R, S, h: MPInt;
 	var pub: Point;
 	var hash: [sha256.DigestSize]_byte;
 
@@ -546,7 +550,7 @@ package secp384r1
     proc TestSign()
     {   var i, n: _uint;
 	var ok: boolean;
-	var priv, rand, R, S, myR, myS, h: Vect;
+	var priv, rand, R, S, myR, myS, h: MPInt;
 	var pub: Point;
 	var r, s: [K*8+1]_byte;
 	var hash: [sha384.DigestSize]_byte;
@@ -582,7 +586,7 @@ package secp384r1
     proc TestVerify()
     {	var i, n: _uint;
 	var ok: boolean;
-	var R, S, h: Vect;
+	var R, S, h: MPInt;
 	var pub: Point;
 	var hash: [sha384.DigestSize]_byte;
 
@@ -714,7 +718,7 @@ package secp521r1
     proc TestSign()
     {   var i, n: _uint;
 	var ok: boolean;
-	var priv, rand, R, S, myR, myS, h: Vect;
+	var priv, rand, R, S, myR, myS, h: MPInt;
 	var pub: Point;
 	var r, s: [K*8+1]_byte;
 	var hash: [K*4]_byte;
@@ -752,7 +756,7 @@ package secp521r1
     proc TestVerify()
     {	var i, n: _uint;
 	var ok: boolean;
-	var R, S, h: Vect;
+	var R, S, h: MPInt;
 	var pub: Point;
 	var hash: [K*4]_byte;
 	const pad = (K*4) - sha512.DigestSize;

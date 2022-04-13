@@ -18,21 +18,21 @@ package secp192r1
 
     const W = 192;					// width in bits
     const K = (W+(bn.Base?bits)-1)/bn.Base?bits;	// width in chunks
-    type Vect: [K]_uint32;
-    type Vect1: [K+1]_uint32;
-    type Vect2: [K*2]_uint32;
-    type Point: { x: Vect; y: Vect; };
-    const P: Vect = {	0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFE, 0xFFFFFFFF,
+    type MPInt: [K]_uint32;
+    type MPInt1: [K+1]_uint32;
+    type MPInt2: [K*2]_uint32;
+    type Point: { x: MPInt; y: MPInt; };
+    const P: MPInt = {	0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFE, 0xFFFFFFFF,
 			0xFFFFFFFF, 0xFFFFFFFF};
-    const B: Vect = {	0xC146B9B1, 0xFEB8DEEC, 0x72243049, 0x0FA7E9AB,
+    const B: MPInt = {	0xC146B9B1, 0xFEB8DEEC, 0x72243049, 0x0FA7E9AB,
 			0xE59C80E7, 0x64210519};
     const G: Point = { {0x82FF1012, 0xF4FF0AFD, 0x43A18800, 0x7CBF20EB,
     			0xB03090F6, 0x188DA80E},
 		       {0x1E794811, 0x73F977A1, 0x6B24CDD5, 0x631011ED,
 			0xFFC8DA78, 0x07192B95} };
-    const N: Vect1 = {	0xB4D22831, 0x146BC9B1, 0x99DEF836, 0xFFFFFFFF,
+    const N: MPInt1 = {	0xB4D22831, 0x146BC9B1, 0x99DEF836, 0xFFFFFFFF,
 			0xFFFFFFFF, 0xFFFFFFFF, 0x00000000};
-    const order_mu: Vect1 = 	// µ in Barrett reduction
+    const order_mu: MPInt1 = 	// µ in Barrett reduction
 		    {	0x4B2DD7CF, 0xEB94364E, 0x662107C9, 0x00000000,
 			0x00000000, 0x00000000, 0x00000001};
 
@@ -42,8 +42,8 @@ package secp192r1
     {
 	// r = x mod P
 	// double length vector in x
-	proc ModP(r: @Vect, x: @Vect2)
-	{   var s: Vect;
+	proc ModP(r: @MPInt, x: @MPInt2)
+	{   var s: MPInt;
 
 	    r@ = x[0:K];
 	    s = x[K:K];

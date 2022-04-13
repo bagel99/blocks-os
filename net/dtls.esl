@@ -5,44 +5,27 @@
  * References:
  *   1. RFC 6347 - DTLS v1.2
  *   2. RFC 5246 - TLS v1.2
+ *      RFC 8446 - TLS v1.3 (obsoletes 5246)
  *   3. RFC 4492 - ECC for TLS
  *   4. tinydtls - Copyright Olaf Bergmann and others
  *   5. RFC 5288 - AES-GCM for TLS
  *
- * Copyright (c) 2016, Brian G. Lucas.  See LICENSE file.
+ * Copyright (c) 2016-2022, Brian G. Lucas.  See LICENSE file.
  */
 
 import sha256;		// used for Message Authetication
-
 import asn1;
+
+import dtlsdef;
 
 package dtls
 {
-    // FIXME - how to configure?
-    const PSKSupported: boolean = false;
-    const ECC_CCMSupported: boolean = false;
-    const ECC_GCMSupported: boolean = true;
-    const EC_Supported: boolean = ECC_CCMSupported || ECC_GCMSupported;
+    if _defined(debug.db_dtls) then
+	alias debug.db_dtls as db;
+    else
+	const db = 0;
 
-    const Version: [2]_uint8 = { 255-1, 255-2 };	// v1.2
-
-    /*
-     * Record layer
-     */
-    type ContentT:
-    (   ChangeCipher=	0x14,
-	Alert=		0x15,
-	Handshake=	0x16,
-	Data=		0x17
-    );
-
-    type HeaderT:
-    {   content: ContentT: bits(8);
-        version: [2]_uint8;
-        seqno:   [8]_uint8;     // 2 bytes of epoch, 6 bytes of sequence number
-        length:  [2]_uint8;
-    };
-    type Header: @HeaderT;
+    var CipherSuites: @[]@CipherSuite;
 
     /*
      **** ChangeCipher messages ****
@@ -51,7 +34,6 @@ package dtls
     {	which: _uint8;
     };
     type ChangeCipherMsg: @ChangeCipherMsgT;
-
 
     /*
      **** Alert messages ****
@@ -87,11 +69,10 @@ package dtls
     };
     type AlertMsg: @AlertMsgT;
 
-
     /*
      **** Handshake messages ****
      */
-    const MaxCookieLen = 32;	// WARNING: standard says 255 for future use!
+    const MaxCookieLen = 32;	// WARNING: standard says 255 future!
     const FinishLength = 12;    // size of final "hash"
 
     // first 4 bytes is unix time GMT seconds
@@ -185,49 +166,6 @@ package dtls
     };
     type FinishedMsg: @FinishedMsgT;
 
-
-    type CipherCode:
-    (
-	ECDHE_ECDSA_WITH_AES_128_GCM_SHA256 = 0xC02B,
-	PSK_WITH_AES_128_CCM_8		    = 0xC0A8,
-	ECDHE_ECDSA_WITH_AES_128_CCM_8      = 0xC0AE,
-    );
-
-    type ExtensionCode:
-    (	ELLIPTIC_CURVES			= 0x000A,	// RFC 4492
-	EC_POINT_FORMATS		= 0x000B,	// RFC 4492
-	SIG_HASH_ALGO			= 0x000D,	// RFC 5246
-	CLIENT_CERTIFICATE_TYPE		= 0x0013,	// RFC 7250
-	SERVER_CERTIFICATE_TYPE		= 0x0014,	// RFC 7250
-	ENCRYPT_THEN_MAC		= 0x0016,	// RFC 7366
-    );
-
-    type CertificateType:
-    (	RAW_PUBLIC_KEY			= 2,		// RFC 7250
-	ECDSA_SIGN			= 64,		// RFC 4492
-	RSA_FIXED_ECDH			= 65,		// RFC 4492
-	ECDSA_FIXED_ECDH		= 66		// RFC 4492
-    );
-
-    type EllipticCurve:     // Named Curves
-    (
-	SECP256R1			= 0x0017,	// RFC 4492
-    );
-
-    type CurveType:
-    (	NAMED_CURVE			= 3,		// RFC 4492
-    );
-
-    type ECPointFormat:
-    (	UNCOMPRESSED			= 0		// RFC 4492
-    );
-
-    type SignatureHashAlgo:
-    (
-	ECDSA				= 3,		// RFC 5256
-	SHA256				= 4,		// RFC 5246
-    );
-
     // Labels used in Pseudo-Random Function (PRF)
     // The length does NOT include nul termination
     const LabelMaster:   [13]_byte = 'master secret';
@@ -235,22 +173,11 @@ package dtls
     const LabelClient:   [15]_byte = 'client finished';
     const LabelServer:   [15]_byte = 'server finished';
 
-    type CipherSuite:
-    {   code:       CipherCode;
-	sendcert:   @_();
-	sendkeyx:   @_();
-	sendcertv:  @_();
-	recvcert:   @_(msg: @[]_byte, len: _uint);
-	recvkeyx:   @_(msg: @[]_byte, len: _uint);
-	recvcertr:  @_(msg: @[]_byte, len: _uint);
-	calcpmsec:  @_(secret: @[]_byte): _uint;
-	encrypt:    @_(ph: Header, msg: @[]_byte, len: _uint): _uint;
-	decrypt:    @_(ph: Header, msg: @[]_byte, len: _uint): _uint;
-    };
-
     type State:
     {   peer:   NetworkConnection;	// define this type
 	cipher:    @CipherSuite;
+	mdone:   boolean;		// we sent finished
+	pdone:	 boolean;		// we rcvd finished
 	xsecure: boolean;		// true => encrypt xmit payload
 	rsecure: boolean;		// true => recv payload encrypted
 	epoch:  _uint16;
@@ -285,13 +212,10 @@ package dtls
 
 
     var state: State;
-    var hstate: HState;
+    var hstate: HState;	// FIXME - allocate and free?
 
     import prf256;
     alias prf256.pHash as prf;
-
-
-    proc CheckCipherSupported(cipher: CipherCode): boolean;	// forward
 
     proc Init(peer: NetworkConnection)
     {
@@ -305,13 +229,11 @@ package dtls
      */
     proc HashInit()
     {
-//debug.str("HashInit\n");
 	hstate.hctx.Start();
     }
 
     proc HashUpdate(data: @[]_byte, len: _uint)
     {
-//debug.str("HashUpdate len="); debug.uint(len); debug.dumpb("\n", data, len);
 	hstate.hctx.Update(data, len);
     }
 
@@ -331,6 +253,11 @@ package dtls
 	state.seqno = 0;
     }
 
+    proc InitRandom()
+    {
+	Rand(hstate.our.random, 32);
+    }
+
     proc Send(msg: @[]_byte, len: _uint, what: ContentT)
     {	var ph: Header;
 
@@ -344,9 +271,9 @@ package dtls
 	    len = state.cipher.encrypt@(ph, msg, len);
 	_packbe(ph.length, len);
 	len += HeaderT?size;
-debug.str("\n====\nSend seqno="); debug.uint16(state.epoch);
-debug.chr(','); debug.uint32(_uint32(state.seqno));
-debug.dumpb("\n", msg, len);
+if db > 0 then { debug.str("\n====\nSend seqno="); debug.uint16(state.epoch);
+debug.chr(','); debug.uint32(_uint32(state.seqno)); debug.nl(); }
+if db > 1 then debug.dumpb("", msg, len);
 	PeerSend(state.peer, msg, len);	// FIXME - defined before import
     }
 
@@ -370,6 +297,12 @@ debug.dumpb("\n", msg, len);
 	Send(hstate.buf, 1, ChangeCipher);
     }
 
+    proc SendData(data: @[]_byte, len: _uint)
+    {
+	hstate.buf[HeaderT?size:len] = data[0:len];
+	Send(hstate.buf, len, Data);
+    }
+
     proc SendHandshake(msg: @[]_byte, len: _uint, what: HandshakeT)
     {	var phm: HandshakeMsg;
 
@@ -388,33 +321,24 @@ debug.dumpb("\n", msg, len);
 	Send(msg, len, Handshake);
     }
 
-    proc InitRandom()
-    {
-	hstate.our.random[4:28] = {	// FIXME
-		0xD5,0x90,0xB0,0x06,0x7D,0x34,0x83,0xBA,
-		0xF9,0xFA,0xFB,0xB3,0xB2,0x20,0xFC,0xCB,
-		0xD8,0xA3,0xF2,0x61,0x41,0x40,0xBD,0x71,
-		0xEE,0xEA,0x97,0xF9
-	};
-    }
-
     proc CalculateKeyBlock()
     {
 	var pmlen: _uint;
 	var pmsecret: [32]_byte;  // FIXME - is the size protocol specific
 	var seed: [32+32]_byte;
 
-debug.str("CalculateKeyBlock\n");
+if db > 0 then debug.str("CalculateKeyBlock\n");
 	// The pre-master secret is dependent on the key exchange protocol
 	if state.cipher.calcpmsec != 0 then
 	   pmlen = state.cipher.calcpmsec@(pmsecret);
-debug.dumpb("pre-master secret=\n", pmsecret, pmlen);
+if db > 1 then debug.dumpb("pre-master secret=\n", pmsecret, pmlen);
 	// Now calculate the master secret (RFC 5246 #8.1)
 	seed[0:32]  = hstate.our.random;
 	seed[32:32] = hstate.rmt.random;
-	prf(pmsecret, pmsecret?len, LabelMaster, LabelMaster?len,
+if db > 2 then debug.dumpb("random=\n", seed, 64);
+	prf(pmsecret, pmlen, LabelMaster, LabelMaster?len,
 		 seed, seed?len, hstate.msecret, hstate.msecret?len);
-debug.dumpb("master secret=\n", hstate.msecret, hstate.msecret?len);
+if db > 1 then debug.dumpb("master secret=\n", hstate.msecret, hstate.msecret?len);
 	// Now create the key block from the master secret
 	const kblen = 40;			// FIXME
 	var keyblock: [kblen]_byte;	// FIXME
@@ -422,7 +346,7 @@ debug.dumpb("master secret=\n", hstate.msecret, hstate.msecret?len);
 	seed[32:32] = hstate.our.random;
 	prf(hstate.msecret, hstate.msecret?len, LabelKey, LabelKey?len,
 		seed, seed?len, keyblock, kblen);
-debug.dumpb("key block=\n", keyblock, kblen);
+if db > 2 then debug.dumpb("key block=\n", keyblock, kblen);
 	state.ourkey = keyblock[0:16];
 	state.rmtkey = keyblock[16:16];
 	state.ouriv  = keyblock[32:4];
@@ -431,7 +355,7 @@ debug.dumpb("key block=\n", keyblock, kblen);
 
     proc SwitchCipher()
     {
-debug.str("SwitchCipher\n");
+if db > 0 then debug.str("SwitchCipher\n");
 	SendCCS();
 	IncEpoch();
 	state.xsecure = true;
@@ -440,8 +364,9 @@ debug.str("SwitchCipher\n");
     proc SendClientHello(cookie: @[]_byte, cookielen: _uint)
     {	var pch: ClientHelloMsg;
 	var pb: @[]_byte;
-	var i, n: _uint;
+	var i, j, k, n: _uint;
 
+if db > 0 then debug.str("SendClientHello\n");
 	// FIXME - get buf dynamic
 	pch = ClientHelloMsg(hstate.buf[HeaderT?size:]);
 	pch.version = Version;
@@ -456,35 +381,42 @@ debug.str("SwitchCipher\n");
 	{   pch.bytes[i:cookielen] = cookie[0:cookielen];
 	    i += cookielen;
 	}
-	// cypher suite list
-	n = 0;
-	if PSKSupported then n += 2;
-	if ECC_CCMSupported then n += 2;
-	if ECC_GCMSupported then n += 2;
-	_packbe(pch.bytes[i:2], _uint16(n)); i += 2;	// size of cipher list
-	if ECC_CCMSupported then
-	{   _packbe(pch.bytes[i:2],
-		    _uint16(CipherCode.ECDHE_ECDSA_WITH_AES_128_CCM_8));
+	// save space for the length of cipher list
+	k = i;
+	i += 2;
+	// then the list
+	j = 0;
+	while CipherSuites[j] != 0 do
+	{   _packbe(pch.bytes[i:2], _uint16(CipherSuites@[j].code));
+if db > 2 then { debug.hex16(_uint16(CipherSuites@[j].code)); debug.nl(); }
 	    i += 2;
+	    j += 1;
 	}
-	if ECC_GCMSupported then
-	{   _packbe(pch.bytes[i:2],
-		    _uint16(CipherCode.ECDHE_ECDSA_WITH_AES_128_GCM_SHA256));
-	    i += 2;
-	}
-	if PSKSupported then
-	{   _packbe(pch.bytes[i:2],
-		    _uint16(CipherCode.PSK_WITH_AES_128_CCM_8));
-	    i += 2;
-	}
+	// do we really need this
+	_packbe(pch.bytes[i:2], _uint16(CipherCode.FALLBACK_SCSV_VALUE)); i += 2;
+	// now we can do the length
+	_packbe(pch.bytes[k:2], _uint16(i-k-2));
 	// compression list
 	pch.bytes[i] = 1;  i += 1;		// size of compression list
 	pch.bytes[i] = 0;  i += 1;		// TLS_COMPRESSION_NULL
-	// extensions
-	n = 0;
-	if EC_Supported then n += 6 + 6 + 8 + 6;
-	_packbe(pch.bytes[i:2], _uint16(n));  i += 2;	// size of extensions
-	if EC_Supported then
+	// extensions, skip the length for now
+	k = i;
+	i += 2;
+	// Do we do extensions for everything, or just our preferred?
+	var extend: Extension;
+	// For now, just preferred
+	extend = CipherSuites@[0].extension;
+	// FIXME - this is a temporary hack
+	if extend[SIGNALGO] then
+	{
+	    _packbe(pch.bytes[i:2], _uint16(ExtensionCode.SIG_HASH_ALGO));
+	    i += 2;
+	    _packbe(pch.bytes[i:2], 4);  i += 2;	// extension size
+	    _packbe(pch.bytes[i:2], 2);  i += 2;	// list size
+	    _packbe(pch.bytes[i:2], _uint16(Signature.ECDSA_SHA256));
+	    i += 2;
+	}
+	if extend[CLICERT] then
 	{   // Client certificate types supported
 	    _packbe(pch.bytes[i:2],
 		    _uint16(ExtensionCode.CLIENT_CERTIFICATE_TYPE));
@@ -493,7 +425,9 @@ debug.str("SwitchCipher\n");
 	    pch.bytes[i] = 1;  i += 1;			// list size
 	    pch.bytes[i] = _uint8(CertificateType.RAW_PUBLIC_KEY);
 	    i += 1;
-	    // Server certificate types supported
+	}
+	if extend[SRVCERT] then
+	{   // Server certificate types supported
 	    _packbe(pch.bytes[i:2],
 		    _uint16(ExtensionCode.SERVER_CERTIFICATE_TYPE));
 	    i += 2;
@@ -501,43 +435,67 @@ debug.str("SwitchCipher\n");
 	    pch.bytes[i] = 1;  i += 1;			// list size
 	    pch.bytes[i] = _uint8(CertificateType.RAW_PUBLIC_KEY);
 	    i += 1;
-	    // Elliptic curves supported
-	    _packbe(pch.bytes[i:2],
-		    _uint16(ExtensionCode.ELLIPTIC_CURVES));
+	}
+	if extend[EC] then
+	{   // Elliptic curves supported
+	    _packbe(pch.bytes[i:2], _uint16(ExtensionCode.ELLIPTIC_CURVES));
 	    i += 2;
 	    _packbe(pch.bytes[i:2], 4);  i += 2;	// extension size
 	    _packbe(pch.bytes[i:2], 2);  i += 2;	// list size
-	    _packbe(pch.bytes[i:2],
-		    _uint16(EllipticCurve.SECP256R1));
-	    i += 2;
+	    _packbe(pch.bytes[i:2], _uint16(EllipticCurve.SECP256R1)); i += 2;
 	    // EC point formats supported
-	    _packbe(pch.bytes[i:2],
-		    _uint16(ExtensionCode.EC_POINT_FORMATS));
+	    _packbe(pch.bytes[i:2], _uint16(ExtensionCode.EC_POINT_FORMATS));
 	    i += 2;
 	    _packbe(pch.bytes[i:2], 2);  i += 2;	// extension size
 	    pch.bytes[i] = 1;  i += 1;			// list size
 	    pch.bytes[i] = _uint8(ECPointFormat.UNCOMPRESSED);
 	    i += 1;
 	}
+	if extend[CUSTOM] then
+	{   // search the list for custom extensions
+	    j = 0;
+if db > 1 then debug.str("custom extension\n");
+	    while CipherSuites[j] != 0 do
+	    {	if CipherSuites[j].hellocli != 0 then
+		    i += CipherSuites[j].hellocli@(pch.bytes[i:]);
+		j += 1;
+	    }
+	}
+	// now go back and do the length of the extensions
+	_packbe(pch.bytes[k:2], _uint16(i-k-2));	// size of extensions
 	HashInit();
 	SendHandshake(hstate.buf, ClientHelloMsgT?size + i, ClientHello);
+    }
+
+    proc SendClientKey()
+    {
+	var pck: ClientKeyMsg;
+	var n: _uint;
+
+if db > 0 then debug.str("SendClientKey\n");
+	if state.cipher.sendkeyx == 0 then return;
+	// FIXME - get buf dynamic
+	pck = ClientKeyMsg(hstate.buf[HeaderT?size:]);
+	n = state.cipher.sendkeyx@(pck.bytes[0:]);
+	SendHandshake(hstate.buf, ClientKeyMsgT?size + n, ClientKeyExchange);
     }
 
     proc SendFinished()
     {   var pf: FinishedMsg;
 	var hash: [sha256.DigestSize]_byte;
 
- debug.str("SendFinished\n");
+if db > 0 then debug.str("SendFinished\n");
 	// FIXME - get buf dynamic
 	pf = FinishedMsg(hstate.buf[HeaderT?size:]);
 	HashSnapshot(hash);
-debug.dumpb("final hash=\n", hash, hash?len);
-debug.dumpb("msecret=\n", hstate.msecret, hstate.msecret?len);
-debug.dumpb("label=\n", LabelClient, LabelClient?len);
+if db > 2 then debug.dumpb("final hash=\n", hash, hash?len);
+if db > 2 then debug.dumpb("msecret=\n", hstate.msecret, hstate.msecret?len);
+if db > 2 then debug.dumpb("label=\n", LabelClient, LabelClient?len);
 	prf(hstate.msecret, hstate.msecret?len, LabelClient, LabelClient?len,
 		hash, hash?len, pf.bytes, FinishLength);
-debug.dumpb("final prf=\n", pf.bytes, FinishLength);
+if db > 2 then debug.dumpb("final prf=\n", pf.bytes, FinishLength);
 	SendHandshake(hstate.buf, FinishedMsgT?size + FinishLength, Finished);
+	state.mdone = true;
     }
 
     /*
@@ -557,10 +515,11 @@ debug.dumpb("final prf=\n", pf.bytes, FinishLength);
      */
     proc RecvServerHello(msg: @[]_byte, n: _uint)
     {   var psh: ServerHelloMsg;
-	var i, k: _uint;
+	var i, j, k: _uint;
 	var ciphercode: CipherCode;
+	var cipher: @CipherSuite;
 
-debug.str("RecvServerHello n="); debug.uint(n); debug.nl();
+if db > 0 then { debug.str("RecvServerHello n="); debug.uint(n); debug.nl(); }
 	// FIXME - check than length n is sufficient, how?
 	HashUpdate(msg, n);
 	psh = ServerHelloMsg(msg[0:]);
@@ -577,11 +536,17 @@ debug.str("RecvServerHello n="); debug.uint(n); debug.nl();
 	i += k+1;		// skip session id
 	// check cipher suite
 	ciphercode = CipherCode(_unpkbe(psh.bytes[i:2]));
-debug.str("cipher="); debug.hex16(_uint16(ciphercode)); debug.nl();
-	if !CheckCipherSupported(ciphercode) then
+if db > 1 then { debug.str("cipher="); debug.hex16(_uint16(ciphercode)); debug.nl(); }
+	j = 0; cipher = 0;
+	while CipherSuites[j] != 0 &&
+	      CipherSuites@[j].code != ciphercode do
+	    j += 1;
+	cipher = CipherSuites[j];
+	if cipher == 0 then
 	{   SendAlert(INSUFFICIENT_SECURITY, true);
 	    return;
 	}
+	state.cipher = cipher;
 	i += 2;
 	// check compression
 	if psh.bytes[i] != 0 then	// compression not allowed
@@ -589,7 +554,8 @@ debug.str("cipher="); debug.hex16(_uint16(ciphercode)); debug.nl();
 	    return;
 	}
 	i += 1;
-	// next are extensions
+	// next are extensions, if any
+	if i + ServerHelloMsgT?size >= n then return;
 	var ext: ExtensionCode;
 	var siz: _uint;
 	k = _unpkbe(psh.bytes[i:2]);	// length of extensions
@@ -597,21 +563,30 @@ debug.str("cipher="); debug.hex16(_uint16(ciphercode)); debug.nl();
 	while k > 0 do
 	{   ext = ExtensionCode(_unpkbe(psh.bytes[i:2]));
 	    siz = _unpkbe(psh.bytes[i+2:2]);
+if db > 1 then { debug.str("extension=0x"); debug.hex16(_uint16(ext)); debug.nl(); }
 	    if ext
 	    is CLIENT_CERTIFICATE_TYPE then
 	    {	// assert siz == 1;
-debug.str("client certificate type="); debug.uint8(psh.bytes[i+4]); debug.nl();
+if db > 2 then { debug.str("client certificate type="); debug.uint8(psh.bytes[i+4]); debug.nl(); }
 	    }
 	    is SERVER_CERTIFICATE_TYPE then
 	    {	// assert siz == 1;
-debug.str("server certificate type="); debug.uint8(psh.bytes[i+4]); debug.nl();
+if db > 2 then { debug.str("server certificate type="); debug.uint8(psh.bytes[i+4]); debug.nl(); }
 	    }
 	    is EC_POINT_FORMATS then
 	    {
-debug.str("ec point formats="); debug.hex16(_unpkbe(psh.bytes[i+4:2])); debug.nl();
+if db > 2 then { debug.str("ec point formats="); debug.hex16(_unpkbe(psh.bytes[i+4:2])); debug.nl(); }
 	    }
 	    is ELLIPTIC_CURVES then
 	    {
+	    }
+	    is RENEGOTIATION_INFO then
+	    {
+	    }
+	    else
+	    {	if cipher.hellosrv != 0 then
+		    cipher.hellosrv@(psh.bytes[i:], k);
+		// else ignore?
 	    }
 	    i += 4 + siz;
 	    k -= 4 + siz;
@@ -619,19 +594,35 @@ debug.str("ec point formats="); debug.hex16(_unpkbe(psh.bytes[i+4:2])); debug.nl
     }
 
     /*
+     * The server has sent us a ServerKeyExchange.
+     */
+    proc RecvServerKey(msg: @[]_byte, n: _uint): boolean
+    {   var psk: ServerKeyMsg;
+	var len: _uint;
+
+if db > 0 then { debug.str("RecvServerKey n="); debug.uint(n); debug.nl(); }
+	HashUpdate(msg, n);
+	if state.cipher.recvkeyx == 0 then
+	    SendAlert(UNEXPECTED_MESSAGE, true);
+	psk = ServerKeyMsg(msg[0:]);
+	len = _unpkbe(psk.length);
+	state.cipher.recvkeyx@(psk.bytes[0:], len);
+    }
+
+
+    /*
      * The server has sent us a ServerHelloDone.
      */
     proc RecvServerDone(msg: @[]_byte, n: _uint)
     {
-debug.str("RecvServerDone n="); debug.uint(n); debug.nl();
+if db > 0 then { debug.str("RecvServerDone n="); debug.uint(n); debug.nl(); }
 	HashUpdate(msg, n);
 	if hstate.sendcert && state.cipher.sendcert != 0 then
 	    state.cipher.sendcert@();
-	if state.cipher.sendkeyx != 0 then
-	    state.cipher.sendkeyx@();
+	SendClientKey();
 	if hstate.sendvrfy && state.cipher.sendcertv != 0 then
 	    state.cipher.sendcertv@();
-	CalculateKeyBlock();
+	CalculateKeyBlock();	// FIXME - default?
 	SwitchCipher();
 	SendFinished();
     }
@@ -645,15 +636,15 @@ debug.str("RecvServerDone n="); debug.uint(n); debug.nl();
 	var verify: [FinishLength]_byte;
 	var len: _uint;
 
-debug.str("RecvFinished n="); debug.uint(n); debug.nl();
+if db > 0 then { debug.str("RecvFinished n="); debug.uint(n); debug.nl(); }
 	pf = FinishedMsg(msg[0:]);
 	HashSnapshot(hash);
-debug.dumpb("final hash\n", hash, sha256.DigestSize);
+if db > 2 then debug.dumpb("final hash\n", hash, sha256.DigestSize);
 	prf(hstate.msecret, hstate.msecret?len, LabelServer, LabelServer?len,
 		hash, hash?len, verify, FinishLength);
-debug.dumpb("recvhash=\n", pf.bytes, n - FinishedMsgT?size);
-debug.dumpb("verify=\n", verify, FinishLength);
-
+if db > 2 then debug.dumpb("recvhash=\n", pf.bytes, n - FinishedMsgT?size);
+if db > 2 then debug.dumpb("verify=\n", verify, FinishLength);
+	state.pdone = true;
     }
 
     // Fragments must appear in order
@@ -662,8 +653,8 @@ debug.dumpb("verify=\n", verify, FinishLength);
     {	var phm: HandshakeMsg;
 	var xoff, xlen: _uint32;
 
-debug.str("RecvHandshake fragment foff="); debug.uint32(foff);
-debug.str(" flen="); debug.uint32(flen); debug.nl();
+if db > 0 then { debug.str("RecvHandshake fragment foff="); debug.uint32(foff);
+debug.str(" flen="); debug.uint32(flen); debug.nl(); }
 	if foff == 0 then   // first fragment, copy header + payload
 	{   hstate.buf[0:n] = msg[0:n];
 	}
@@ -697,20 +688,18 @@ debug.str(" flen="); debug.uint32(flen); debug.nl();
 	}
 	// FIXME - check fragoff == 0, etc
 	// len = _unpkbe(phm.fraglen);
+if db > 2 then { debug.str("Handshake type="); debug.uint8(_uint8(phm.type));
+debug.str(" len="); debug.uint(len); debug.nl(); }
 	if phm.type
 	is HelloVerifyRequest then
 	    RecvVerifyRequest(msg, n);
 	is ServerHello then
 	    RecvServerHello(msg, n);
+	is ServerKeyExchange then
+	    RecvServerKey(msg, n);
 	is Certificate then
 	{   if state.cipher.recvcert != 0 then
 		state.cipher.recvcert@(msg, n);
-	    else
-		SendAlert(UNEXPECTED_MESSAGE, true);
-	}
-	is ServerKeyExchange then
-	{   if state.cipher.recvkeyx != 0 then
-		state.cipher.recvkeyx@(msg, n);
 	    else
 		SendAlert(UNEXPECTED_MESSAGE, true);
 	}
@@ -728,42 +717,53 @@ debug.str(" flen="); debug.uint32(flen); debug.nl();
 
     proc Recv(msg: @[]_byte, n: _uint)
     {	var ph: Header;
-	var len: _uint;
+	var len: _uint;	// length from header
+	var k: _uint;	// acutal length after decryption
+	var i: _uint;
 	var epoch: _uint16;
 	var seqno: _uint64;
 
-	ph = Header(msg[0:dtls.HeaderT?size]);
-	// FIXME - check version, save seqno, etc.
-	epoch = _unpkbe(ph.seqno[0:2]);
-	seqno = _unpkbe(ph.seqno[2:6]);		// low 48 bits
-	len =   _unpkbe(ph.length);
-debug.str("\n====\nRecv seqno="); debug.uint16(epoch);
+if db > 0 then { debug.str("\n====\nRecv n="); debug.uint(n); debug.nl(); }
+	i = 0;
+	while i < n do
+	{   ph = Header(msg[i:dtls.HeaderT?size]);
+	    // FIXME - check version, save seqno, etc.
+	    epoch = _unpkbe(ph.seqno[0:2]);
+	    seqno = _unpkbe(ph.seqno[2:6]);		// low 48 bits
+	    len =   _unpkbe(ph.length);
+if db > 2 then { debug.str("\nseqno="); debug.uint16(epoch);
 debug.chr(','); debug.uint32(_uint32(seqno));
-debug.dumpb("\n", msg, _uint(n));
-        if state.rsecure then
-        {
-debug.str("Recv encrypted\n");
-	    len = state.cipher.decrypt@(ph, msg, len);
-        }
-	if ph.content
-	is Handshake then
-	{
-	    RecvHandshake(msg[HeaderT?size:], len);
-	}
-	is Alert then
-	{   var pam: AlertMsg;
-	    pam = AlertMsg(msg[HeaderT?size:]);
-debug.str("Recv Alert level="); debug.uint8(_uint8(pam.level));
-debug.str(" code="); debug.uint8(_uint8(pam.code)); debug.nl();
-	}
-	is ChangeCipher then
-	{
-debug.str("Recv ChangeCipher\n");
-	    state.rsecure = true;
-	}
-	is Data then
-	{
-debug.str("Recv Data\n");
+debug.str(" len="); debug.uint(len);
+debug.dumpb("\n", msg[i:], _min(n, len)+dtls.HeaderT?size); }
+	    k = len;
+	    if state.rsecure then
+	    {
+if db > 2 then debug.str("Recv encrypted\n");
+		k = state.cipher.decrypt@(ph, msg[i:], len);
+	    }
+	    i += dtls.HeaderT?size;
+
+	    if ph.content
+	    is Handshake then
+	    {
+		RecvHandshake(msg[i:], k);
+	    }
+	    is Alert then
+	    {   var pam: AlertMsg;
+		pam = AlertMsg(msg[i:]);
+if db > 1 then { debug.str("Recv Alert level="); debug.uint8(_uint8(pam.level));
+debug.str(" code="); debug.uint8(_uint8(pam.code)); debug.nl(); }
+	    }
+	    is ChangeCipher then
+	    {
+if db > 1 then debug.str("Recv ChangeCipher\n");
+		state.rsecure = true;
+	    }
+	    is Data then
+	    {
+if db > 1 then debug.str("Recv Data\n");
+	    }
+	    i += len;
 	}
     }
 
@@ -771,586 +771,5 @@ debug.str("Recv Data\n");
     {
 	SendClientHello(0, 0);
     }
-
-    /*
-     * ENCRYPTION ROUTINES
-     *
-     * FIXME - these should be imported from a separate file
-     */
-    import aes;
-    /*
-     * AES with CCM
-     */
-    package tls_aesccm
-    {
-
-    import aesccm;		// FIXME - import elsewhere?
-
-    /*
-     * Encryption/Decryption routines
-     * FIXME - this should be configurable
-     */
-	const alen = 13;    // additional header data length
-	const tlen = 8;     // tag (MAC) length
-	const nlen = 12;    // nonce length
-	const hlen = 8;     // explicit header length
-
-    proc Encrypt(ph: Header, msg: @[]_byte, len: _uint): _uint
-    {
-	var tmp: [256]_byte;	// FIXME - what length
-	var nonce: [nlen]_byte;
-	var adata: [alen]_byte;
-	var i, n: _uint;
-	var ctx: aesccm.State;
-
-	// copy payload
-	tmp[0:len] = msg[HeaderT?size:len];  // header not encrypted
-	// generate nonce
-	nonce[0:4] = state.ouriv;
-	_packbe(nonce[4:2], state.epoch);
-	_packbe(nonce[6:6], state.seqno);   // low 48 bits
-	// explicit part of nonce is sent before payload
-	i = HeaderT?size;
-	msg[i:hlen] = nonce[4:hlen];
-	i += hlen;
-	// generate additional data
-	adata[0:8] = ph.seqno;
-	adata[8]   = _uint8(ph.content);
-	adata[9:2] = ph.version;
-	_packbe(adata[11:2], len);   // length of payload
-debug.dumpb("nonce=\n", nonce, nlen);
-debug.dumpb("adata=\n", adata, alen);
-debug.dumpb("key=\n", state.ourkey, 16);
-debug.dumpb("clear payload=\n", tmp[0:len], len);
-	ctx.SetKey(state.ourkey, KEY128);
-	ctx.Start(alen, len, tlen, nonce, nlen);
-	ctx.Header(adata, alen);
-	ctx.Encrypt(tmp[0:len], msg[i:len], len);
-	ctx.Finish(msg[i+len:tlen], tlen);
-	return len + 8 + tlen;
-    }
-
-    proc Decrypt(ph: Header, msg: @[]_byte, len: _uint): _uint
-    {
-	var tmp: [256]_byte;	// FIXME - what length
-	var nonce: [nlen]_byte;
-	var adata: [alen]_byte;
-	var tdata: [tlen]_byte;
-	var i, n: _uint;
-	var ctx: aesccm.State;
-
-	n = len - (hlen + tlen);	// size of encrypted payload
-	i = HeaderT?size;		// offset into message
-	// generate nonce
-	nonce[0:4] = state.rmtiv;
-	nonce[4:hlen] = msg[i:hlen];
-	i += hlen;
-	// copy ciphertext
-	tmp[0:len] = msg[i:n];
-	// generate additional data
-	adata[0:8] = ph.seqno;
-	adata[8]   = _uint8(ph.content);
-	adata[9:2] = ph.version;
-	_packbe(adata[11:2], n);	// length of payload
-debug.dumpb("nonce=\n", nonce, nlen);
-debug.dumpb("adata=\n", adata, alen);
-debug.dumpb("key=\n", state.rmtkey, 16);
-debug.dumpb("cipher payload\n", tmp[0:n], n);
-	ctx.SetKey(state.rmtkey, KEY128);
-	ctx.Start(alen, n, tlen, nonce, nlen);
-	ctx.Header(adata, alen);
-	ctx.Decrypt(tmp[0:n], msg[HeaderT?size:n], n);
-	ctx.Finish(tdata, tlen);
-debug.dumpb("clear payload=\n", msg[HeaderT?size:n], n);
-	// FIXME - check tdata (MAC)
-debug.dumpb("tdata=\n", tdata, tlen);
-	return n;
-    }
-    }
-
-    /*
-     * AES with GCM
-     */
-    package tls_aesgcm
-    {
-
-    import aesgcm;		// FIXME - import elsewhere?
-
-    /*
-     * Encryption/Decryption routines
-     * FIXME - this should be configurable
-     */
-	const alen = 13;    // additional header data length
-	const tlen = 16;    // tag (MAC) length
-	const nlen = 12;    // nonce length
-	const hlen = 8;     // explicit header length
-
-    proc Encrypt(ph: Header, msg: @[]_byte, len: _uint): _uint
-    {
-	var tmp: [256]_byte;	// FIXME - what length
-	var nonce: [nlen]_byte;
-	var adata: [alen]_byte;
-	var i, n: _uint;
-	var ctx: aesgcm.State;
-
-	// copy payload
-	tmp[0:len] = msg[HeaderT?size:len];  // header not encrypted
-	// generate nonce
-	nonce[0:4] = state.ouriv;
-	_packbe(nonce[4:2], state.epoch);
-	_packbe(nonce[6:6], state.seqno);   // low 48 bits
-	// explicit part of nonce is sent before payload
-	i = HeaderT?size;
-	msg[i:hlen] = nonce[4:hlen];
-	i += hlen;
-	// generate additional data
-	adata[0:8] = ph.seqno;
-	adata[8]   = _uint8(ph.content);
-	adata[9:2] = ph.version;
-	_packbe(adata[11:2], len);   // length of payload
-debug.dumpb("nonce=\n", nonce, nlen);
-debug.dumpb("adata=\n", adata, alen);
-debug.dumpb("key=\n", state.ourkey, 16);
-debug.dumpb("clear payload=\n", tmp[0:len], len);
-	ctx.SetKey(state.ourkey, KEY128);
-	ctx.Start(nonce, nlen, adata, alen);
-	ctx.Encrypt(tmp[0:len], msg[i:len], len);
-	ctx.Finish(msg[i+len:tlen], tlen);
-	return len + 8 + tlen;
-    }
-
-    proc Decrypt(ph: Header, msg: @[]_byte, len: _uint): _uint
-    {
-	var tmp: [256]_byte;	// FIXME - what length
-	var nonce: [nlen]_byte;
-	var adata: [alen]_byte;
-	var tdata: [tlen]_byte;
-	var i, n: _uint;
-	var ctx: aesgcm.State;
-
-	n = len - (hlen + tlen);	// size of encrypted payload
-	i = HeaderT?size;		// offset into message
-	// generate nonce
-	nonce[0:4] = state.rmtiv;
-	nonce[4:hlen] = msg[i:hlen];
-	i += hlen;
-	// copy ciphertext
-	tmp[0:len] = msg[i:n];
-	// generate additional data
-	adata[0:8] = ph.seqno;
-	adata[8]   = _uint8(ph.content);
-	adata[9:2] = ph.version;
-	_packbe(adata[11:2], n);	// length of payload
-debug.dumpb("nonce=\n", nonce, nlen);
-debug.dumpb("adata=\n", adata, alen);
-debug.dumpb("key=\n", state.rmtkey, 16);
-debug.dumpb("cipher payload\n", tmp[0:n], n);
-	ctx.SetKey(state.rmtkey, KEY128);
-	ctx.Start(nonce, nlen, adata, alen);
-	ctx.Decrypt(tmp[0:n], msg[HeaderT?size:n], n);
-	ctx.Finish(tdata, tlen);
-debug.dumpb("clear payload=\n", msg[HeaderT?size:n], n);
-	// FIXME - check tdata (MAC)
-debug.dumpb("tdata=\n", tdata, tlen);
-	return n;
-    }
-    }
-
-    /*
-     * KEY EXCHANGE ROUTINES
-     *
-     */
-    /*
-     * Elliptic Curve with AES128CCM
-     */
-    package ec_ccm
-    {
-	import secp256r1;
-	alias secp256r1 as ecc;
-
-	const cert: [27]_uint8 =
-	{   0x30, 0x59,
-	    0x30, 0x13,
-	    0x06, 0x07,
-	    0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x02, 0x01,
-	    0x06, 0x08,
-	    0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x03, 0x01, 0x07,
-	    0x03, 0x42, 0x00, 0x04,
-	};
-	const keylen = 32;
-	const signlen = 32;
-
-	// FIXME - this is just wrong
-	proc KeyToASN1(key: @[]_uint32, len: _uint, out: @[]_byte): _uint
-	{   var i, j: _uint;
-	    var first: boolean;
-
-	    first = true;
-	    j = 0;
-	    i = len / _uint32?size;
-	    while i > 0 do
-	    {	i -= 1;
-	    	if key[i] != 0 then	// FIXME - is this correct?
-	    	{   if first then
-	    	    {   if (key[i] & 0x8000_0000) != 0 then
-	    	    	{   out[j] = 0;
-	    	    	    _packbe(out[j+1:4], key[i]);
-	    	    	    j += 5;
-	    	    	}
-	    	    	elif (key[i] & 0xFF80_0000) == 0 then
-	    	    	{   _packbe(out[j:3], key[i]);
-	    	    	    j += 3;
-	    	    	}
-	    	    	elif (key[i] & 0xFFFF_8000) == 0 then
-	    	    	{   _packbe(out[j:2], key[i]);
-	    	    	    j += 2;
-	    	    	}
-	    	    	elif (key[i] & 0xFFFF_FF80) == 0 then
-	    	    	{   out[j] = _uint8(key[i]);
-	    	    	    j += 1;
-	    	    	}
-	    	    	else
-			{   _packbe(out[j:4], key[i]);
-	    	    	    j += 4;
-	    		}
-	    		first = false;
-	    	    }
-	    	    else
-		    {	_packbe(out[j:4], key[i]);
-	    	    	j += 4;
-	    	    }
-	    	}
-	    }
-	    return j;
-	}
-
-	proc GenerateKey(epriv: @[]_byte, epubx: @[]_byte, epuby: @[]_byte,
-			 len: _uint)
-	{   var priv: [8]_uint32;
-	    var pub: ecc.Point;
-	    var rand: [32]_byte: align(4);
-
-	    do
-	    {   sys.Rand(rand, 32);
-		bignum.Import(priv, rand, 32);
-	    } while !ecc.IsKeyValid(priv);
-	    ecc.GenPubKey(priv, pub);
-	    bignum.Export(epriv, priv, 32);
-	    bignum.Export(epubx, pub.x, 32);
-	    bignum.Export(epuby, pub.y, 32);
-	}
-
-	proc CalcPMSecret(secret: @[]_byte): _uint
-	{   var priv: [8]_uint32;
-	    var pub, result: ecc.Point;
-
-debug.dumpb("our.epriv=\n", hstate.our.eprivkey, 32);
-debug.dumpb("rmt.epubx=\n", hstate.rmt.epubkeyx, 32);
-debug.dumpb("rmt.epuby=\n", hstate.rmt.epubkeyy, 32);
-
-	    bignum.Import(priv, hstate.our.eprivkey, 32);
-	    bignum.Import(pub.x, hstate.rmt.epubkeyx, 32);
-	    bignum.Import(pub.y, hstate.rmt.epubkeyy, 32);
-	    ecc.ECDH(pub, priv, result);
-	    bignum.Export(secret, result.x, 32);
-	    return 32;
-	}
-
-	proc SignHash(akey: @[]_byte, klen: _uint, ahash: @[]_byte, hlen: _uint,
-		      ar: @[]_byte, as: @[]_byte): _uint, _uint
-	{   var ns, nr: _uint;
-	    var key: [8]_uint32;
-	    var hash: [8]_uint32;
-	    var priv: [8]_uint32;
-	    var rand: [32]_byte: align(4);
-	    var r, s: [9]_uint32;
-
-	    bignum.Import(key, akey, 32);
-	    bignum.Import(hash, ahash, 32);
-debug.dumpb("pkey32=\n", key, 32);
-debug.dumpb("hash32=\n", hash, 32);
-	    do
-	    {   sys.Rand(rand, 32);
-		bignum.Import(priv, rand, 32);
-	    } while !ecc.Sign(key, hash, priv, r, s);
-debug.dumpb("rand=\n", rand, 32);
-debug.dumpb("r32=\n", r, 32);
-debug.dumpb("s32=\n", s, 32);
-	    nr = KeyToASN1(r, signlen, ar);
-debug.dumpb("ar=\n", ar@, nr);
-	    ns = KeyToASN1(s, signlen, as);
-debug.dumpb("as=\n", as@, ns);
-	    return nr, ns;
-	}
-
-	proc SendCertificate()
-	{   var pcm: CertificateMsg;
-	    const len = CertificateMsgT?size + 3 + cert?size + keylen*2;
-
-debug.str("ec.SendCertificate\n");
-	    // FIXME - get buf dynamic
-	    pcm = CertificateMsg(hstate.buf[HeaderT?size:]);
-	    // certificate list size
-	    _packbe(pcm.len[0:3], 3+27+32+32);
-	    // certificate size
-	    _packbe(pcm.bytes[0:3], 27+32+32);
-	    pcm.bytes[3:cert?len] = cert;
-	    pcm.bytes[30:keylen] =	  ecdsa_pub_key_x;	// FIXME
-	    pcm.bytes[30+keylen:keylen] = ecdsa_pub_key_y;	// FIXME
-	    SendHandshake(hstate.buf, len, Certificate);
-	}
-
-	proc SendKeyExchange()
-	{   var pck: ClientKeyMsg;
-	    var len: _uint = ClientKeyMsgT?size + 1 + 1 + keylen*2;
-
-debug.str("ec.SendKeyExchange\n");
-	    // FIXME - get buf dynamic
-	    pck = ClientKeyMsg(hstate.buf[HeaderT?size:]);
-	    pck.bytes[0] = 1 + keylen*2;
-	    pck.bytes[1] = 4;		// indicate uncompressed point
-	    GenerateKey(hstate.our.eprivkey,
-			hstate.our.epubkeyx, hstate.our.epubkeyy, keylen);
-debug.dumpb("our.epubx=\n", hstate.our.epubkeyx, 32);
-debug.dumpb("our.epuby=\n", hstate.our.epubkeyy, 32);
-	    pck.bytes[2:keylen] = hstate.our.epubkeyx;
-	    pck.bytes[2+keylen:keylen] = hstate.our.epubkeyy;
-	    SendHandshake(hstate.buf, len, ClientKeyExchange);
-	}
-
-	proc SendCertificateVerify()
-	{   var pcv: CertVerifyMsg;
-	    var nr, ns, len: _uint;
-	    var hash: [sha256.DigestSize]_byte;
-	    var r: [33]_byte;	// ASN.1 format, could have 1 extra byte
-	    var s: [33]_byte;
-
-debug.str("ec.SendCertificateVerify\n");
-	    // save hash context so hashing can continue
-	    HashSnapshot(hash);
-debug.dumpb("final hash=\n", hash, hash?len);
-	    // sign with our private key
-	    // stuff results r,s directly into buffer
-	    nr, ns = SignHash(ecdsa_priv_key, ecdsa_priv_key?len,
-			      hash, hash?len,
-			      r, s);
-//		     pcv.bytes[8:len_r], pcv.bytes[10+len_r:len_s]);
-	    len = CertVerifyMsgT?size + 1 + 1 + 2 + 2 + 2 + 2 + nr + ns;
-	    // FIXME - get buf dynamic
-	    pcv = CertVerifyMsg(hstate.buf[HeaderT?size:]);
-	    pcv.bytes[0] = _uint8(SignatureHashAlgo.SHA256);
-	    pcv.bytes[1] = _uint8(SignatureHashAlgo.ECDSA);
-	    _packbe(pcv.bytes[2:2], 2 + 2 + 2 + nr + ns);
-	    // ASN.1 stuff follows
-	    pcv.bytes[4] = 0x30;	// ASN.1 sequence
-	    pcv.bytes[5] = 2 + 2 + nr + ns;
-	    pcv.bytes[6] = 0x02;	// ASN.1 int
-	    pcv.bytes[7] = nr;
-	    pcv.bytes[8:nr] = r[0:nr];
-	    pcv.bytes[8+nr] = 0x02;	// ASN.1 int
-	    pcv.bytes[9+nr] = ns;
-	    pcv.bytes[10+nr:ns] = s[0:ns];
-	    SendHandshake(hstate.buf, len, CertificateVerify);
-	}
-
-	/*
-	 * The server has send us a Certificate which contains:
-	 * 1. the ASN.1 description of the certificate
-	 * 2. the server's static public key
-	 */
-	proc RecvCertificate(msg: @[]_byte, n: _uint)
-	{   var pcm: CertificateMsg;
-	    var tlen, clen, klen: _uint32;
-	    var i, j: _uint;
-
-debug.str("RecvCertificate n="); debug.uint(n); debug.nl();
-	    HashUpdate(msg, n);
-	    pcm = CertificateMsg(msg[0:]);
-	    tlen = _unpkbe(pcm.len[0:3]);
-debug.str("tlen="); debug.uint32(tlen); debug.nl();
-	    i = 0;
-	    while i < tlen do
-	    {
-	        clen = _unpkbe(pcm.bytes[i:3]);
-debug.str("clen="); debug.uint32(clen); debug.nl();
-		i += 3;     // size of clen
-	    // FIXME - check certificate, how?
-	    asn1.Dump(pcm.bytes[i:clen], clen);
-	    // FIXME - ugly temporary hack
-		if clen <= 91 then	    // tinydtls cert
-		{   j = i + 27;    // expect 27 bytes of asn1 header
-		    klen = 32;
-		}
-		elif clen < 400	then	    // openssl cert
-		{   j = i + 231;
-		    klen = 32;
-		}
-		else			    // mbedtls cert
-		{   j = i + 220;
-		    klen = 48;
-		}
-		hstate.rmt.pubkeyx = pcm.bytes[j:klen];
-		hstate.rmt.pubkeyy = pcm.bytes[j+klen:klen];
-debug.dumpb("rmt.pubx=\n", hstate.rmt.pubkeyx, klen);
-debug.dumpb("rmt.puby=\n", hstate.rmt.pubkeyy, klen);
-	    // FIXME - verify key is a nop for now
-		i += clen;
-	    }
-	}
-
-	/*
-	 * The server has sent us ServerKeyExchange which contains:
-	 * 1. a description of the curve
-	 * 2. the server's ephemeral public key
-	 * 3. a signature
-	 */
-	proc RecvServerKey(msg: @[]_byte, n: _uint)
-	{  var psk: ServerKeyMsg;
-
-debug.str("RecvServerKey n="); debug.uint(n); debug.nl();
-	    HashUpdate(msg, n);
-	    // FIXME - check length is sufficient
-	    psk = ServerKeyMsg(msg[0:]);
-	    if CurveType(psk.bytes[0]) != NAMED_CURVE then
-	    {	SendAlert(HANDSHAKE_FAILURE, true);
-		return;
-	    }
-	    if  EllipticCurve(_unpkbe(psk.bytes[1:2])) != SECP256R1 then
-	    {	SendAlert(HANDSHAKE_FAILURE, true);
-		return;
-	    }
-	    if psk.bytes[3] != 1 + 2*32 then	// format and two keys
-	    {	SendAlert(HANDSHAKE_FAILURE, true);
-		return;
-	    }
-	    if psk.bytes[4] != 4 then		// format == uncompressed
-	    {	SendAlert(DECODE_ERROR, true);
-		return;
-	    }
-	    hstate.rmt.epubkeyx = psk.bytes[5:32];
-	    hstate.rmt.epubkeyy = psk.bytes[5+32:32];
-debug.dumpb("rmt.epubx=\n", hstate.rmt.epubkeyx, 32);
-debug.dumpb("rmt.epuby=\n", hstate.rmt.epubkeyy, 32);
-	    // FIXME - parse ecdsa signature
-	    // FIXME - verify signature with remote's static public keys
-	}
-
-	/*
-	 * The server has send us a CertificateRequest which contains:
-	 * 1. A list of certificate types
-	 * 2. A list of signing algorithms
-	 */
-	proc RecvCertificateRequest(msg: @[]_byte, n: _uint)
-	{
-debug.str("RecvCertificateRequest n="); debug.uint(n); debug.nl();
-	    HashUpdate(msg, n);
-	    hstate.sendcert = true;
-	    hstate.sendvrfy = true;     // FIXME - where should this be set?
-	}
-
-	const suite: CipherSuite =
-	{   ECDHE_ECDSA_WITH_AES_128_CCM_8,
-	    SendCertificate,
-	    SendKeyExchange,
-	    SendCertificateVerify,
-	    RecvCertificate,
-	    RecvServerKey,
-	    RecvCertificateRequest,
-	    CalcPMSecret,
-	    tls_aesccm.Encrypt,
-	    tls_aesccm.Decrypt
-	};
-    }
-
-    /*
-     * Pre-shared key with AES128CCM
-     */
-    package psk
-    {
-	const DefaultID =  "Client_identity";
-	const DefaultKey = "secretPSK";
-	const MaxPSKLen = 16;
-
-	proc CalcPMSecret(secret: @[]_byte): _uint
-	{   var psk: [MaxPSKLen]_byte;
-	    var klen: _uint;
-
-	    // FIXME - use real key management
-	    klen = _zlen(DefaultKey);
-	    psk[0:klen] = DefaultKey[0:klen];
-
-	    _packbe(secret[0:2], klen);
-	    _zero(secret[2:klen]);
-	    _packbe(secret[2+klen:2], klen);
-	    secret[2+klen+2:klen] = psk[0:klen];
-	    return (_uint16?size + klen) * 2;
-	}
-
-	proc SendKeyExchange()
-	{   var pck: ClientKeyMsg;
-	    var len: _uint;
-debug.str("psk.SendKeyExchange\n");
-	    // FIXME - get buf dynamic
-	    pck = ClientKeyMsg(hstate.buf[HeaderT?size:]);
-	    len = _zlen(DefaultID);
-	    _packbe(pck.bytes[0:2], _uint16(len));
-	    pck.bytes[2:len] = DefaultID[0:len];
-	    len += 2;
-	    SendHandshake(hstate.buf, ClientKeyMsgT?size + len, ClientKeyExchange);
-        }
-
-	const suite: CipherSuite =
-	{   PSK_WITH_AES_128_CCM_8,
-	    0,			// SendCertificate
-	    SendKeyExchange,
-	    0,			// SendCertificateVerify
-	    0,			// RecvCertificate
-	    0,			// RecvServerKey
-	    0,			// RecvCertificateRequest
-	    CalcPMSecret,
-	    tls_aesccm.Encrypt,
-	    tls_aesccm.Decrypt
-	};
-    }
-
-    /*
-     * Elliptic Curve with AES128GCM
-     */
-    package ec_gcm
-    {
-
-	const suite: CipherSuite =
-	{   ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
-	    ec_ccm.SendCertificate,
-	    ec_ccm.SendKeyExchange,
-	    ec_ccm.SendCertificateVerify,
-	    ec_ccm.RecvCertificate,
-	    ec_ccm.RecvServerKey,
-	    ec_ccm.RecvCertificateRequest,
-	    ec_ccm.CalcPMSecret,
-	    tls_aesgcm.Encrypt,
-	    tls_aesgcm.Decrypt
-	};
-    }
-
-    const cipherlist: []@CipherSuite =
-    {   ec_ccm.suite,
-	psk.suite,
-	ec_gcm.suite
-    };
-
-    proc CheckCipherSupported(cipher: CipherCode): boolean
-    {   var i: _uint;
-
-	for i from 0 to cipherlist?len-1 do
-	{   if cipherlist[i].code == cipher then
-	    {	state.cipher = cipherlist[i];
-		return true;
-	    }
-	}
-	return false;
-    }
-
-
 }
 // vim: ts=8 sw=4 noet nowrap

@@ -210,6 +210,7 @@ package lowpan
     type LPBlock(Block):
     {   ubid:     BlockID;      // block ID of upper block (IPv6)
 	uifn:     _uint8;       // upper interface number
+	haspan:   boolean;	// PAN has been assigned
 	seqno:    _uint8;       // frame sequence number
 	fragtag:  _uint16;      // unique tag for fragments
 	panid:    _uint16;      // PAN ID
@@ -238,6 +239,7 @@ if db > 0 then { debug.str("lowpan.SetShortAddr: "); debug.hex16(adr); debug.nl(
     {
 if db > 0 then { debug.str("lowpan.SetPanId: "); debug.hex16(adr); debug.nl();}
 	ib.panid = adr;
+	ib.haspan = true;
     }
 
     proc (ib: pLPBlock) SetContext(pfx: @[8]_uint8, inx: _uint)
@@ -1179,12 +1181,14 @@ if db > 1 then {
 debug.dumpb("lowpan.USend dstadr=", pb[0:8], 8); }
 	info.dstadr = pb[0:8];
 	mb.ShrinkHead(8);
+	info.srcpan = ib.panid;
+	info.dstpan = ib.panid;
 	if info.dstadr == ipv6.WPANMulticast then // multicast/broadcast
+	{   if !ib.haspan then info.dstpan = ieee802154.BroadcastPAN;
 	    info.flags = {.wack=false};
+	}
 	else
 	    info.flags = {.wack=true};
-	info.dstpan = ib.panid;
-	info.srcpan = ib.panid;
 	info.srcadr = ib.laddr;
 	/*
 	 * flip local/univeral bits

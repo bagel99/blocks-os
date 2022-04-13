@@ -1,7 +1,7 @@
 /*
  * IEEE 802.15.4 MAC Layer
  *
- * Copyright (c) 2014-2016, Brian G. Lucas.  See LICENSE file.
+ * Copyright (c) 2014-2022, Brian G. Lucas.  See LICENSE file.
  *
  * From IEEE 802.15.4-2011:
  * [T]he leftmost bit is transmitted first in time. Bits within each
@@ -423,16 +423,12 @@ frame[info.datoff:], info.datlen);
 	    h0.se = true;
 	h1 = {.vers=1};
 	n = 3;
+	// Next, the destination PAN
 	if info.dstpan != 0 then
 	{   _packle(frame[n:2], info.dstpan);
 	    n += 2;
-	    if info.srcpan == info.dstpan then
-		h0.ip = true;
-	    else
-	    {	_packle(frame[n:2], info.srcpan);
-		n += 2;
-	    }
 	}
+	// Next, the destination address, short or long
 	if info.dstadr[3:2] == ShortUUID[3:2] then
 	{   h1.dm = Short;
 	    AddrShortFromLong(frame[n:2], info.dstadr);
@@ -443,10 +439,16 @@ frame[info.datoff:], info.datlen);
 	    RevAddrLong(frame[n:8], info.dstadr);
 	    n += 8;
 	}
-	if info.srcpan != 0 && !h0.ip then
-	{   _packle(frame[n:2], info.srcpan);
-	    n += 2;
+	// Next, the source PAN, if not compressed
+	if info.srcpan != 0 then
+	{   if info.srcpan == info.dstpan then
+		h0.ip = true;
+	    else
+	    {   _packle(frame[n:2], info.srcpan);
+		n += 2;
+	    }
 	}
+	// Next, the source address, short or long
 	if info.srcadr[3:2] == ShortUUID[3:2]  then
 	{   h1.sm = Short;
 	    AddrShortFromLong(frame[n:2], info.srcadr);
@@ -457,14 +459,17 @@ frame[info.datoff:], info.datlen);
 	    RevAddrLong(frame[n:8], info.srcadr);
 	    n += 8;
 	}
+	// Frame control is done, go back and do the first 3 bytes
 	frame[0] = _uint8(h0);
 	frame[1] = _uint8(h1);
 	frame[2] = info.seqno;
+	// After addressing, do any security header
 	if EnableEncryption && info.flags.secctl != {.level=NONE} then
 	{   n += SecuritySize[info.flags.secctl.keymode]; // security header
 	    info.datoff = n;
 	    info.datlen = len;
 	}
+	// Finally, the payload
 	frame[n:len] = data[0:len];
 	n += len;
 	if EnableEncryption && info.flags.secctl != {.level=NONE} then

@@ -18,18 +18,18 @@ package secp384r1
 
     const W = 384;					// width in bits
     const K = (W+(bn.Base?bits)-1)/bn.Base?bits;	// width in chunks
-    type Vect: [K]_uint32;
-    type Vect1: [K+1]_uint32;
-    type Vect2: [K*2]_uint32;
-    type Point: { x: Vect; y: Vect; };
-    const P: Vect = {	0xFFFFFFFF, 0x00000000, 0x00000000, 0xFFFFFFFF,
+    type MPInt: [K]_uint32;
+    type MPInt1: [K+1]_uint32;
+    type MPInt2: [K*2]_uint32;
+    type Point: { x: MPInt; y: MPInt; };
+    const P: MPInt = {	0xFFFFFFFF, 0x00000000, 0x00000000, 0xFFFFFFFF,
 			0xFFFFFFFE, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF,
 			0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF };
     // the parameters a and b of the elliptic curve, a = -3
-    const A: Vect = {	0xFFFFFFFC, 0x00000000, 0x00000000, 0xFFFFFFFF,
+    const A: MPInt = {	0xFFFFFFFC, 0x00000000, 0x00000000, 0xFFFFFFFF,
 			0xFFFFFFFE, 0xFFFFFFFF,	0xFFFFFFFF, 0xFFFFFFFF,
 			0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF };
-    const B: Vect = {	0xD3EC2AEF, 0x2A85C8ED, 0x8A2ED19D, 0xC656398D,
+    const B: MPInt = {	0xD3EC2AEF, 0x2A85C8ED, 0x8A2ED19D, 0xC656398D,
 			0x5013875A, 0x0314088F, 0xFE814112, 0x181D9C6E,
 			0xE3F82D19, 0x988E056B, 0xE23EE7E4, 0xB3312FA7 };
     const G: Point = { {0x72760AB7, 0x3A545E38, 0xBF55296C, 0x5502F25D,
@@ -38,11 +38,11 @@ package secp384r1
 		       {0x90EA0E5F, 0x7A431D7C, 0x1D7E819D, 0x0A60B1CE,
 			0xB5F0B8C0, 0xE9DA3113, 0x289A147C, 0xF8F41DBD,
 			0x9292DC29, 0x5D9E98BF, 0x96262C6F, 0x3617DE4A} };
-    const N: Vect1 = {  0xCCC52973, 0xECEC196A, 0x48B0A77A, 0x581A0DB2,
+    const N: MPInt1 = {  0xCCC52973, 0xECEC196A, 0x48B0A77A, 0x581A0DB2,
 			0xF4372DDF, 0xC7634D81, 0xFFFFFFFF, 0xFFFFFFFF,
 			0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF,
 			0x00000000 };
-    const order_mu: Vect1 = 	// µ in Barrett reduction
+    const order_mu: MPInt1 = 	// µ in Barrett reduction
 		    {	0x333AD68D, 0x1313E695, 0xB74F5885, 0xA7E5F24D,
 			0x0BC8D220, 0x389CB27E, 0x00000000, 0x00000000,
 			0x00000000, 0x00000000, 0x00000000, 0x00000000,
@@ -54,8 +54,8 @@ package secp384r1
     {
 	// r = x mod P
 	// double length vector in x (x must be writable)
-	proc ModP(r: @Vect, x: @Vect2)
-	{   var s: Vect;
+	proc ModP(r: @MPInt, x: @MPInt2)
+	{   var s: MPInt;
 
 	    r@ = x[0:K];	// t
 	    s[0:4] = { 0 };

@@ -1,0 +1,49 @@
+/*
+ * Pre-shared key with AES128CCM
+ */
+package psk
+{
+	const DefaultID =  "Client_identity";
+	const DefaultKey = "secretPSK";
+	const MaxPSKLen = 16;
+
+	proc CalcPMSecret(secret: @[]_byte): _uint
+	{   var psk: [MaxPSKLen]_byte;
+	    var klen: _uint;
+
+	    // FIXME - use real key management
+	    klen = _zlen(DefaultKey);
+	    psk[0:klen] = DefaultKey[0:klen];
+
+	    _packbe(secret[0:2], klen);
+	    _zero(secret[2:klen]);
+	    _packbe(secret[2+klen:2], klen);
+	    secret[2+klen+2:klen] = psk[0:klen];
+	    return (_uint16?size + klen) * 2;
+	}
+
+	proc SendKeyExchange(bp: @[]_byte): _uint
+	{
+	    var len: _uint;
+	    len = _zlen(DefaultID);
+	    _packbe(bp[0:2], len);
+	    bp[2:len] = DefaultID[0:len];
+	    return 2 + len;
+        }
+
+	const suite: CipherSuite =
+	{   PSK_WITH_AES_128_CCM_8,
+	    {},
+	    0,			// hellocli
+	    0,			// hellosrv
+	    0,			// SendCertificate
+	    SendKeyExchange,
+	    0,			// SendCertificateVerify
+	    0,			// RecvCertificate
+	    0,			// RecvServerKey
+	    0,			// RecvCertificateRequest
+	    CalcPMSecret,
+	    tls_aesccm.Encrypt,
+	    tls_aesccm.Decrypt
+	};
+}

@@ -14,7 +14,7 @@ package ed25519
     {	// Base Point Order operations
     	// Base Point Order is
     	// 0x10000000_00000000_00000000_00000000_14DEF9DE_A2F79CD6_5812631A_5CF5D3ED
-	const bpoxn: [16]Vect =	// Base Point multiples
+	const bpoxn: [16]MPInt =	// Base Point multiples
 	{   { 0, 0, 0, 0, 0, 0, 0, 0 },
 	    { 0x5CF5D3ED,0x5812631A,0xA2F79CD6,0x14DEF9DE,0,0,0,0x10000000 },
 	    { 0xB9EBA7DA,0xB024C634,0x45EF39AC,0x29BDF3BD,0,0,0,0x20000000 },
@@ -33,8 +33,8 @@ package ed25519
 	    { 0x72676AE3,0x2913CE8B,0x8C82308F,0x3910A40B,1,0,0,0xF0000000 }
 	};
 
-	proc ReduceHi(r: @Vect, b: Base, x: @Vect)
-	{   var t: Vect;
+	proc ReduceHi(r: @MPInt, b: Base, x: @MPInt)
+	{   var t: MPInt;
 	    var c: Basex2;
 	    var h: Base;
 	    const minusR: [8]Base = {
@@ -61,7 +61,7 @@ package ed25519
 
 	}
 
-	proc Reduce(r: @Vect, x: @Vect2)
+	proc Reduce(r: @MPInt, x: @MPInt2)
 	{
 	// FIXME - make a for loop?
 	    ReduceHi(x[7:8], x[15], x[7:8]);
@@ -74,21 +74,21 @@ package ed25519
 	    ReduceHi(r,      x[08], x[0:8]);
 	}
 
-	proc AddRed(r: @Vect, x: @Vect, y: @Vect)
+	proc AddRed(r: @MPInt, x: @MPInt, y: @MPInt)
 	{   var c: Base;
 
 	    c = bn.Add(r, x, y, K);
 	    ReduceHi(r, c, r);
 	}
 
-	proc MulRed(r: @Vect, x: @Vect, y: @Vect)
-	{   var t: Vect2;
+	proc MulRed(r: @MPInt, x: @MPInt, y: @MPInt)
+	{   var t: MPInt2;
 
 	    bn.Mul(t, x, y, K);
 	    Reduce(r, t);
 	}
 
-	proc ModP(x: @Vect)
+	proc ModP(x: @MPInt)
 	{	var c: Base;
 
 	    c = bn.Sub(x, x, bpoxn[x[7] >> 28], K);
@@ -98,19 +98,19 @@ package ed25519
     // precomputed: (y+x,y-x,2dxy)
 
     type APoint:	// Affine point coordinates
-    {	x: Vect;
-	y: Vect;
+    {	x: MPInt;
+	y: MPInt;
     };
     type PPoint:	// Projective coordinates, X=x/z, Y=y/z
-    {	x: Vect;
-	y: Vect;
-	z: Vect;
+    {	x: MPInt;
+	y: MPInt;
+	z: MPInt;
     };
     type XPoint:	// Extended coordinates, X=x/z, Y=y/z, xy=zt
-    {	x: Vect;
-	y: Vect;
-	z: Vect;
-	t: Vect;
+    {	x: MPInt;
+	y: MPInt;
+	z: MPInt;
+	t: MPInt;
     };
     const Point1: XPoint =
     {	.x = { 0, 0, 0, 0, 0, 0, 0, 0 },
@@ -146,7 +146,7 @@ proc PrintXPoint(s: @[]_byte, p: @XPoint)
 
     // Point addition
     proc Add(r: @XPoint, p: @XPoint, q: @XPoint)
-    {	var a, b, c, d, e: Vect;
+    {	var a, b, c, d, e: MPInt;
 
 	f.SubRed(a, p.y, p.x);		// py-px
 	f.SubRed(b, q.y, q.x);		// qy-qx
@@ -169,7 +169,7 @@ proc PrintXPoint(s: @[]_byte, p: @XPoint)
 var once: boolean = true;
     // Point doubling
     proc Double(r: @XPoint, p: @XPoint)
-    {	var a, b, c, d, e: Vect;
+    {	var a, b, c, d, e: MPInt;
 
 	f.SqrRed(a, p.x);		// A = x²
 	f.SqrRed(b, p.y);		// B = y²
@@ -197,7 +197,7 @@ if once then { PrintWords("E", e); PrintWords("F", b);
 once = false;
     }
 
-    proc PointMultiply(r: @XPoint, p: @XPoint, e: @Vect)
+    proc PointMultiply(r: @XPoint, p: @XPoint, e: @MPInt)
     {   var s, t: XPoint;
     	var b: Base;
 	var i, j: _uint;
@@ -235,7 +235,7 @@ once = false;
 	r@ = t;
     }
 
-    proc BasePointMultiply(r: @XPoint, x: @Vect)
+    proc BasePointMultiply(r: @XPoint, x: @MPInt)
     {
 	PointMultiply(r, BasePoint, x);
 /*
@@ -247,7 +247,7 @@ once = false;
 */
     }
 
-    proc ImportDigest(r: @Vect, x: @[sha512.DigestSize]_byte)
+    proc ImportDigest(r: @MPInt, x: @[sha512.DigestSize]_byte)
     {
 	var t: [16]Base;
 
@@ -283,7 +283,7 @@ once = false;
     {
 	var hash: [sha512.DigestSize]_byte;
 	var ctx: sha512.Context;
-	var a, r, t: Vect;
+	var a, r, t: MPInt;
 	var R: XPoint;
 
 	ctx.Start();

@@ -1,0 +1,110 @@
+
+// Convert RFC1421 strings (BASE64) to binary
+
+package base64
+{
+    // values 0..63 are legal, 253 are whitespace, 254 is pad, 255 are illegal
+    const dectable: [256]_byte =
+    {
+    255,255,255,255,255,255,255,255,255,255,253,255,255,255,255,255,
+    255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,
+    255,255,255,255,255,255,255,255,255,255,255, 62,255,255,255, 63,
+     52, 53, 54, 55, 56, 57, 58, 59, 60, 61,255,255,255,254,255,255,
+    255,  0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14,
+     15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,255,255,255,255,255,
+    255, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40,
+     41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51,255,255,255,255,255,
+    255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,
+    255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,
+    255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,
+    255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,
+    255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,
+    255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,
+    255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,
+    255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255
+    };
+
+    proc decode(s: @[]_byte, ns: _uint, b: @[]_byte, nb: _uint): _uint
+    {   var i, j, k, p: _uint;
+	var t, c: _uint;
+
+	i = 0;	// input index
+	j = 0;	// output index
+	t = 0;
+	k = 0;	// count of 6-bit chars in t
+	p = 0;	// count of pad chars
+	while i < ns do
+	{   c = dectable[s[i]];
+	  exit c == 255;		// illegal char
+	    if c <= 63 then		// normal char
+	    {   if p > 0 then return 0;	// pad not at end
+		t = (t << 6) | c;
+		k += 1;
+		if k == 4 then
+		{   if j + 3 > nb then return 0;// buffer overflow
+		    _packbe(b[j:3], t);
+		    j += 3;
+		    k = 0;
+		    t = 0;
+		}
+	    }
+	    elif c == 254 then		// pad char
+		p += 1;
+	    // else whitespace just ignore
+	    i += 1;
+	}
+//debug.str("k="); debug.uint(k); debug.str(" p="); debug.uint(p);
+//debug.str(" t=0x"); debug.hex32(_uint32(t)); debug.nl();
+	if k > 0 then	// t contains some chars
+	{   if k + p != 4 then return 0;	// wrong number of pads
+	    if j + k > nb then return 0;	// buffer overflow
+	    if k == 2 then
+		b[j]= _uint8(t>>4);
+	    else	// k == 3
+		_packbe(b[j:2], t>>2);
+	    j += k-1;
+	}
+	return j;
+    }
+
+    const enctable: [64]_byte =
+    //                111111111111111122222222222222223333333333333333
+    //0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF
+     'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+
+    proc encode(b: @[]_byte, nb: _uint, s: @[]_byte, ns: _uint): _uint
+    {	var i, j, k: _uint;
+	var t: _uint;
+
+	// FIXME - check for buffer overflow
+	i = 0;
+	j = 0;
+	k = (nb / 3) * 3;
+	while i < k do
+	{   t = _unpkbe(b[i:3]);
+	    s[j] =   enctable[(t>>18) & 0x3F];
+	    s[j+1] = enctable[(t>>12) & 0x3F];
+	    s[j+2] = enctable[(t>>6)  & 0x3F];
+	    s[j+3] = enctable[ t      & 0x3F];
+	    i += 3;
+	    j += 4;
+	}
+	if i < nb then
+	{
+	    t = b[i] << 8;
+	    i += 1;
+	    if i < nb then
+		t |= b[i];
+//debug.str("need pad t=0x"); debug.hex32(_uint32(t)); debug.nl();
+	    s[j] =   enctable[(t>>10) & 0x3F];
+	    s[j+1] = enctable[(t>>4)  & 0x3F];
+	    if i < nb then
+		s[j+2] = enctable[(t<<2) & 0x3F];
+	    else
+		s[j+2] = '=';
+	    s[j+3] = '=';
+	    j += 4;
+	}
+	return j;
+    }
+}

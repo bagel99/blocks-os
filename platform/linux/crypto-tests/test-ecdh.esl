@@ -7,6 +7,10 @@
 import debug;
 alias debug as err;
 
+proc Rand(out: @[]_byte, len: _uint)	// NOT USED
+{
+}
+
 proc PrintN(msg: @[]_byte, x: @[]_uint32, n: _uint)
 {   var i: _uint;
 
@@ -78,7 +82,7 @@ package secp192r1
     var pmsecret: [K*8+1]_byte;
 
     proc TestEcdh()
-    {   var priv: Vect;
+    {   var priv: MPInt;
 	var pub: Point;
 	var out: Point;
 	var i: _uint;
@@ -131,7 +135,7 @@ package secp224r1
     var pmsecret: [K*8+1]_byte;
 
     proc TestEcdh()
-    {   var priv: Vect;
+    {   var priv: MPInt;
 	var pub: Point;
 	var out: Point;
 	var i: _uint;
@@ -183,7 +187,7 @@ package secp256r1
     var pmsecret: [K*8+1]_byte;
 
     proc TestEcdh()
-    {   var priv: Vect;
+    {   var priv: MPInt;
 	var pub: Point;
 	var out: Point;
 	var i: _uint;
@@ -253,7 +257,7 @@ package secp384r1
     var pmsecret: [K*8+1]_byte;
 
     proc TestEcdh()
-    {   var priv: Vect;
+    {   var priv: MPInt;
 	var pub: Point;
 	var out: Point;
 	var i: _uint;
@@ -342,7 +346,7 @@ package secp521r1
     var pmsecret: [K*8+1]_byte;
 
     proc TestEcdh()
-    {   var priv: Vect;
+    {   var priv: MPInt;
 	var pub: Point;
 	var out: Point;
 	var i: _uint;

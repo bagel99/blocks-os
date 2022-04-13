@@ -49,11 +49,12 @@ package thread
     }: packed, lsb;
 
     type DeviceState:
-    (	Disabled = 0,	// Thread interface is disabled.
-	Detached = 1,	// Thread interface is not attached to a partition.
-	Child    = 2,	// Thread interface participating as a Child.
-	Router   = 3,	// Thread interface participating as a Router.
-	Leader   = 4	// Thread interface participating as a Leader.
+    (	Reset    = 0,	// Needs commissioning
+	Disabled = 1,	// Thread interface is disabled.
+	Detached = 2,	// Thread interface is not attached to a partition.
+	Child    = 3,	// Thread interface participating as a Child.
+	Router   = 4,	// Thread interface participating as a Router.
+	Leader   = 5	// Thread interface participating as a Leader.
     );
 
     type ParentRequestState:

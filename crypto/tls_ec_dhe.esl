@@ -1,0 +1,260 @@
+    /*
+     * Elliptic Curve Diffie-Hellman
+     */
+    package ec_dhe
+    {
+	import secp256r1;
+	alias secp256r1 as ecc;
+
+	const cert: [27]_uint8 =
+	{   0x30, 0x59,
+	    0x30, 0x13,
+	    0x06, 0x07,
+	    0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x02, 0x01,
+	    0x06, 0x08,
+	    0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x03, 0x01, 0x07,
+	    0x03, 0x42, 0x00, 0x04,
+	};
+	const keylen = 32;
+	const signlen = 32;
+
+	// FIXME - this is just wrong
+	proc KeyToASN1(key: @[]_uint32, len: _uint, out: @[]_byte): _uint
+	{   var i, j: _uint;
+	    var first: boolean;
+
+	    first = true;
+	    j = 0;
+	    i = len / _uint32?size;
+	    while i > 0 do
+	    {	i -= 1;
+	    	if key[i] != 0 then	// FIXME - is this correct?
+	    	{   if first then
+	    	    {   if (key[i] & 0x8000_0000) != 0 then
+	    	    	{   out[j] = 0;
+	    	    	    _packbe(out[j+1:4], key[i]);
+	    	    	    j += 5;
+	    	    	}
+	    	    	elif (key[i] & 0xFF80_0000) == 0 then
+	    	    	{   _packbe(out[j:3], key[i]);
+	    	    	    j += 3;
+	    	    	}
+	    	    	elif (key[i] & 0xFFFF_8000) == 0 then
+	    	    	{   _packbe(out[j:2], key[i]);
+	    	    	    j += 2;
+	    	    	}
+	    	    	elif (key[i] & 0xFFFF_FF80) == 0 then
+	    	    	{   out[j] = _uint8(key[i]);
+	    	    	    j += 1;
+	    	    	}
+	    	    	else
+			{   _packbe(out[j:4], key[i]);
+	    	    	    j += 4;
+	    		}
+	    		first = false;
+	    	    }
+	    	    else
+		    {	_packbe(out[j:4], key[i]);
+	    	    	j += 4;
+	    	    }
+	    	}
+	    }
+	    return j;
+	}
+
+	proc CalcPMSecret(secret: @[]_byte): _uint
+	{   var priv: ecc.MPInt;
+	    var pub, result: ecc.Point;
+
+debug.dumpb("our.epriv=\n", hstate.our.eprivkey, 32);
+debug.dumpb("rmt.epubx=\n", hstate.rmt.epubkeyx, 32);
+debug.dumpb("rmt.epuby=\n", hstate.rmt.epubkeyy, 32);
+
+	    priv.Import(hstate.our.eprivkey);
+	    pub.x.Import(hstate.rmt.epubkeyx);
+	    pub.y.Import(hstate.rmt.epubkeyy);
+	    ecc.ECDH(pub, priv, result);
+	    result.x.Export(secret);
+	    return 32;
+	}
+
+	proc SignHash(akey: @[]_byte, klen: _uint, ahash: @[]_byte, hlen: _uint,
+		      ar: @[]_byte, as: @[]_byte): _uint, _uint
+	{   var ns, nr: _uint;
+	    var key: ecc.MPInt;
+	    var hash: ecc.MPInt;
+	    var priv: ecc.MPInt;
+	    var rand: [32]_byte: align(4);
+	    var r, s: [9]_uint32;
+
+	    key.Import(akey);
+	    hash.Import(ahash);
+debug.dumpb("pkey32=\n", key, 32);
+debug.dumpb("hash32=\n", hash, 32);
+	    do
+	    {   sys.Rand(rand, 32);
+		priv.Import(rand);
+	    } while !ecc.Sign(key, hash, priv, r, s);
+debug.dumpb("rand=\n", rand, 32);
+debug.dumpb("r32=\n", r, 32);
+debug.dumpb("s32=\n", s, 32);
+	    nr = KeyToASN1(r, signlen, ar);
+debug.dumpb("ar=\n", ar@, nr);
+	    ns = KeyToASN1(s, signlen, as);
+debug.dumpb("as=\n", as@, ns);
+	    return nr, ns;
+	}
+
+	proc SendCertificate()
+	{   var pcm: CertificateMsg;
+	    const len = CertificateMsgT?size + cert?size + keylen*2;
+
+debug.str("ec.SendCertificate\n");
+	    // FIXME - get buf dynamic
+	    pcm = CertificateMsg(hstate.buf[HeaderT?size:]);
+	    // certificate size
+	    _packbe(pcm.len[0:3], 27+32+32);
+	    pcm.bytes[0:cert?len] = cert;
+	    pcm.bytes[27:keylen] =	  ecdsa_pub_key_x;	// FIXME
+	    pcm.bytes[59+keylen:keylen] = ecdsa_pub_key_y;	// FIXME
+	    SendHandshake(hstate.buf, len, Certificate);
+	}
+
+	proc SendKeyExchange(bp: @[]_byte): _uint
+	{   var pck: ClientKeyMsg;
+	    const len: _uint = 1 + keylen*2;
+	    var priv: ecc.MPInt;
+	    var pub:  ecc.Point;
+
+debug.str("ec.SendKeyExchange\n");
+	    bp[0] = 1 + keylen*2;
+	    ecc.G.GenerateKeys(priv, pub);
+	    pub.Export(bp[1:len], false);
+	    hstate.our.epubkeyx = pck.bytes[2:keylen];
+	    hstate.our.epubkeyy = pck.bytes[2+keylen:keylen];
+debug.dumpb("our.epubx=\n", hstate.our.epubkeyx, 32);
+debug.dumpb("our.epuby=\n", hstate.our.epubkeyy, 32);
+	    return 1 + len;
+	}
+
+	proc SendCertificateVerify()
+	{   var pcv: CertVerifyMsg;
+	    var nr, ns, len: _uint;
+	    var hash: [sha256.DigestSize]_byte;
+	    var r: [33]_byte;	// ASN.1 format, could have 1 extra byte
+	    var s: [33]_byte;
+
+debug.str("ec.SendCertificateVerify\n");
+	    // save hash context so hashing can continue
+	    HashSnapshot(hash);
+debug.dumpb("final hash=\n", hash, hash?len);
+	    // sign with our private key
+	    // stuff results r,s directly into buffer
+	    nr, ns = SignHash(ecdsa_priv_key, ecdsa_priv_key?len,
+			      hash, hash?len,
+			      r, s);
+//		     pcv.bytes[8:len_r], pcv.bytes[10+len_r:len_s]);
+	    len = CertVerifyMsgT?size + 1 + 1 + 2 + 2 + 2 + 2 + nr + ns;
+	    // FIXME - get buf dynamic
+	    pcv = CertVerifyMsg(hstate.buf[HeaderT?size:]);
+	    pcv.bytes[0] = _uint8(SigHashAlgo.SHA256);
+	    pcv.bytes[1] = _uint8(SigAlgo.ECDSA);
+	    _packbe(pcv.bytes[2:2], 2 + 2 + 2 + nr + ns);
+	    // ASN.1 stuff follows
+	    pcv.bytes[4] = 0x30;	// ASN.1 sequence
+	    pcv.bytes[5] = 2 + 2 + nr + ns;
+	    pcv.bytes[6] = 0x02;	// ASN.1 int
+	    pcv.bytes[7] = nr;
+	    pcv.bytes[8:nr] = r[0:nr];
+	    pcv.bytes[8+nr] = 0x02;	// ASN.1 int
+	    pcv.bytes[9+nr] = ns;
+	    pcv.bytes[10+nr:ns] = s[0:ns];
+	    SendHandshake(hstate.buf, len, CertificateVerify);
+	}
+
+	/*
+	 * The server has send us a Certificate which contains:
+	 * 1. the ASN.1 description of the certificate
+	 * 2. the server's static public key
+	 */
+	proc RecvCertificate(msg: @[]_byte, n: _uint)
+	{   var pcm: CertificateMsg;
+	    var tlen, clen, klen: _uint32;
+	    var j: _uint;
+
+debug.str("RecvCertificate n="); debug.uint(n); debug.nl();
+	    HashUpdate(msg, n);
+debug.dumpb("msg:\n", msg, n);
+	    pcm = CertificateMsg(msg[0:]);
+debug.dumpb("pcm.len= ", pcm.len, 3);
+	    tlen = _unpkbe(pcm.len[0:3]);
+debug.str("tlen="); debug.uint32(tlen); debug.nl();
+	    // FIXME - check certificate, how?
+	    asn1.Dump(pcm.bytes[0:tlen], tlen);
+	    // FIXME - ugly temporary hack
+		if tlen <= 91 then	    // tinydtls cert
+		{   j = 27;    // expect 27 bytes of asn1 header
+		    klen = 32;
+		}
+		elif tlen < 400	then	    // openssl cert
+		{   j = 231;
+		    klen = 32;
+		}
+		else			    // mbedtls cert
+		{   j = 220;
+		    klen = 48;
+		}
+		hstate.rmt.pubkeyx = pcm.bytes[j:klen];
+		hstate.rmt.pubkeyy = pcm.bytes[j+klen:klen];
+debug.dumpb("rmt.pubx=\n", hstate.rmt.pubkeyx, klen);
+debug.dumpb("rmt.puby=\n", hstate.rmt.pubkeyy, klen);
+	}
+
+	/*
+	 * The server has sent us ServerKeyExchange which contains:
+	 * 1. a description of the curve
+	 * 2. the server's ephemeral public key
+	 * 3. a signature
+	 */
+	proc RecvServerKey(s: @[]_byte, n: _uint): boolean
+	{
+
+debug.str("RecvServerKey n="); debug.uint(n); debug.nl();
+	    if CurveType(s[0]) != NAMED_CURVE then
+	    {	SendAlert(HANDSHAKE_FAILURE, true);
+		return false;
+	    }
+	    if  EllipticCurve(_unpkbe(s[1:2])) != SECP256R1 then
+	    {	SendAlert(HANDSHAKE_FAILURE, true);
+		return false;
+	    }
+	    if s[3] != 1 + 2*32 then	// format and two keys
+	    {	SendAlert(HANDSHAKE_FAILURE, true);
+		return false;
+	    }
+	    if s[4] != 4 then		// format == uncompressed
+	    {	SendAlert(DECODE_ERROR, true);
+		return false;
+	    }
+	    hstate.rmt.epubkeyx = s[5:32];
+	    hstate.rmt.epubkeyy = s[5+32:32];
+debug.dumpb("rmt.epubx=\n", hstate.rmt.epubkeyx, 32);
+debug.dumpb("rmt.epuby=\n", hstate.rmt.epubkeyy, 32);
+	    // FIXME - parse ecdsa signature
+	    // FIXME - verify signature with remote's static public keys
+	    return true;
+	}
+
+	/*
+	 * The server has send us a CertificateRequest which contains:
+	 * 1. A list of certificate types
+	 * 2. A list of signing algorithms
+	 */
+	proc RecvCertificateRequest(msg: @[]_byte, n: _uint)
+	{
+debug.str("RecvCertificateRequest n="); debug.uint(n); debug.nl();
+	    HashUpdate(msg, n);
+	    hstate.sendcert = true;
+	    hstate.sendvrfy = true;     // FIXME - where should this be set?
+	}
+    }

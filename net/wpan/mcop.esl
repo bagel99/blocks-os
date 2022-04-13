@@ -1,0 +1,128 @@
+// MeshCop TLV Formats
+
+package mcop
+{
+    type TLVType:
+    (   Channel		= 0x00,	// len=3, page(=0), [2]channel (11-26)
+	PanID		= 0x01,	// len=2, [2]panid
+	ExtPanID	= 0x02,	// len=8, [8]extpanid
+	NetName		= 0x03,	// len=1..16
+	PSKc		= 0x04,	// len=1..8
+	MasterKey	= 0x05,	// len=16
+	KeySeqno	= 0x06,	// len=4
+	MeshLclPfx	= 0x07,	// len=8
+	Steering	= 0x08,	// len=1..16
+	BorderLoc	= 0x09,	// len=2
+	CommishID	= 0x0A,	// len=1..64
+	CommishSess	= 0x0B,	// len=2
+	SecPolicy	= 0x0C,	// len=3
+	GetTLV		= 0x0D,	// len=?
+	ActTS		= 0x0E,	// len=8
+	CommishPort	= 0x0F,	// len=2
+	StateTLV	= 0x10,	// len=1
+	JoinDTLS	= 0x11,	// len=?
+	JoinPort	= 0x12,	// len=2
+	JoinIID		= 0x13,	// len=8
+	JoinRouter	= 0x14,	// len=2 RLOC16
+	JoinKEK		= 0x15,	// len=16
+	ProvisonURL	= 0x20,	// len=1..64
+	VendorName	= 0x21, // len=1..32
+	VendorModel	= 0x22,	// len=1..32
+	VendorSWVer	= 0x23,	// len=1..16
+	VendorData	= 0x24,	// len=1..64
+	VendorSTVer 	= 0x25,	// len=?
+	UDPEncap	= 0x30,	// len=?
+	IPv6Addr	= 0x31,	// len=16
+	PendTS		= 0x33,	// len=8
+	DelayTmr	= 0x34,	// len=4
+	ChanMask	= 0x35,	// len=?
+	Count		= 0x36,	// len=1
+	Period		= 0x37,	// len=2
+	Duration	= 0x38,	// len=2
+	EnergyList	= 0x39,	// len=?
+	DiscReq		= 0x80,	// len=2
+	DiscRsp		= 0x81,	// len=2
+    );
+
+    proc FindTLV(bp: @[]_byte, len: _uint, type: TLVType): boolean, _uint
+    {   var i: _uint;
+
+	i = 0;
+	while i < len-1 do
+	{   if TLVType(bp[i]) == type then
+		return true, i;
+	    i += bp[i+1] + 2;
+	}
+	return false, 0;
+    }
+
+    proc GetJoinPort(bp: @[]_byte, len: _uint, result: @_uint16): boolean
+    {   var i: _uint;
+	var ok: boolean;
+
+	ok, i = FindTLV(bp, len, JoinPort);
+	if !ok || bp[i+1] != 2 then return false;
+	result@ = _unpkbe(bp[i+2:2]);
+	return true;
+    }
+
+    proc IsDiscResponseOK(bp: @[]_byte, len: _uint): boolean
+    {   var i: _uint;
+	var ok: boolean;
+	var flags: _uint8;
+
+	ok, i = FindTLV(bp, len, DiscRsp);
+	if !ok || bp[i+1] != 2 then return false;
+	flags = bp[i+2];	// bp[i+3] unused?
+	return flags == 0x38;	// version and join flag
+    }
+}
+/*
+Constrained Application Protocol, Confirmable, POST, MID:14209
+    01.. .... = Version: 1
+    ..00 .... = Type: Confirmable (0)
+    .... 0010 = Token Length: 2
+    Code: POST (2)
+    Message ID: 14209
+    Token: 28de
+    Opt Name: #1: Uri-Path: c
+        Opt Desc: Type 11, Critical, Unsafe
+        1011 .... = Opt Delta: 11
+        .... 0001 = Opt Length: 1
+        Uri-Path: c
+    Opt Name: #2: Uri-Path: ab
+        Opt Desc: Type 11, Critical, Unsafe
+        0000 .... = Opt Delta: 0
+        .... 0010 = Opt Length: 2
+        Uri-Path: ab
+    End of options marker: 255
+    Payload: Payload Content-Format: application/octet-stream (no Content-Format), Length: 1
+        Payload Desc: application/octet-stream
+        [Payload Length: 19]
+    [Uri-Path: /c/ab]
+Data (19 bytes)
+    Data: 0b02af2d350600040000a00036010237020020
+    [Length: 19]
+0b02 af2d		CommishSess af2d
+3506 00040000a000	ChanMask
+3601 02			Count 2
+3702 0020		Period 20
+*/
+
+/*
+ * URIs
+ * c/ca		MGMT_ANNOUNCE_BEGIN.ntf
+ * c/pq		MGMT_PAINID_QUERY.qry
+ * c/pc		MGMT_PANID_CONFLICT.ans
+ * c/es		MGMT_ED_SCAN.qry
+ * c/er		MGMT_ED_REPORT.ans
+ * c/lp		LEAD_PET.req
+ * 		LEAD_PET.rsp
+ * c/la		LEAD_KA.req
+ * 		LEAD_KA.rsp
+ * c/je		JOIN_ENT.ntf
+ * c/jf		JOIN_FIN.req
+ * 		JOIN_FIN.rsp
+ * c/ja		JOIN_APP.req
+ * 		JOIN_APP.rsp
+ */

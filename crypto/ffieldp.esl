@@ -12,12 +12,12 @@
 
 package ffieldp
 {
-    type Vect: [K]bn.Base;
+    type MPInt: [K]bn.Base;
 
-    proc ModP(r: @Vect, x: @Vect2);	// forward
+    proc ModP(r: @MPInt, x: @MPInt2);	// forward
 
     // shift x right by 1 in place
-    proc RShf1(x: @Vect)
+    proc RShf1(x: @MPInt)
     {   var i: _uint;
 	var c, t: _uint32;
 
@@ -29,11 +29,11 @@ package ffieldp
 	    x[i] = (x[i] >> 1) | (c << (bn.Base?bits-1));
 	    c = t;
 	} while i > 0;
-	    
+
     }
-    
+
     // r = (x + y) mod P
-    proc AddModP(r: @Vect, x: @Vect, y: @Vect)
+    proc AddModP(r: @MPInt, x: @MPInt, y: @MPInt)
     {
 	// if carry out or result larger than P then reduce
 	if bn.Add(r, x, y, K) != 0 || bn.isGE(r, P, K) then
@@ -41,7 +41,7 @@ package ffieldp
     }
 
     // r = (x + y) mod m
-    proc AddMod(r: @Vect, x: @Vect, y: @Vect, m: @Vect)
+    proc AddMod(r: @MPInt, x: @MPInt, y: @MPInt, m: @MPInt)
     {
 	// if carry out or result larger than P then reduce
 	if bn.Add(r, x, y, K) != 0 || bn.isGE(r, m, K) then
@@ -49,8 +49,8 @@ package ffieldp
     }
 
     // r = (x - y) mod P
-    proc SubModP(r: @Vect, x: @Vect, y: @Vect)
-    {   var tmp: Vect;
+    proc SubModP(r: @MPInt, x: @MPInt, y: @MPInt)
+    {   var tmp: MPInt;
 
 	// if carry out then we wrapped
 	if bn.Sub(r, x, y, K) != 0 then
@@ -58,7 +58,7 @@ package ffieldp
     }
 
     // called with n=K and n=K+1
-    proc Mul(r: @Vect, x: @Vect, y: @Vect, n: _uint)
+    proc Mul(r: @MPInt, x: @MPInt, y: @MPInt, n: _uint)
     {   var i, j: _uint;
 	var t: _uint64;
 	var tmp: [(K+1)*2]_uint32;
@@ -77,18 +77,18 @@ package ffieldp
     }
 
     // r = (x * y) mod P
-    proc MulModP(r: @Vect, x: @Vect, y: @Vect)
-    {	var t: Vect2;
+    proc MulModP(r: @MPInt, x: @MPInt, y: @MPInt)
+    {	var t: MPInt2;
 
 	Mul(t, x, y, K);
 	ModP(r, t);
     }
 
     // r = 1/x mod m
-    proc InvMod(r: @Vect, x: @Vect, m: @Vect)
+    proc InvMod(r: @MPInt, x: @MPInt, m: @MPInt)
     {   var t: _int;
 	var c: bn.Base;
-	var a, b, u, v: Vect;
+	var a, b, u, v: MPInt;
 
 	a = x@;
 	b = m@;
@@ -133,12 +133,12 @@ package ffieldp
 	    	    c = bn.Add(v, v, m, K);
 	    	bn.RShf1(v, K);
 	    	v[K-1] |= c << (bn.Base?bits-1);
-	    }	
+	    }
 	r@ = u;
 	}
     }
 
-    proc InvModP(r: @Vect, x: @Vect)
+    proc InvModP(r: @MPInt, x: @MPInt)
     {
 	InvMod(r, x, P);
     }
