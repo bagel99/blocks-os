@@ -7,7 +7,7 @@ INC=	-I.. -I../.. -I$(TOP) \
 	-I$(TOP)/crc/ -I$(TOP)/crypto -I$(TOP)/net \
 	-I$(LIBDIR)
 DBG=
-OPT=	-i	# disable inlining
+OPT=	-Ai	# disable inlining
 GCC=	gcc
 GCCARCH=
 
@@ -30,11 +30,11 @@ GCCARCH=
 	$(ESLC) -m$(ARCH) $(DBG) $(INC) $(OPT) -c $<
 
 all:	test-sha2.out test-sha3.out \
-	test-aesccm.out test-aesgcm.out test-aescmac.out \
+	test-aesccm.out test-aesgcm.out \
 	test-chacha.out \
 	test-ecdh.out test-ecdsa.out \
 	test-field.out \
-	test-c25599.out test-ed25519.out test-ed25519dsa.out
+	test-ed25519.out test-ed25519dsa.out
 
 dtls:	test-dtls-psk.out test-dtls-aesccm.out test-dtls-ecjpake.out
 

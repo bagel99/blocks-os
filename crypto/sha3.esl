@@ -27,6 +27,16 @@ package sha3
 
     const NRounds = 24;
 
+    proc (s: @State) DumpState(msg: @[]_byte)
+    {   var i: _uint;
+	debug.str(msg);
+	for i from 0 to 24 do
+	{   debug.hex64(s[i]);
+	    debug.chr(' ');
+	}
+	debug.nl();
+    }
+
     proc (s: @State) Theta(): : inline
     {	var i, j: _uint;
 	var bc: [5]_uint64;
@@ -100,6 +110,8 @@ package sha3
 
 	for n from 0 to NRounds-1 do
 	{
+//debug.str("round "); debug.uint(n); debug.nl();
+//s.DumpState("s= ");
 	    s.Theta();
 	    s.RhoPi();
 	    s.Chi();
@@ -114,6 +126,10 @@ package sha3
 
 	if len == 0 then
 	    return;
+//debug.str("Update len="); debug.uint(len);
+//debug.str(" wix="); debug.uint(ctx.wix);
+//debug.str(" bix="); debug.uint(ctx.bix); 
+//debug.dumpb(" work=", ctx.work, NBytes);
 	i = 0;
 	if ctx.bix > 0 then	// working on partial word
 	{   n = _min(8 - ctx.bix, len);

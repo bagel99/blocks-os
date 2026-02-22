@@ -189,9 +189,18 @@ const tests: []Test =
   },
 };
 
+proc PrintHex(s: @[]_byte, x: @[]_byte, n: _uint)
+{   var i: _uint;
+
+    err.str(s);
+    for i from 0 to n-1 do
+	err.hex8(x[i]);
+    err.nl();
+}
+
 var nerr: _uint = 0;
 
-proc Check(test: boolean, msg: @[]_byte, n: _uint)
+proc Check(test: boolean, msg: @[]_byte, n: _uint): boolean
 {
     if !test then
     {   err.str("Test "); err.uint(n); err.str(" failed: ");
@@ -199,6 +208,7 @@ proc Check(test: boolean, msg: @[]_byte, n: _uint)
 	err.nl();
 	nerr += 1;
     }
+    return test;
 }
 
 var ciphertext: [1024]_byte;
@@ -225,10 +235,15 @@ proc main(): _int
 	ctx.Payload(tests[i].plain, ciphertext, len, false);
 	ctx.Finish(tag, tlen);
 	if len != 0 then
-	    Check(ciphertext[0:len] == tests[i].cipher[0:len], "encrypt", i+1);
+	    if !Check(ciphertext[0:len] == tests[i].cipher[0:len], "encrypt", i+1) then
+	    {	PrintHex("bad =", ciphertext, len);
+		PrintHex("good=", tests[i].cipher, len);
+	    }
 	if tlen != 0 then
-	    Check(tag[0:tlen] == tests[i].tag[0:tlen], "encrypt tag", i+1);
-
+	    if !Check(tag[0:tlen] == tests[i].tag[0:tlen], "encrypt tag", i+1) then
+	    {	PrintHex("bad =", tag, tlen);
+		PrintHex("good=", tests[i].tag, tlen);
+	    }
 	// Decrypt
 	ctx.SetKey(tests[i].key, KEY128);
 	ctx.Start(tests[i].nonce, nlen, tests[i].adata, alen);

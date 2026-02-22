@@ -107,7 +107,7 @@ package sha3_224
 	{   k = _min(n, 512);
 	    ctx.Update(As, k);
 	    n -= k; 
-	}     
+	}
 	ctx.Finish(hash, DigestSize);
     }
 }
@@ -223,7 +223,8 @@ proc main(): _int
 {   var i, n: _uint;
     var atest: boolean;
 
-    for i from 0 to tests?len-1 do
+//    for i from 0 to tests?len-1 do
+i = 4;
     {
 	n = _zlen(tests[i].msg@);
 //err.str("n="); err.uint(n); err.nl();

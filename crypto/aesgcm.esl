@@ -68,7 +68,8 @@ package aesgcm
 		i = i * 2;
 	    } while i <= 8;
 /*for i from 0 to 15 do
-{ err.hex64(s.H[i].hi); err.chr(' '); err.hex64(s.H[i].lo); err.nl();
+{ debug.hex64(s.H[i].hi); debug.chr(' ');
+  debug.hex64(s.H[i].lo); debug.nl();
 }*/	    
 	}
 
