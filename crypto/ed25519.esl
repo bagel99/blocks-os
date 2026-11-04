@@ -1,356 +1,414 @@
-/*
- * Curve 25519
- * As developed by D.J. Bernstein, and the related Edwards version.
- * References:
- *  1. RFC 7749
- *  2. An implementation by mehdi sotoodeh:
- *     https://github.com/msotoodeh/curve25519.git
- */
-
-import bignum4;
+//import prt;
 
 package ed25519
 {
-    alias bignum as bn;
-    alias bignum.Base as Base;
-    alias bignum.Basex2 as Basex2;
-    const W = 256;				// width in bits
-    const K = (W+(Base?bits)-1)/Base?bits;	// width in chunks
-    type MPInt: [K]_uint32;
-    type MPInt1: [K+1]_uint32;
-    type MPInt2: [K*2]_uint32;
+    import sha512;
+    import f25519_32;
+    alias f25519 as f;
+    alias f25519.fe as fe;
+    alias f25519.Key as Key;
 
-    // curve y² = x³ + 486662x² + x over prime 2²⁵⁵ − 19
-    // base point g=9
-    const A = 486662;
-    const A4 = (A-2) / 4;
-    const P: MPInt = {	 0xFFFFFFED, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF,
-			 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0x7FFFFFFF };
-    const maxP: MPInt = { 0xFFFFFFDA, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF,
-			 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF };
-    const G: MPInt = {    0x00000009, 0x00000000, 0x00000000, 0x00000000,
-			 0x00000000, 0x00000000, 0x00000000, 0x00000000 };
-    package ffieldp
+    package ge
     {
-	proc AddModP(r: @MPInt, x: @MPInt, y: @MPInt)
-	{   var i: _uint;
-	    var c: bn.Base;
 
-	    c = bn.Add(r, x, y, K) * 38;
-	    c = bn.AddC(r, r, c, K) * 38;
-	    _ = bn.AddC(r, r, c, K);
-	}
+	// D = -121665/121666
+	const D: fe = { 0x135978a3, 0x75eb4dca, 0x4141d8ab, 0x00700a4d,
+			0x7779e898, 0x8cc74079, 0x2b6ffe73, 0x52036cee };
+	// D2 = 2 * -121665/121666
+	const D2:fe = { 0x26b2f159, 0xebd69b94, 0x8283b156, 0x00e0149a,
+			0xeef3d130, 0x198e80f2, 0x56dffce7, 0x2406d9dc };
+	const SqrtM1: fe = { 0x4a0ea0b0, 0xc4ee1b27, 0xad2fe478, 0x2f431806,
+			     0x3dfbd7a7, 0x2b4d0099, 0x4fc1df0b, 0x2b832480 };
 
-	proc SubModP(r: @MPInt, x: @MPInt, y: @MPInt)
-	{   var i: _uint;
-	    var c: bn.Base;
+	type Point:	// Extended coordinates, X=x/z, Y=y/z, xy=zt
+	{   x: fe;
+	    y: fe;
+	    z: fe;
+	    t: fe;
+	};
+	type PointP:	// Projective coordinates, X=x/z, Y=y/z
+	{   x: fe;
+	    y: fe;
+	    z: fe;
+	};
 
-	    c = bn.Sub(r, x, y, K);
-	    c = bn.SubC(r, r, c * 38, K);
-	    _ = bn.SubC(r, r, c * 38, K);
-	}
+	import ge25519base;
 
-	// r = (c == 0) then 1, (c == 1) then P
-	// constant time
-	proc SetP(r: @MPInt, c: Base)
+	if _defined(bde) then
 	{
-	    // c is either 0 or 1
-	    // change it to either 0 or all 1s
-	    c = ~c + 1;
-	    r[0] = c & 0xFFFFFFED;
-	    r[1] = c;
-	    r[2] = c;
-	    r[3] = c;
-	    r[4] = c;
-	    r[5] = c;
-	    r[6] = c;
-	    r[7] = c >> 1;
-	}
-
-	proc ModP(x: @MPInt)
-	{   var t: MPInt;
-	    var c: Base;
-
-	    c = bn.Sub(x, x, P, K);
-	    SetP(t, c);
-	    _ = bn.Add(x, x, t, K);
-	    c = bn.Sub(x, x, P, K);
-	    SetP(t, c);
-	    _ = bn.Add(x, x, t, K);
-	}
-
-	// r = y + b*x
-	proc Reduce(r: @MPInt, y: @MPInt, b: Base, x: @MPInt)
-	{   var i: _uint;
-	    var c: Base;
-	    var t: Basex2;
-
-	    for i from 0 to K-1 do
-	    {	t = b * x[i];
-	    	t += y[i] + c;
-	    	r[i] = Base(t);
-	    	c = Base(t >> 32);
+	    proc (p: @Point) Print(msg: @[]_byte)
+	    {
+		print bde, "[s]\n", msg;
+		p.x.Print("  x\t");
+		p.y.Print("  y\t");
+		p.z.Print("  z\t");
+		p.t.Print("  t\t");
 	    }
-	    c = bn.AddC(r, r, c*38, K);
-	    _ = bn.AddC(r, r, c*38, K);
-	}
-
-	// r = x+y reduced
-	proc AddRed(r: @MPInt, x: @MPInt, y: @MPInt)
-	{   var c: Base;
-
-	    c = bn.Add(r, x, y, K);
-	    c = bn.AddC(r, r, c*38, K);
-	    _ = bn.AddC(r, r, c*38, K);
-	}
-
-	// r = x+y reduced
-	proc SubRed(r: @MPInt, x: @MPInt, y: @MPInt)
-	{   var c: Base;
-
-	    c = bn.Sub(r, x, y, K);
-	    c = bn.SubC(r, r, c*38, K);
-	    _ = bn.SubC(r, r, c*38, K);
-	}
-
-	proc SubRed2(r: @MPInt, x: @MPInt, y: @MPInt)
-	{
-	}
-
-	// r = x + b*y
-	proc MulAddRed(r: @MPInt, x: @MPInt, b: Base, y: @MPInt)
-	{   var i: _uint;
-	    var c: Base;
-	    var t: Basex2;
-
-	    c = 0;
-	    for i from 0 to K-1 do
-	    {	t = b * y[i];
-		t += x[i];
-		t += c;
-		r[i] = Base(t);
-		c = Base(t>>32);
+	    proc (p: @PointP) PrintPointP(msg: @[]_byte)
+	    {
+		print bde, "[s]\n", msg;
+		p.x.Print("  x\t");
+		p.y.Print("  y\t");
+		p.z.Print("  z\t");
 	    }
-	    c = bn.AddC(r, r, c*38, K);
-	    _ = bn.AddC(r, r, c*38, K);
 	}
 
-	// r = x*y reduced
-	proc MulRed(r: @MPInt, x: @MPInt, y: @MPInt)
-	{   var t: MPInt2;
-
-	    bn.Mul(t, x, y, K);
-	    Reduce(r, t, 38, t[8:]);
+	proc (h: @Point) Zero()
+	{   h.x = f.Zero;
+	    h.y = f.One;
+	    h.z = f.One;
+	    h.t = f.Zero;
 	}
 
-	// r = x*x reduced
-	proc SqrRed(r: @MPInt, x: @MPInt)
+	proc (h: @PointP) Zero()
+	{   h.x = f.One;
+	    h.y = f.One;
+	    h.z = f.Zero;
+	}
+
+	proc (r: @PointP) From3(p: @Point)
+	{   r.x = p.x;
+	    r.y = p.y;
+	    r.z = p.z;
+	}
+
+	proc (r: @Point) Add(p: @Point, q: @Point)
+	{   var ta, tb, tc, td, tt, te, tf, tg, th: fe;
+
+	    ta.Sub(p.y, p.x);
+	    tt.Sub(q.y, q.x);
+	    ta.Mul(ta, tt);
+	    tb.Add(p.x, p.y);
+	    tt.Add(q.x, q.y);
+	    tb.Mul(tb, tt);
+	    tc.Mul(p.t, q.t);
+	    tc.Mul(tc, D2);
+	    td.Mul(p.z, q.z);
+	    td.Add(td, td);
+	    te.Sub(tb, ta);
+	    tf.Sub(td, tc);
+	    tg.Add(td, tc);
+	    th.Add(tb, ta);
+
+	    r.x.Mul(te, tf);
+	    r.y.Mul(th, tg);
+	    r.z.Mul(tg, tf);
+	    r.t.Mul(te, th);
+	}
+
+	proc (r: @Point) MAdd(p: @Point, q: @PointP)
+	{   var ta, tb, tc, td, te, tf, tg, th: fe;
+
+	    ta.Sub(p.y, p.x);
+	    ta.Mul(ta, q.y);
+	    tb.Add(p.x, p.y);
+	    tb.Mul(tb, q.x);
+	    tc.Mul(p.t, q.z);
+	    td.Add(p.z, p.z);
+	    te.Sub(tb, ta);
+	    tf.Sub(td, tc);
+	    tg.Add(td, tc);
+	    th.Add(tb, ta);
+
+	    r.x.Mul(te, tf);
+	    r.y.Mul(th, tg);
+	    r.z.Mul(tg, tf);
+	    r.t.Mul(te, th);
+	}
+
+	proc (r: @Point) Double(p: @Point)
+	{   var ta, tb, tc, td, te, tf, tg, th: fe;
+
+	    ta.Sqr(p.x);
+	    tb.Sqr(p.y);
+	    tc.Sqr(p.z);
+	    tc.Add(tc, tc);
+	    td.Neg(ta);
+	    te.Add(p.x, p.y);
+	    te.Sqr(te);
+	    te.Sub(te, ta);
+	    te.Sub(te, tb);
+	    tg.Add(td, tb);
+	    tf.Sub(tg, tc);
+	    th.Sub(td, tb);
+
+	    r.x.Mul(te, tf);
+	    r.y.Mul(th, tg);
+	    r.z.Mul(tg, tf);
+	    r.t.Mul(te, th);
+	}
+
+	proc (p: @Point) CMov(q: @Point, b: boolean)
 	{
-	    MulRed(r, x, x);
+	    if b then
+		p@ = q@;
 	}
 
-	// r = x*y mod P
-        proc MulModP(r: @MPInt, x: @MPInt, y: @MPInt)
-        {
-	    MulRed(r, x, y);
-	    ModP(r);
-        }
+	proc (p: @PointP) CMov(q: @PointP, b: boolean)
+	{
+	    if b then
+		p@ = q@;
+	}
 
-	// r = 1/x mod P
-	proc InvModP(r: @MPInt, x: @MPInt)
-	{   var i: _uint;
-	    var x2, x9, x11: MPInt;
-	    var x_5_0, x_10_0, x_20_0, x_50_0, x_100_0: MPInt;
-	    var t0, t1: MPInt;
+	proc (t: @PointP) Select(pos: _int, b: _int8)
+	{   var bneg: boolean;
+	    var babs: _uint8;
+	    var minust: PointP;
+	    var i: _uint;
 
-	    SqrRed(x2, x);		// x2 = x²
-	    SqrRed(t1, x2);		// t1 = x⁴
-	    SqrRed(t0, t1);		// t0 = x⁸
-	    MulRed(x9, t0, x);		// x9 = x⁹
-	    MulRed(x11, x9, x2);	// x11 = x¹¹
-	    SqrRed(t0, x11);		// t0 = x²²
-	    MulRed(x_5_0, t0, x9);	// x_5_0 = x³¹ = x**(2⁵-2⁰)
+	    bneg = b < 0;
+	    babs = _abs(b);
+	    t.Zero();
+	    for i from 0 to 7 do
+		t.CMov(Base[pos][i], babs == i+1);
+	    minust.x = t.y;
+	    minust.y = t.x;
+	    minust.z.Neg(t.z);
+	    t.CMov(minust, bneg);
+	}
 
-	    SqrRed(t0, x_5_0);
-	    SqrRed(t1, t0);
-	    SqrRed(t0, t1);
-	    SqrRed(t1, t0);
-	    SqrRed(t0, t1);
-	    MulRed(x_10_0, t0, x_5_0);
+        // From 32-bit version
+	proc (h: @Point) ScalarMulBase(a: @[32]_byte:in)
+	{   var t: PointP;
+	    var e: [64]_int8;
+	    var carry: _int8;
+	    var i: _uint;
 
-	    SqrRed(t0, x_10_0);
-	    SqrRed(t1, t0);
+	    for i from 0 to 31 do
+	    {	e[2*i+0] = (a[i] >> 0) & 0xF;
+		e[2*i+1] = (a[i] >> 4) & 0xF;
+	    }
+	    // e[i] is 0..15, e[53] is 0..7
+	    carry = 0;
+	    for i from 0 to 62 do
+	    {	e[i] += carry;
+		carry = (e[i] + 8) >> 4;
+		e[i] -= carry << 4;
+	    }
+	    e[63] += carry;
+	    // e[i] is -8..8
+
+	    h.Zero();
+	    for i from 1 to 63 by 2 do
+	    {	t.Select(i/2, e[i]);
+		h.MAdd(h, t);
+	    }
 	    for i from 0 to 3 do
-	    {	SqrRed(t0, t1);
-		SqrRed(t1, t0);
+		h.Double(h);
+	    for i from 0 to 63 by 2 do
+	    {	t.Select(i/2, e[i]);
+		h.MAdd(h, t);
 	    }
-	    MulRed(x_20_0, t1, x_10_0);
+	}
 
-	    SqrRed(t0, x_20_0);
-	    SqrRed(t1, t0);
-	    for i from 0 to 8 do
-	    {	SqrRed(t0, t1);
-		SqrRed(t1, t0);
+	// Point multiplication using windowed method
+	proc (h: @Point) ScalarMul(q: @Point:in,  a: @[32]_byte:in)
+	{
+	    var i, j: _uint;
+	    var t: [16]Point;
+	    var p, sp: Point;
+	    var e: [64]_int8;
+
+	    for i from 0 to 31 do
+	    {	e[2*i+0] = (a[i] >> 0) & 0xF;
+		e[2*i+1] = (a[i] >> 4) & 0xF;
 	    }
-	    MulRed(t0, t1, x_20_0);
-
-	    SqrRed(t1, t0);
-	    SqrRed(t0, t1);
-	    for i from 0 to 3 do
-	    {	SqrRed(t1, t0);
-		SqrRed(t0, t1);
+	    p.Zero();
+	    t[0] = p;
+	    t[1] = q@;
+	    for i from 2 to 15 do
+	    {	if i&1 == 0 then
+		    t[i].Double(t[i/2]);
+		else
+		    t[i].Add(t[i-1], q);
 	    }
-	    MulRed(x_50_0, t0, x_10_0);
-
-	    SqrRed(t0, x_50_0);
-	    SqrRed(t1, t0);
-	    for i from 0 to 23 do
-	    {	SqrRed(t0, t1);
-		SqrRed(t1, t0);
+	    for i from 63 downto 0 do
+	    {	for j from 0 to 3 do
+		    p.Double(p);
+		for j from 0 to 15 do
+		    sp.CMov(t[j], e[i] == _int8(j));
+		p.Add(p, sp);
 	    }
-	    MulRed(x_100_0, t1, x_50_0);
+	    h@ = p;
+	}
 
-	    SqrRed(t1, x_100_0);
-	    SqrRed(t0, t1);
-	    for i from 0 to 48 do
-	    {	SqrRed(t1, t0);
-		SqrRed(t0, t1);
+	proc (h: @Point) ImportNegate(s: @Key): boolean
+	{   var u, v, v3, vxx, check: f.fe;
+
+	    h.y.Import(s);
+	    h.z = f.One;
+	    u.Sqr(h.y);
+	    v.Mul(u, D);
+	    u.Sub(u, h.z);
+	    v.Add(v, h.z);
+	    v3.Sqr(v);
+	    v3.Mul(v3, v);
+	    h.x.Sqr(v3);
+	    h.x.Mul(h.x, v);
+	    h.x.Mul(h.x, u);
+
+	    h.x.Pow22523(h.x);
+	    h.x.Mul(h.x, v3);
+	    h.x.Mul(h.x, u);
+
+	    vxx.Sqr(h.x);
+	    vxx.Mul(vxx, v);
+	    check.Sub(vxx, u);
+	    if check.IsNonZero() then
+	    {	check.Add(vxx, u);
+		if check.IsNonZero() then
+		    return false;
+		h.x.Mul(h.x, SqrtM1);
 	    }
-	    MulRed(t1, t0, x_100_0);
+	    if h.x.IsNeg() == (s[31] >> 7 == 1) then
+		h.x.Neg(h.x);
 
-	    SqrRed(t0, t1);
-	    SqrRed(t1, t0);
-	    for i from 0 to 23 do
-	    {	SqrRed(t0, t1);
-		SqrRed(t1, t0);
+	    h.t.Mul(h.x, h.y);
+	    return true;
+	}
+
+	proc (h: @Point) Export(s: @[32]_byte)
+	{   var recip, x, y: fe;
+
+	    recip.Inv(h.z);
+	    x.Mul(h.x, recip);	// X/Z
+	    y.Mul(h.y, recip);	// Y/Z
+	    y.Export(s);
+	    if x.IsNeg() then s[31] ^= (1<<7);
+	}
+
+    }
+
+    proc ModL(r: @Key, x: @[64]_int64)
+    {	var i, j: _uint;
+	var carry: _int64;
+
+	const L: [32]_uint8 =
+	{ 0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58,
+	  0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9, 0xde, 0x14,
+	  0,    0,    0,    0,    0,    0,    0,    0,
+	  0,    0,    0,    0,    0,    0,    0, 0x10
+	};
+
+	for i from 63 downto 32 do
+	{   carry = 0;
+	    for j from i-32 to i-12 do
+	    {	x[j] += carry - 16 * x[i] * _uint64(L[j - (i - 32)]);
+		carry = (x[j] + 128) >> 8;
+		x[j] -= carry << 8;
 	    }
-	    MulRed(t0, t1, x_50_0);
-
-	    SqrRed(t1, t0);
-	    SqrRed(t0, t1);
-	    SqrRed(t1, t0);
-	    SqrRed(t0, t1);
-	    SqrRed(t1, t0);
-	    MulRed(r, t1, x11);
-
+	    x[j] += carry;
+	    x[i] = 0;
+	}
+	carry = 0;
+	for j from 0 to 31 do
+	{   x[j] += carry - (x[31] >> 4) * _uint64(L[j]);
+	    carry = x[j] >> 8;
+	    x[j] &= 255;
+	}
+	for j from 0 to 31 do
+	    x[j] -= carry * _uint64(L[j]);
+	for i from 0 to 31 do
+	{   x[i+1] += x[i] >> 8;
+	    r[i] = _uint8(x[i]);
 	}
     }
-    alias ffieldp as f;
 
-    // point terminology uses x and z
-    type Point: { x: MPInt; z: MPInt; };
+    proc Reduce(r: @Key, x: @[sha512.DigestSize]_byte)
+    {	var i: _uint;
+	var t: [64]_int64;
 
-    /*
-     * The curve 25519 algorithms use keys stored little endian,
-     * i.e. the [0] byte is the least significant.
-     */
-    type Key: [32]_byte;
+	for i from 0 to 63 do
+	    t[i] = x[i];
+	ModL(r, t);
+    }
 
-    /*
-     * A valid key must have the 2 most significant bits = 01
-     * and the 3 least significant bits = 000
-     */
-    proc TrimKey(key: @Key)
+    proc MulAdd(r: @Key, a: @Key, b: @Key, c: @Key)
+    {	var i, j: _uint;
+	var t: [64]_int64;
+
+	_zero(t);
+	for i from 0 to 31 do
+	    for j from 0 to 31 do
+		t[i+j] += _int64(a[i]) * _int64(b[j]);
+	for i from 0 to 31 do
+	    t[i] += _int64(c[i]);
+	ModL(r, t);
+    }
+
+    proc Sign(
+	      sign: @[2*Key?len]_byte,	// R is sign[0:32], S is sign[32:32]
+	      msg: @[]_byte,		// the message
+	      len: _uint,		// length of the message
+	      pubk: @Key,		// public key
+	      pvtk: @Key)		// private key
     {
-	key[31] = (key[31] | 0x40) & 0x7F;	// most significant
-	key[0] &= 0xF8;				// least significant
+	var s, hash: [sha512.DigestSize]_byte;
+	var ctx: sha512.Context;
+	var R: ge.Point;
+	var r, t: Key;
+
+	sha512.Hash(pvtk, Key?len, s);
+	f.TrimKey(s[0:Key?len]);			// left half of hash
+
+	ctx.Start();
+	ctx.Update(s[Key?len:Key?len], Key?len);	// right half of hash
+	ctx.Update(msg, len);
+	ctx.Finish(hash);
+	Reduce(r, hash);
+
+	R.ScalarMulBase(r);
+	R.Export(sign[0:Key?len]);
+
+	ctx.Start();
+	ctx.Update(sign[0:Key?len], Key?len);
+	ctx.Update(pubk, Key?len);
+	ctx.Update(msg, len);
+	ctx.Finish(hash);
+	Reduce(t, hash);
+	MulAdd(sign[Key?len:Key?len], t, s, r);
+
     }
 
-    proc MontDouble(r: @Point, q: @Point)
+    proc Verify(
+	      sign: @[2*Key?len]_byte,	// R is sign[0:32], S is sign[32:32]
+	      msg: @[]_byte,		// the message
+	      len: _uint,		// length of the message
+	      pubk: @Key): boolean	// public key
+   {
+	var A, R, S: ge.Point;
+	var hash: [sha512.DigestSize]_byte;
+	var ctx: sha512.Context;
+	var r, t: Key;
+
+	if sign[63] & 0xE0 != 0 then return false;
+	A.ImportNegate(pubk);
+	ctx.Start();
+	ctx.Update(sign[0:Key?len], Key?len);
+	ctx.Update(pubk, Key?len);
+	ctx.Update(msg, len);
+	ctx.Finish(hash);
+	Reduce(t, hash);
+	A.ScalarMul(A, t);
+	S.ScalarMulBase(sign[Key?len:Key?len]);
+	R.Add(S, A);
+	R.Export(r);
+	return r == sign[0:Key?len];
+    }
+
+    proc GenPubKey(pvtk: @Key, pubk : @Key)
+    {	var A: ge.Point;
+	var hash: [sha512.DigestSize]_byte;
+
+	sha512.Hash(pvtk, Key?len, hash);
+	f.TrimKey(hash[0:Key?len]);
+	A.ScalarMulBase(hash);
+	A.Export(pubk);
+    }
+
+    proc GenKeyPair(pubk: @Key, pvtk: @Key, seed: @Key)
     {
-	var a, b: MPInt;
-
-	f.AddRed(a, q.x, q.z);	// a = qx+qz
-	f.SubRed(b, q.x, q.z);	// b = qx-qz
-	f.SqrRed(a, a);		// a = (qx+qz)²
-	f.SqrRed(b, b);		// b = (qx-qz)²
-	f.MulRed(r.x, a, b);	// rx = (qx+qz)²(qx-qz)²
-	f.SubRed(b, a, b);	// b = (qx+qz)²-(qx-qz)²
-	f.MulAddRed(a, a, A4, b);
-	f.MulRed(r.z, a, b);
+	pvtk[0:32] = seed[0:32];
+	GenPubKey(pvtk, pubk);
     }
-
-    // p = p+q, q = 2q
-    proc MontMulStep(p: @Point, q: @Point, base: @MPInt)
-    {
-	var a, b, c, d, e: MPInt;
-
-	f.SubRed(a, p.x, p.z);	// a = px-pz
-	f.AddRed(b, p.x, p.z);	// b = px+pz
-	f.SubRed(c, q.x, q.z);	// c = qx-qz
-	f.AddRed(d, q.x, q.z);	// d = qx+qz
-	f.MulRed(a, a, d);	// a = (px-pz)(qx+qz)
-	f.MulRed(b, b, c);	// b = (px+pz)(qx-qz)
-	f.AddRed(e, a, b);	// e = (px-pz)(qx+qz)+(px+pz)(qx-qz)
-	f.SubRed(b, a, b);	// b = (px-pz)(qx+qz)-(px+pz)(qx-qz)
-	f.SqrRed(p.x, e);	// px = ((px-pz)(qx+qz)+(px+pz)(qx-qz))²
-	f.SqrRed(a, b);		// a = ((px-pz)(qx+qz)-(px+pz)(qx-qz))²
-	f.MulRed(p.z, a, base);
-	f.SqrRed(a, d);		// a = (qx+qz)²
-	f.SqrRed(b, c);		// b = (qx-qz)²
-	f.MulRed(q.x, a, b);	// qx = (qx+qz)²(qx-qz)²
-	f.SubRed(b, a, b);	// b = (qx+qz)²-(qx-qz)²
-	f.MulAddRed(a, a, A4, b);
-	f.MulRed(q.z, a, b);
-    }
-
-// FIXME - should be random
-const my_r = "105FFFF0BF0814B61DC748AFCC8C2BB6653436A31834DF70223B478E6AEF114A";
-
-    // not a full point multiply, just the x component
-    proc PointMul(r: @MPInt, g: @MPInt, k: @Key)
-    {   var p, q, gp: Point;
-	var rand: MPInt;
-	var PP, QP: [0..1]@Point;
-	var i, j, bit: _uint;
-	var t: Base;
-
-	bn.ImportHexStr(rand, my_r, 8);		// FIXME
-	bn.Add(p.z, g, rand, K);
-	f.MulRed(p.x, g, p.z);
-	MontDouble(q, p);
-	PP[0] = q;  PP[1] = p;
-	QP[0] = p;  QP[1] = q;
-	i = k@?len - 1;
-	t = k[i];
-	// a valid key has most significate bits == 01
-	assert t&0b1100_0000 == 0b0100_0000;
-	t = t << 2;	// skip top 2 bits
-	j = 6;			// skip top 2 bits
-	loop
-	{   while j > 0 do
-	    {	j -= 1;
-		bit = (t>>7)&1;
-		MontMulStep(PP[bit], QP[bit], g);
-		t = t << 1;
-	   }
-	 exit i == 0;
-	   i -= 1;
-	   t = k[i];
-	   j = 8;
-	}
-	f.InvModP(q.z, p.z);
-	f.MulModP(q.x, p.x, q.z);
-	r@ = q.x;
-    }
-
-    proc GenPubKey(prvk: @Key, pubk : @Key)
-    {   var prv, pub: MPInt;
-
-	TrimKey(prvk);
-	bn.ImportLE(prv, prvk, 32);
-	PointMul(pub, G, prvk);
-	bn.ExportLE(pubk, pub, 32);
-    }
-
-    proc GenShrKey(shrk: @Key, pubk: @Key, prvk: @Key)
-    {   var tmp: MPInt;
-
-	TrimKey(prvk);
-	bn.ImportLE(tmp, pubk, 32);
-	PointMul(tmp, tmp, prvk);
-	bn.ExportLE(shrk, tmp, 32);
-    }
-
 }
-

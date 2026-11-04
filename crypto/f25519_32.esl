@@ -1,0 +1,332 @@
+/*
+ * Arithmetic mod prime p = 2²⁵⁵-19
+ * Arithmetic is in 32-bit chunks
+
+ * Adapted from tinyssl and others
+ */
+
+package f25519
+{
+    type Base: _uint32;
+    type Base2:_uint64;
+    type Key:  [32]_byte;
+    type fe:   [ 8]Base;
+    type fe2w: [16]Base;
+    type fe2l: [16]_uint64;
+
+    proc (h: @fe) Export(s: @Key);	// forward
+    if _defined(bde) then
+    {
+	proc (s: @Key) Print(msg: @[]_byte)
+	{
+	    print bde, "[s][64%hexn]\n", msg, s;
+	}
+	proc (x: @fe) Print(msg: @[]_byte)
+	{   var s: Key;
+	    var i, j: _uint;
+
+	    j = 0;
+	    i = 0;
+	    while i < 32 do
+	    {   _packle(s[i:4], x[j]);
+		j += 1;
+		i += 4;
+	    }
+	    s.Print(msg);
+	}
+    }
+
+    /*
+     * A valid key must have the 2 most significant bits = 01
+     * and the 3 least significant bits = 000
+     */
+    proc TrimKey(key: @Key)
+    {
+	key[31] = (key[31] | 0x40) & 0x7F;	// most significant
+	key[0] &= 0xF8;			// least significant
+    }
+
+
+    const P: fe = {
+	0xFFFFFFED, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF,
+	0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0x7FFFFFFF };
+
+    const Px3: [8]_uint64 = {
+	0x2ffffffc7, 0x2fffffffd, 0x2fffffffd, 0x2fffffffd,
+	0x2fffffffd, 0x2fffffffd, 0x2fffffffd, 0x17ffffffd };
+
+    const Zero:fe = { 0 };
+    const One: fe = { 1 };
+
+    const A24: _uint32 = 121666;
+
+
+//    proc Add(r: @fe, x: @fe, y: @fe)
+    proc (r: @fe) Add(x: @fe, y: @fe)
+    {   var i: _uint;
+	var u: _uint64;
+
+	u = 0;
+	for i from 0 to 6 do
+	{   u += _uint64(x[i]) + _uint64(y[i]);
+	    r[i] = _uint32(u);
+	    u = u >> 32;
+	}
+	u += _uint64(x[7]) + _uint64(y[7]);
+	r[7] = u & 0x7FFF_FFFF;
+	u = (u >> 31) * 19;
+	for i from 0 to 7 do
+	{   u += r[i];
+	    r[i] = _uint32(u);
+	    u = u >> 32;
+	}
+    }
+
+    // FIXME - is their a way without using Px3?
+    proc (r: @fe) Sub(x: @fe, y: @fe)
+    {   var i: _uint;
+	var u: _uint64;
+
+	u = 0;
+	for i from 0 to 6 do
+	{
+	    u += Px3[i] - _uint64(y[i]) + _uint64(x[i]);
+	    r[i] = _uint32(u);
+	    u = u >> 32;
+	}
+	u += Px3[7] - _uint64(y[7]) + _uint64(x[7]);
+	r[7] = u & 0x7FFF_FFFF;
+	u = (u >> 31) * 19;
+	for i from 0 to 7 do
+	{   u += r[i];
+	    r[i] = _uint32(u);
+	    u = u >> 32;
+	}
+    }
+
+    proc (r: @fe) Neg(x: @fe)
+    {
+	r. Sub(Zero, x);
+    }
+
+    proc (r: @fe) Reduce(x: @fe2l)
+    {   var i: _uint;
+	var u: _uint64;
+
+	u = 0;
+	for i from 0 to 6 do
+	{   u += x[i+8] * 38 + x[i];
+	    x[i] = u & 0xFFFFFFFF;
+	    u = u >> 32;
+	}
+	u += x[15] * 38 + x[7];
+	x[7] = u & 0x7FFFFFFF;
+	u = (u >> 31) * 19;
+	for i from 0 to 7 do
+	{   u += x[i];
+	    r[i] = _uint32(u);
+	    u = u >> 32;
+	}
+    }
+
+    proc (r: @fe) MulA24(x: @fe)
+    {   var i: _uint;
+	var u: _uint64;
+
+	u = 0;
+	for i from 0 to 6 do
+	{   u += A24 * x[i];		// double width result
+	    r[i] = _uint32(u);
+	    u = u >> 32;
+	}
+	u += A24 * x[7];
+	r[7] = u & 0x7FFFFFFF;
+	u = (u >> 31) * 19;
+	for i from 0 to 7 do
+	{   u += r[i];
+	    r[i] = _uint32(u);
+	    u = u >> 32;
+	}
+    }
+
+    proc (r: @fe) Mul(x: @fe, y: @fe)
+    {   var i, j: _uint;
+	var u: _uint64;
+	var t: fe2l;
+
+	_zero(t);
+	for i from 0 to 7 do
+	{   for j from 0 to 7 do
+	    {   u = x[i] * y[j];	// double width result
+		t[i+j]   += _uint32(u);
+		t[i+j+1] += _uint32(u >> 32);
+	    }
+	}
+	r.Reduce(t);
+    }
+
+    proc (r: @fe) Sqr(x: @fe)
+    {   var i, j: _uint;
+	var u: _uint64;
+	var t: fe2l;
+
+	_zero(t);
+	for i from 0 to 6 do
+	{   for j from i+1 to 7 do
+	    {	u = x[i] * x[j];	// double width result
+
+		t[i+j]   += 2 * _uint32(u);
+		t[i+j+1] += 2 * _uint32(u >> 32);
+	    }
+	}
+	for i from 0 to 7 do
+	{   u = x[i] * x[i];		// double width result
+	    t[i*2]   += _uint32(u);
+	    t[i*2+1] += _uint32(u >> 32);
+	}
+	r.Reduce(t);
+    }
+
+    proc (r: @fe) RepSqr(x: @fe, n: _uint)
+    {   var i: _uint;
+
+	r.Sqr(x);
+	loop
+	{   n -= 1;
+	  exit n == 0;
+	    r.Sqr(r);
+	}
+    }
+
+    proc (r: @fe) Inv(x: @fe)
+    {   var t0, t1, t2, t3: fe;
+
+	t0.Sqr(x);			// t0 = x²
+	t1.RepSqr(t0, 2);		// t1 = x⁸
+	t1.Mul(x, t1);			// t1 = x⁹
+	t0.Mul(t0, t1);			// t0 = x¹¹
+	t2.Sqr(t0);			// t2 = x²²
+	t1.Mul(t1, t2);			// t1 = x³¹
+	t2.RepSqr(t1, 5);
+	t1.Mul(t2, t1);
+	t2.RepSqr(t1, 10);
+	t2.Mul(t2, t1);
+	t3.RepSqr(t2, 20);
+	t2.Mul(t3, t2);
+	t2.RepSqr(t2, 10);
+	t1.Mul(t2, t1);
+	t2.RepSqr(t1, 50);
+	t2.Mul(t2, t1);
+	t3.RepSqr(t2, 100);
+	t2.Mul(t3, t2);
+	t2.RepSqr(t2, 50);
+	t1.Mul(t2, t1);
+	t1.RepSqr(t1, 5);
+	r.Mul(t1, t0);
+    }
+
+    proc (r: @fe) Pow22523(x: @fe)
+    {   var t0, t1, t2: fe;
+
+	t0.Sqr(x);
+	t1.Sqr(t0);
+	t1.Sqr(t1);
+	t1.Mul(x, t1);
+	t0.Mul(t0, t1);
+	t0.Sqr(t0);
+	t0.Mul(t1, t0);
+	t1.Sqr(t0);		t1.RepSqr(t1, 4);
+	t0.Mul(t1, t0);
+	t1.Sqr(t0);		t1.RepSqr(t1, 9);
+	t1.Mul(t1, t0);
+	t2.Sqr(t1);		t2.RepSqr(t2, 19);
+	t1.Mul(t2, t1);
+	t1.Sqr(t1);		t1.RepSqr(t1, 9);
+	t0.Mul(t1, t0);
+	t1.Sqr(t0);		t1.RepSqr(t1, 49);
+	t1.Mul(t1, t0);
+	t2.Sqr(t1);		t2.RepSqr(t2, 99);
+	t1.Mul(t2, t1);
+	t1.Sqr(t1);		t1.RepSqr(t1, 49);
+	t0.Mul(t1, t0);
+	t0.Sqr(t0);
+	t0.Sqr(t0);
+	r.Mul(t0, x);
+    }
+
+    // Internally numbers are kept less than 2p.
+    // Make them less than p.
+    proc (x: @Key:io) Normalize()
+    {   var i: _uint;
+	var minusp: Key;
+	var c: _uint16;
+
+//print bde, "Normalize:\n";
+//print bde, "\tx=[64%hexn]\n", x;
+	c = 19;
+	for i from 0 to 30 do
+	{   c += x[i];
+	    minusp[i] = c;
+	    c = c >> 8;
+	}
+	c += _uint16(x[31]) - 128;
+	minusp[31] = c;
+	if (c >> 15) & 1 == 0 then
+	    x@ = minusp;
+//print bde, "\tr=[64%hexn]\n", x;
+    }
+
+    proc (h: @fe) Import(s: @Key)
+    {	var i, j: _uint;
+
+	j = 0;
+	i = 0;
+	while i < 32 do
+	{   h[j] = _unpkle(s[i:4]);
+	    j += 1;
+	    i += 4;
+	}
+	h[7] &= 0x7fffffff;
+    }
+
+    proc (h: @fe) Export(s: @Key)
+    {	var i, j: _uint;
+
+	j = 0;
+	i = 0;
+	while i < 32 do
+	{   _packle(s[i:4], h[j]);
+	    j += 1;
+	    i += 4;
+	}
+	s.Normalize();
+    }
+
+    proc (f: @fe) Equal(g: @fe): boolean
+    {	var i: _uint;
+	for i from 0 to 7 do
+	{   if f[i] != g[i] then
+		return false;
+	}
+	return true;
+    }
+
+    proc (x: @fe) IsNonZero(): boolean
+    {   var t: Key;
+	var i: _uint;
+
+	x.Export(t);
+	for i from 0 to 31 do
+	{   if t[i] != 0 then
+		return true;
+	}
+	return false;
+    }
+
+    proc (x: @fe) IsNeg(): boolean
+    {   var t: Key;
+
+	x.Export(t);
+	return (t[0] & 1) != 0;
+    }
+}

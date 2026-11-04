@@ -1,77 +1,159 @@
-import debug;
-alias debug as err;
+import prt;
+var bde: fmt.pDesc;
 
-proc PrintV(s: @[]_byte, x: @[]_uint32)
-{   var i: _uint;
-
-    err.str(s);  err.str(" = 0x");
-    i = 8;
-    do
-    {	i -= 1;
-	err.hex32(x[i]);
-    } while i != 0;
-    err.nl();
-}
-
-proc PrintHexBytes(s: @[]_byte, x: @[]_uint8)
-{   var i: _uint;
-
-    err.str(s);  err.str(" = 0x");
-    for i from 0 to 31 do
-	err.hex8(x[i]);
-    err.nl();
-}
-
-// Keys are stored little endian, i.e. ls byte first
-// Print out big endian
-proc PrintKeyBytes(s: @[]_byte, x: @[]_uint8)
-{   var i: _uint;
-
-    err.str(s);  err.str(" = 0x");
-    i = 32;
-    while i > 0 do
-    {	i -= 1;
-	err.hex8(x[i]);
+package fmt
+{
+    proc hexncvt(buf: @_memory, n: _uint, a: @[]_byte): _uint
+    {   var i: _uint = 0;
+	var k: _uint = 0;
+	while k < n do
+	{   buf[i] =   hexuchr[a[k]>>4];
+	    buf[i+1] = hexuchr[a[k]&0xF];
+	    i += 2;
+	    k += 1;
+	}
+	return i;
     }
-    err.nl();
+
+    proc (bd: fmt.pDesc) hexnfmt(a: @[]_byte, spec: fmt.FmtSpec)
+    {	var w, tw, sw: _uint;
+	const MAXWIDTH = 64;
+	var tmp: [MAXWIDTH]_byte;
+	var buf: @_memory;
+	sw = _min(spec.width, MAXWIDTH);
+	w = hexncvt(tmp, sw/2, a);
+	buf, tw, _ = bd.padding(w, RIGHT, spec);
+	buf[0:w] = tmp[0:w];
+    }
 }
 
 import ed25519;
 
-// Test case from RFC 7748
-var A_prv: ed25519.Key = {
-	0x77,0x07,0x6d,0x0a,0x73,0x18,0xa5,0x7d,
-	0x3c,0x16,0xc1,0x72,0x51,0xb2,0x66,0x45,
-	0xdf,0x4c,0x2f,0x87,0xeb,0xc0,0x99,0x2a,
-	0xb1,0x77,0xfb,0xa5,0x1d,0xb9,0x2c,0x2a };
-
-var B_prv: ed25519.Key = {
-	0x5d,0xab,0x08,0x7e,0x62,0x4a,0x8a,0x4b,
-	0x79,0xe1,0x7f,0x8b,0x83,0x80,0x0e,0xe6,
-	0x6f,0x3b,0xb1,0x29,0x26,0x18,0xb6,0xfd,
-	0x1c,0x2f,0x8b,0x27,0xff,0x88,0xe0,0xeb };
-
-
-    proc TestDH()
-    {   var A_pub, B_pub: ed25519.Key;
-	var A_shr, B_shr: ed25519.Key;
-
-PrintKeyBytes("A_prv", A_prv);
-PrintKeyBytes("B_prv", B_prv);
-	ed25519.GenPubKey(A_prv, A_pub);
-PrintKeyBytes("A_pub", A_pub);
-	ed25519.GenPubKey(B_prv, B_pub);
-PrintKeyBytes("B_pub", B_pub);
-	ed25519.GenShrKey(A_shr, B_pub, A_prv);
-PrintKeyBytes("A_shr", A_shr);
-	ed25519.GenShrKey(B_shr, A_pub, B_prv);
-PrintKeyBytes("B_shr", B_shr);
-    }
-
-proc main(): _int
+alias ed25519.Key as Key;
+proc Hex1(x: _byte): _byte
 {
-    TestDH();
-
-    return 0;
+    if x
+    is '0'..'9' then return x-'0';
+    is 'A'..'F' then return x-'A'+10;
+    is 'a'..'f' then return x-'a'+10;
+    return 0;	// error
 }
 
+proc FromHex(x: @[]_byte, n: _uint, b: @[]_byte)
+{   var i: _uint;
+
+    if n == 0 then return;
+    for i from 0 to n-1 do
+    {   b[i] = (Hex1(x[2*i]) << 4) | (Hex1(x[2*i+1]));
+    }
+}
+
+type TestS:
+{
+    pvtk: @[]_byte;	// private key
+    pubk: @[]_byte;	// public key x
+    msg:  @[]_byte;	// message
+    len:  _uint;	// message length
+    sign: @[]_byte;	// signature R,S
+};
+
+// Test cases from RFC 8032 section 7.1
+const tests: []TestS =
+{
+  { // TEST 1
+    .pvtk = "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60",
+    .pubk = "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+    .msg =  "",
+    .len = 0,
+    .sign = "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e06522490155"
+	    "5fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b"
+  },
+  { // TEST 2
+    .pvtk = "4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb",
+    .pubk = "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
+    .msg  = "72",
+    .len  = 1,
+    .sign = "92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69da"
+	    "085ac1e43e15996e458f3613d0f11d8c387b2eaeb4302aeeb00d291612bb0c00"
+  },
+  { // TEST 3
+    .pvtk = "c5aa8df43f9f837bedb7442f31dcb7b166d38535076f094b85ce3a2e0b4458f7",
+    .pubk = "fc51cd8e6218a1a38da47ed00230f0580816ed13ba3303ac5deb911548908025",
+    .msg  = "af82",
+    .len  = 2,
+    .sign = "6291d657deec24024827e69c3abe01a30ce548a284743a445e3680d7db5ac3ac"
+	    "18ff9b538d16f290ae67f760984dc6594a7c15e9716ed28dc027beceea1ec40a"
+  },
+  { // RNS announce
+    .pvtk = "55fd970087033817a6c0c56af45cc15bf2576d309dd243cb1b8db2b89785c805",
+    .pubk = "BEC089F849A40BCFB60DD0B0AF18BDFE447030EAFC7E4D14643CB051C5FF3C19",
+    .msg  = "14CB29CB444A2EA2E8DFC41942DDA2F4"
+	    "2CA10F3127D9FE72C2100EA5ACB33DF4FC5C1A8A3D5C55D2A3451D3410F88F5F"
+	    "BEC089F849A40BCFB60DD0B0AF18BDFE447030EAFC7E4D14643CB051C5FF3C19"
+	    "8DE025DDDFE0AD9B791A"
+	    "035541FAB3006AE6195B"
+	    "5261646F6E",
+    .len  = 105,
+    .sign = "1F242FD84DFB1C85D0BAB490A7F9244731AEE2525C3236B063E8D2B0890C558A"
+	    "6E02987D61AD5D524294244924EFDCD9DB07D2A735FAC6A62942968AF360BA09"
+   },
+   {
+    .pvtk = "4b7a00961e8b23ac2b0f38ef57092975fea42921aa19fbf810c48a78961ff098",
+    .pubk = "34EAF41CFF23996123F8ADCBD919D8E60FCA371571C01146797E636249F83FAA",
+    .msg  = "581B0C5B2A738052DE1E5408506FA59C"
+	    "23B4F35164E68FB6A592B0D5CF0643CBC650D94B3D491BB2713EF5EA99A39919"
+	    "34EAF41CFF23996123F8ADCBD919D8E60FCA371571C01146797E636249F83FAA"
+	    "8DE025DDDFE0AD9B791A"
+	    "899DD494E6006AE7945A"
+	    "4F67616E6573736F6E",
+    .len  = 109,
+    .sign = "B105AA6B88A8DB014603EEBA77943C199E15029553F76EE8A52CC51B269E94BE"
+	    "72FC8DC8C0B0DB215765C72F2E8078DECE61E6139B9D99BDFB845CCF7A895F06"
+   },
+
+};
+
+
+var buf: [1024]_byte;
+
+proc main(): _int
+{   var i: _uint;
+    var pubk, pvtk, tstk, seed: Key;
+    var asign, tsign: [64]_byte;
+    var errcnt: _int = 0;
+
+    bde = prt.open(prt.fde, 256);
+    bde.setflush(true);
+
+    for i from 0 to tests?len-1 do
+    {
+	print bde, "\nTest [d]\n\n", i+1;
+	FromHex(tests[i].pvtk, Key?len, seed);
+	FromHex(tests[i].pubk, Key?len, tstk);
+//	print bde, "seed:\t[64%hexn]\n", seed;
+	ed25519.GenKeyPair(pubk, pvtk, seed);
+	print bde, "prvk:\t[64%hexn]\n", pvtk;
+	print bde, "pubk:\t[64%hexn]\n", pubk;
+	if pubk != tstk then
+	{   print bde, "GenKeyPair failed\n";
+	    print bde, "tstk:\t[64%hexn]\n", tstk;
+	    errcnt += 1;
+	}
+	FromHex(tests[i].msg,  tests[i].len, buf);
+	ed25519.Sign(asign, buf, tests[i].len, pubk, pvtk);
+	print bde, "sign:\t[64%hexn]\n\t[64%hexn]\n",
+		asign[0:32], asign[32:32];
+	FromHex(tests[i].sign, 64, tsign);
+	if asign != tsign then
+	{   print bde, "Sign failed\n";
+	    print bde, "tsign:\t[64%hexn]\n\t[64%hexn]\n",
+		    tsign[0:32], tsign[32:32];
+	    errcnt += 1;
+	}
+	if !ed25519.Verify(asign, buf, tests[i].len, pubk) then
+	{   print bde, "Verify failed\n";
+	    errcnt += 1;
+	}
+    }
+    return errcnt;
+}

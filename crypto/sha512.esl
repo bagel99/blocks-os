@@ -4,32 +4,21 @@
  * Reference
  *  1. NIST FIPS 180-2
  *
- * Copyright Brian G. Lucas, 2017
+ * Copyright Brian G. Lucas, 2017,2026
  * License: New BSD.
  */
 
 package sha512
 {
-    const BlockSize  = 128;
+    const BlockSize  = 128;	// 1024 bits
     const DigestSize = 64;
 
     type Context:
-    {	total:    [2]_uint64;       // _uint128
+    {	total:    _uint64;       // total size of message
 	state:    [8]_uint64;
 	leftover: [BlockSize]_byte;
     };
     type pContext: @Context;
-
-    const padding: [BlockSize]_byte =
-    {	0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-	   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-	   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-	   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-	   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-	   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-	   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-	   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
-    };
 
     const K: [80]_uint64 =
     {
@@ -89,7 +78,7 @@ package sha512
 
     proc (ctx: pContext) Start()
     {
-	ctx.total[0] = 0;  ctx.total[1] = 0;
+	ctx.total = 0;
 	ctx.state = InitHash;
 	_zero(ctx.leftover);
     }
@@ -131,7 +120,6 @@ package sha512
 	var W: [80]_uint64;
 
 	A = ctx.state;			// array copy
-	
 	for i from 0 to 79 do
 	{   if i < 16 then
 		W[i] = _unpkbe(data[i*8:8]);
@@ -139,7 +127,7 @@ package sha512
 		W[i] = S1(W[i-2]) + W[i-7] + S0(W[i-15]) + W[i-16];
 	    //	P( A[0], A[1], A[2], A[3], A[4], A[5], A[6], A[7], W[i], K[i] );
 	    //      a     b     c     d     e     f     g     h     x     K
-	    //    tmp1 = h + S3(e) + F1(e,f,g) + K + x; 
+	    //    tmp1 = h + S3(e) + F1(e,f,g) + K + x;
 	    //    tmp2 = S2(a) + F0(a,b,c);
 	    //    d += tmp1; h = tmp1 + tmp2;
 	    tmp1 = A[7] + S3(A[4]) + F1(A[4],A[5],A[6]) + K[i] + W[i];
@@ -150,7 +138,7 @@ package sha512
 	    tmp1 = A[7];  A[7] = A[6];  A[6] = A[5];  A[5] = A[4];
 	    A[4] = A[3];  A[3] = A[2];  A[2] = A[1];  A[1] = A[0];
 	    A[0] = tmp1;
-	}     
+	}
 
 	for i from 0 to 7 do
 	    ctx.state[i] += A[i];
@@ -162,11 +150,9 @@ package sha512
 
 	if len == 0 then
 	    return;
-	left = ctx.total[0] & 0x7F;
+	left = ctx.total & 0x7F;
 	fill = 128 - left;
-	ctx.total[0] += len;
-	if ctx.total[0] < len then      // carry out
-	    ctx.total[1] += 1;
+	ctx.total += len;
 	i = 0;
 	// if any leftovers and we can fill it, then process
 	if left != 0 && len >= fill then
@@ -189,23 +175,32 @@ package sha512
 
     proc (ctx: pContext) Finish(out: @[DigestSize]_byte)
     {   var i: _uint;
-	var left, npad: _uint;
-	var hi, lo: _uint64;
-	var tmp: [16]_byte;
+	var left, npad, remain: _uint;
 
-	lo = ctx.total[0] << 3;
-	hi = (ctx.total[1] << 3) | (ctx.total[0] >> 61);
-	_packbe(tmp[0:8], hi);
-	_packbe(tmp[8:8], lo);
-	left = ctx.total[0] & 0x7F;
-	if left < 112 then
-	    npad = 112 - left;		// npad in 1..112
-	else
-	    npad = 240 - left;		// npad in 113..128
-	ctx.Update(padding, npad);	// padding
-	
-	ctx.Update(tmp, 16);		// message length
-	
+	left = ctx.total & 0x7F;
+	// we have room for a least one byte
+	ctx.leftover[left] = 0x80;	// pad with 1
+	left += 1;
+
+	remain = BlockSize - left;
+	if remain < 16 then
+	{   if remain > 0 then
+		_zero(ctx.leftover[left:remain]);
+	    ctx.Process(ctx.leftover);
+	    remain = BlockSize;
+	    left = 0;
+	}
+
+	// zero padding
+	npad = remain - 16;
+	if remain > 0 then
+	    _zero(ctx.leftover[left:npad]);
+
+	// final 128 bits is message size in bits
+	_packbe(ctx.leftover[BlockSize-16:8], _uint64(ctx.total >> 61));
+	_packbe(ctx.leftover[BlockSize-8:8],  _uint64(ctx.total << 3));
+
+	ctx.Process(ctx.leftover);
 
 	for i from 0 to 7 do
 	    _packbe(out[i*8:8], ctx.state[i]);
@@ -224,9 +219,8 @@ package sha512
 
 	ctx.Start();
 	ctx.Update(in, len);
-	ctx.Finish(out);	
+	ctx.Finish(out);
     }
 
 }
 // vim: ts=8 sw=4 noet nowrap
-

@@ -1,0 +1,260 @@
+// TEST: field operations
+//const work64: boolean = true;
+//const use_fe25519: boolean = true;
+//const use_f25519_32: boolean = true;
+const use_f25519_8: boolean = true;
+
+import prt;
+var bde: fmt.pDesc;
+
+package fmt
+{
+    proc hexncvt(buf: @_memory, n: _uint, a: @[]_byte): _uint
+    {   var i: _uint = 0;
+	var k: _uint = 0;
+	while k < n do
+	{   buf[i] =   hexuchr[a[k]>>4];
+	    buf[i+1] = hexuchr[a[k]&0xF];
+	    i += 2;
+	    k += 1;
+	}
+	return i;
+    }
+
+    proc (bd: fmt.pDesc) hexnfmt(a: @[]_byte, spec: fmt.FmtSpec)
+    {	var w, tw, sw: _uint;
+	const MAXWIDTH = 64;
+	var tmp: [MAXWIDTH]_byte;
+	var buf: @_memory;
+	sw = _min(spec.width, MAXWIDTH);
+	w = hexncvt(tmp, sw/2, a);
+	buf, tw, _ = bd.padding(w, RIGHT, spec);
+	buf[0:w] = tmp[0:w];
+    }
+}
+
+proc PrintKey(msg: @[]_byte, x: @[32]_byte)
+{
+    print bde, "[s]\t[064%hexn]\n", msg, x;
+}
+
+if _defined(work64) then
+{
+package fops
+{
+    type fe:
+    {	l0: _uint64;
+	l1: _uint64;
+	l2: _uint64;
+	l3: _uint64;
+	l4: _uint64;
+    };
+    proc fe_set_bytes(v: @fe, x: @[]_byte, len: _uint): : external;
+    proc fe_bytes(s: @[]_byte, v: @fe): : external;
+    proc fe_equal(f: @fe, g: @fe): _int: external;
+    proc fe_invert(v: @fe, f: @fe): : external;
+    proc fe_add(h: @fe, f: @fe, g: @fe): : external;
+    proc fe_mul(h: @fe, f: @fe, g: @fe): : external;
+    proc fe_reduce(h: @fe): : external;
+
+    proc Import(h: @fe, s: @[32]_byte)
+    {
+	fe_set_bytes(h, s, 32);
+    }
+    proc Export(h: @fe, s: @[32]_byte)
+    {
+	fe_bytes(s, h);
+    }
+    proc Equal(f: @fe, g: @fe): boolean
+    {
+	return fe_equal(f, g) == 1;
+    }
+    proc Add(h: @fe, f: @fe, g: @fe)
+    {
+	fe_add(h, f, g);
+    }
+    proc MulRed(h: @fe, f: @fe, g: @fe)
+    {
+	fe_mul(h, f, g);
+	fe_reduce(h);
+    }
+    proc Invert(h: @fe, f: @fe)
+    {
+	fe_invert(h, f);
+    }
+}
+    alias fops as f;
+}
+if _defined(use_fe25519) then {
+    import fe25519;
+    package fe25519
+    {
+    alias Inv as Invert;
+    alias Mul as MulRed;
+    }
+    alias fe25519 as f;
+//    alias fe25519.fe as fe;
+}
+if _defined(use_f25519_32) then {
+    import f25519_32;
+    alias f25519 as f;
+    alias f25519.fe as fe;
+}
+if _defined(use_f25519_8) then {
+    import f25519_8;
+    alias f25519 as f;
+    alias f25519.fe as fe;
+}
+
+const Zero: [32]_byte = { 0 };
+const One:  [32]_byte = { 1 };
+const Two:  [32]_byte = { 2 };
+const Prime:[32]_byte = {0xED, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+			 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+			 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+			 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F};
+
+var rng_state: _uint64 = 0x243f6a8885a308d3;
+
+proc rng_u64(): _uint64
+{   var x: _uint64 = rng_state;
+
+    x ^= x << 13;
+    x ^= x >> 7;
+    x ^= x << 17;
+    rng_state = x;
+    return x;
+}
+
+proc RandomKey(key: @[32]_byte)
+{
+    _packle(key[0:8], rng_u64());
+    _packle(key[8:8], rng_u64());
+    _packle(key[16:8], rng_u64());
+    _packle(key[24:8], rng_u64());
+    // Trim
+    key[31] = (key[31] | 0x40) & 0x7F;	// most significant
+    key[0] &= 0xF8;			// least significant
+}
+
+proc TestInOut()
+{   var xi, xo: [32]_byte;
+    var h: f.fe;
+
+    RandomKey(xi);
+    h.Import(xi);
+    h.Export(xo);
+    if xi != xo then
+    {
+	print bde, "TestInOut failed\n";
+	PrintKey("xi", xi);
+	PrintKey("xo", xo);
+    }
+}
+
+proc TestAdd()
+{   var xr: [32]_byte;
+    var hr, hp, h1: f.fe;
+
+    hp.Import(Prime);
+    h1.Import(One);
+    hr.Add(hp, h1);	// prime plus one
+    hr.Export(xr);
+    if xr != One then
+    {
+	print bde, "Test of prime plus one failed\n";
+	PrintKey("xr", xr);
+    }
+}
+
+proc TestMul()
+{   var x, xr, x2: [32]_byte;
+    var hx, hy, hr, h2: f.fe;
+
+    hx.Import(Zero);
+    hy.Import(One);
+    hr.Mul(hx, hy);
+    hr.Export(xr);
+    if xr != Zero then
+    {
+	print bde, "Test for mul by 0 failed\n";
+ 	PrintKey("xr", xr);
+    }
+
+    hx.Import(One);
+    hy.Import(Two);
+    hr.Mul(hx, hy);
+    hr.Export(xr);
+    if xr != Two then
+    {
+	print bde, "Test for mul by 1 failed\n";
+ 	PrintKey("xr", xr);
+    }
+
+    RandomKey(x);
+    hx.Import(x);
+    h2.Import(Two);
+    hr.Mul(hx, h2);
+    hr.Export(xr);
+    h2.Add(hx, hx);
+    h2.Export(x2);
+    if xr != x2 then
+    {
+	print bde, "Test for mul by 2 failed\n";
+	PrintKey("x", x);
+ 	PrintKey("xr", xr);
+	PrintKey("x2", x2);
+    }
+
+}
+
+proc TestInvert()
+{   var x, xr, xi: [32]_byte;
+    var h, hi, hr: f.fe;
+
+    h.Import(Zero);
+    hi.Inv(h);
+    hi.Export(xi);
+    if xi != Zero then
+    {
+	print bde, "Invert zero failed\n";
+	PrintKey("xi", xi);
+    }
+    h.Import(One);
+    hi.Inv(h);
+    hi.Export(xi);
+    if xi != One then
+    {
+	print bde, "Invert one failed\n";
+	PrintKey("xi", xi);
+    }
+    RandomKey(x);
+    h.Import(x);
+    hi.Inv(h);
+    hr.Mul(h, hi);	// h * h-inverse => one
+    hr.Export(xr);
+    if xr != One then
+    {
+	print bde, "Invert random failed\n";
+	PrintKey("x", x);
+	hi.Export(xi);
+	PrintKey("xi", xi);
+	PrintKey("xr", xr);
+    }
+}
+
+proc main(): _int
+{
+    bde = prt.open(prt.fde, 256);
+    bde.setflush(true);
+    if _defined(work64) then print bde, "Using work64 C version\n";
+    if _defined(use_f25519_8) then print bde, "Using f25519_8 version\n";
+    if _defined(use_f25519_32) then print bde, "Using f25519_32 version\n";
+    if _defined(use_fe25519) then print bde, "Using ed25519 version\n";
+    TestInOut();
+    TestAdd();
+    TestMul();
+    TestInvert();
+
+    return 0;
+}

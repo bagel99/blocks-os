@@ -1,0 +1,227 @@
+/*
+ * Arithmetic mod prime p = 2²⁵⁵-19
+ * Arithmetic is in 8-bit chunks
+
+ * Adapted from Daniel Beer <dlbeer@gmail.com>, 5 Jan 2014
+ * This file is in the public domain.
+ */
+
+package f25519
+{
+    type Base: _uint8;
+    type Base2:_uint16;
+    type Key:  [32]_byte;
+    type fe:   [32]Base;	// little-endian
+
+    proc (h: @fe) Export(s: @Key);	// forward
+    if _defined(bde) then
+    {
+	proc (s: @Key) Print(msg: @[]_byte)
+	{
+	    print bde, "[s][64%hexn]\n", msg, s;
+	}
+	proc (x: @fe) Print(msg: @[]_byte)
+	{   var s: Key;
+	    x.Export(s);
+	    s.Print(msg);
+	}
+    }
+
+    /*
+     * A valid key must have the 2 most significant bits = 01
+     * and the 3 least significant bits = 000
+     */
+    proc TrimKey(key: @Key)
+    {
+	key[31] = (key[31] | 0x40) & 0x7F;	// most significant
+	key[0] &= 0xF8;			// least significant
+    }
+
+
+    // Prime is 2^255 - 19
+    // 0x7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFED
+    const P:    fe = {0xED, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+		      0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+		      0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+		      0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F};
+    const Zero: fe = {0};
+    const One:  fe = {1};
+
+    proc (r: @fe:out) Add(a: @fe:in, b: @fe:in)
+    {	var i: _uint;
+	var c: _uint16;
+
+//print bde, "Add:\n";
+//print bde, "\ta=[64%hexn]\n", a@;
+//print bde, "\tb=[64%hexn]\n", b@;
+
+	c = 0;
+	for i from 0 to 31 do
+	{   c = c >> 8;
+	    c += _uint16(a[i]) + _uint16(b[i]);
+	    r[i] = c;
+	}
+	// Reduce with 2^255 = 19 mod p
+	r[31] &= 0x7F;
+//print bde, "\tr=[64%hexn]\n", r@;
+//print bde, "\tc=[04x]\n", c;
+	c = (c >> 7) * 19;
+	for i from 0 to 31 do
+	{   c += r[i];
+	    r[i] = c;
+	    c = c >> 8;
+	}
+    }
+
+    proc (r: @fe:out) Sub(a: @fe:in, b: @fe:in)
+    {	var i: _uint;
+	var c: _uint32;
+
+	// Calculate a + 2p - b, to avoid underflow
+	c = 218;
+	for i from 0 to 30 do
+	{   c += 65280 + _uint32(a[i]) - _uint32(b[i]);
+	    r[i] = c;
+	    c = c >> 8;
+	}
+	c += _uint32(a[31]) - _uint32(b[31]);
+	// Reduce with 2^255 = 19 mod p
+	r[31] &= 0x7F;
+	c = (c >> 7) * 19;
+	for i from 0 to 31 do
+	{   c += r[i];
+	    r[i] = c;
+	    c = c >> 8;
+	}
+    }
+
+    proc (r: @fe:out) Neg(a: @fe:in)
+    {	var i: _uint;
+	var c: _uint32;
+
+	// Calculate a + 2p - b, to avoid underflow
+	c = 218;
+	for i from 0 to 30 do
+	{   c += 65280 - _uint32(a[i]);
+	    r[i] = c;
+	    c = c >> 8;
+	}
+	c -= _uint32(a[31]);
+	// Reduce with 2^255 = 19 mod p
+	r[31] &= 0x7F;
+	c = (c >> 7) * 19;
+	for i from 0 to 31 do
+	{   c += r[i];
+	    r[i] = c;
+	    c = c >> 8;
+	}
+    }
+
+    // r not aliased with a or b
+    proc MulSub(r: @fe:out, a: @fe:in, b: @fe:in)
+    {	var i, j: _uint;
+	var c: _uint32;
+
+	c = 0;
+	for i from 0 to 31 do
+	{   c = c >> 8;
+	    for j from 0 to i do
+	     	c += _uint32(a[j]) * _uint32(b[i-j]);
+	    for j from i+1 to 31 do
+		c += _uint32(a[j]) * _uint32(b[i+32-j]) * 38;
+	    r[i] = c;
+	}
+	// Reduce with 2^255 = 19 mod p
+	r[31] &= 0x7F;
+	c = (c >> 7) * 19;
+	for i from 0 to 31 do
+	{   c += r[i];
+	    r[i] = c;
+	    c = c >> 8;
+	}
+    }
+
+    // r may be aliased with a or b
+    proc (r: @fe:out) Mul(a: @fe:in, b: @fe:in)
+    {	var t: fe;
+
+	MulSub(t, a, b);
+	r@ = t;
+    }
+
+    /* This is a prime field, so by Fermat's little theorem:
+     *     x^(p-1) = 1 mod p
+     * Therefore, raise to (p-2) = 2^255-21 to get a multiplicative
+     * inverse.
+     * This is a 255-bit binary number with the digits:
+     *     11111111... 01011
+     * We compute the result by the usual binary chain, but
+     * alternate between keeping the accumulator in r and s, so as
+     * to avoid copying temporaries.
+     */
+    // r not aliased with x
+    proc InvSub(r: @fe:out, x: @fe:in)
+    {	var i: _uint;
+	var s: fe;
+
+	MulSub(s, x, x);			// 1 1
+	MulSub(r, s, x);
+	for i from 0 to 247 do			// 1 x 248
+	{   MulSub(s, r, r); MulSub(r, s, x);
+	}
+	MulSub(s, r, r);			// 0
+	MulSub(r, s, s); MulSub(s, r, x);	// 1
+	MulSub(r, s, s);			// 0
+	MulSub(s, r, r); MulSub(r, s, x);	// 1
+	MulSub(s, r, r); MulSub(r, s, x);	// 1
+
+    }
+
+    // r may be aliased with x
+    proc (r: @fe:out) Inv(x: @fe:in)
+    {	var t: fe;
+
+	InvSub(t, x);
+	r@ = t;
+    }
+
+    // Internally numbers are kept less than 2p.
+    // Make them less than p.
+    proc (x: @Key:io) Normalize()
+    {   var i: _uint;
+	var minusp: fe;
+	var c: _uint16;
+
+	c = 19;
+	for i from 0 to 30 do
+	{   c += x[i];
+	    minusp[i] = c;
+	    c = c >> 8;
+	}
+	c += _uint16(x[31]) - 128;
+	minusp[31] = c;
+	if (c >> 15) & 1 == 0 then
+	    x@ = minusp;
+    }
+
+    proc (x: @fe:in) Equal(y: @fe:in): boolean
+    {   var i: _uint;
+
+	for i from 0 to 31 do
+	{   if x[i] != y[i] then
+		return false;
+	}
+	return true;
+    }
+
+    proc (r: @fe:out) Import(s: @Key:in)
+    {
+	r@ = s@;
+    }
+
+    proc (r: @fe:in) Export(s: @Key:out)
+    {
+	s@ = r@;
+	s.Normalize();
+    }
+}
