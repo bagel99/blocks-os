@@ -1,0 +1,105 @@
+import prt;
+var bde: fmt.pDesc;
+
+package fmt
+{
+    proc hexncvt(buf: @_memory, n: _uint, a: @[]_byte): _uint
+    {   var i: _uint = 0;
+	var k: _uint = 0;
+	while k < n do
+	{   buf[i] =   hexuchr[a[k]>>4];
+	    buf[i+1] = hexuchr[a[k]&0xF];
+	    i += 2;
+	    k += 1;
+	}
+	return i;
+    }
+
+    proc (bd: fmt.pDesc) hexnfmt(a: @[]_byte, spec: fmt.FmtSpec)
+    {	var w, tw, sw: _uint;
+	const MAXWIDTH = 64;
+	var tmp: [MAXWIDTH]_byte;
+	var buf: @_memory;
+	sw = _min(spec.width, MAXWIDTH);
+	w = hexncvt(tmp, sw/2, a);
+	buf, tw, _ = bd.padding(w, RIGHT, spec);
+	buf[0:w] = tmp[0:w];
+    }
+}
+proc Hex1(x: _byte): _byte
+{
+    if x
+    is '0'..'9' then return x-'0';
+    is 'A'..'F' then return x-'A'+10;
+    is 'a'..'f' then return x-'a'+10;
+    return 0;	// error
+}
+
+proc FromHex(x: @[]_byte, n: _uint, b: @[]_byte)
+{   var i: _uint;
+
+    if n == 0 then return;
+    for i from 0 to n-1 do
+    {   b[i] = (Hex1(x[2*i]) << 4) | (Hex1(x[2*i+1]));
+    }
+}
+
+import hkdf256;
+
+type TestS:
+{
+    ikey:  @[]_byte;	// initial key
+    salt:  @[]_byte;	// salt
+    info:  @[]_byte;	// info (aka context)
+    dkey:  @[]_byte;	// derived key
+};
+
+const tests: []TestS =
+{
+  {
+    .ikey = "ec1c19c72f7b787bf8eaa92910c8ccace6c6c98d5a7e0cc520fe881a2cec595b",
+    .salt = "463049106d9cd814d55343d292a688d0",
+    .info = "",
+    .dkey = "cf82838e7f10c26f429220402e5ee1cd00545ed6c3ce90fa58d52f436e5ce7c4"
+//           828b099963125cb569732a1133f99f86e0e3f08f58b4ffd74400804ff5380f7e
+  },
+  {
+    .ikey = "754eb6413b312e445d61c19d7713cdf57ed61e9695e3e0c2b93e71b16570ab23",
+    .salt = "107fb3b5f0b4be77b047967229809aef",
+    .info = "",
+//pkey bd8b3bb7b302aff8e4064fe11113fad9489a697f5967e506a103fdd760e0e5e2
+    .dkey = "10516b9273f37e520591458424c66f8f5e7f278e7cfdb2201f2b8d36a5d16d0b"
+//	    "68d3de24c9053f8fc5e02e0bb459b95f222ddb5a00d7c41e233a6ec92c9a898a"
+  },
+};
+
+proc main(): _int
+{   var i: _uint;
+    var errcnt: _int = 0;
+    var ikey: [32]_byte;
+    var salt, info: [128]_byte;
+    var slen, ilen: _uint;
+    var dkey: [32]_byte;
+    var temp: [32]_byte;
+
+    bde = prt.open(prt.fde, 256);
+    bde.setflush(true);
+
+    for i from 0 to tests?len-1 do
+    {
+	FromHex(tests[i].ikey, 32, ikey);
+	slen = _zlen(tests[i].salt@)/2;
+	FromHex(tests[i].salt, slen, salt);
+	ilen = _zlen(tests[i].info@)/2;
+	FromHex(tests[i].info, ilen, info);
+	FromHex(tests[i].dkey, 32, dkey);
+	hkdf256.Derive(temp, ikey, salt, slen, info, ilen);
+	if temp != dkey then
+	{   print bde, "Test [d] failed\n", i+1;
+	    print bde, "bad\t[64%hexn]\n", temp;
+	    print bde, "good\t[64%hexn]\n", dkey;
+	    errcnt += 1;
+	}
+    }
+    return errcnt;
+}

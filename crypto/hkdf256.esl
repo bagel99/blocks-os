@@ -1,0 +1,42 @@
+/*
+ * HKDF - Hashed Key Derivation Function
+ * References:
+ * 1. RFC5869
+ * This routine is specialized for keys that are 256 bits.
+ */
+
+import hmac256;
+
+package hkdf256
+{
+    alias hmac256 as hmac;
+
+    proc Derive(output: @[32]_byte:out,
+		ikey: @[32]_byte:in,
+		salt: @[]_byte:in, slen: _uint,
+		info: @[]_byte:in, ilen: _uint)
+    {
+	var ctx: hmac.Context;
+	var pkey, t: [hmac.DigestSize]_byte;
+	var ctr: [1]_byte;
+	var i, k, n: _uint;
+
+	ctx.Start(salt, slen);
+	ctx.Update(ikey, 32);
+	ctx.Finish(pkey);
+//print bde, "pkey\t[64%hexn]\n", pkey;
+	n = (32 + 31) / 32;
+	k = 0;
+	for i from 1 to n do
+	{
+	    ctx.Start(pkey, 32);
+	    ctx.Update(t, k);	// k is 0 for 1st iteration
+	    ctx.Update(info, ilen);
+	    ctr[0] = i;
+	    ctx.Update(ctr, 1);
+	    ctx.Finish(t);
+	    k = 32;
+	}
+	output@ = t[0:32];
+    }
+}

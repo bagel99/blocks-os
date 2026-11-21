@@ -1,0 +1,310 @@
+/*
+ * Curve 25519
+ * As developed by D.J. Bernstein, and the related Edwards version.
+ * References:
+ *  1. RFC 7749
+ *  2. Various implementations, e.g. tinyssl
+ */
+
+import bignum4; alias bignum as bn;
+
+package x25519
+{
+    // Prime is 2^255 - 19
+    // 0x7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFED
+
+    // Base point as little endian
+    const Gle: [32]_byte = { 9 };
+
+    type Key: [32]_byte;
+    /*
+     * A valid key must have the 2 most significant bits = 01
+     * and the 3 least significant bits = 000
+     */
+    proc TrimKey(key: @Key)
+    {
+	key[31] = (key[31] | 0x40) & 0x7F;	// most significant
+	key[0] &= 0xF8;				// least significant
+    }
+
+    package fops	// field operations
+    {
+        type fe: [8]_uint32;
+	type fe2l: [16]_uint64;
+
+	const P: fe = {
+	    0xFFFFFFED, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF,
+	    0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0x7FFFFFFF };
+
+	const Px3: [8]_uint64 = {
+	    0x2ffffffc7, 0x2fffffffd, 0x2fffffffd, 0x2fffffffd,
+	    0x2fffffffd, 0x2fffffffd, 0x2fffffffd, 0x17ffffffd };
+
+	const Zero: fe = { 0 };
+	const One: fe  = { 1 };
+
+	const A24: _uint32 = 121666;
+
+	/*
+	 * A valid key must have the 2 most significant bits = 01
+	 * and the 3 least significant bits = 000
+	 */
+	proc TrimKey(key: @Key)
+	{
+	    key[31] = (key[31] | 0x40) & 0x7F;	// most significant
+	    key[0] &= 0xF8;			// least significant
+	}
+
+	proc Add(r: @fe, x: @fe, y: @fe)
+	{   var i: _uint;
+	    var u: _uint64;
+
+	    u = 0;
+	    for i from 0 to 6 do
+	    {   u += _uint64(x[i]) + _uint64(y[i]);
+		r[i] = _uint32(u);
+		u = u >> 32;
+	    }
+	    u += _uint64(x[7]) + _uint64(y[7]);
+	    r[7] = u & 0x7FFF_FFFF;
+	    u = (u >> 31) * 19;
+	    for i from 0 to 7 do
+	    {   u += r[i];
+		r[i] = _uint32(u);
+		u = u >> 32;
+	    }
+	}
+
+	// FIXME - is their a way without using Px3?
+	proc Sub(r: @fe, x: @fe, y: @fe)
+	{   var i: _uint;
+	    var u: _uint64;
+
+	    u = 0;
+	    for i from 0 to 6 do
+	    {
+		u += Px3[i] - _uint64(y[i]) + _uint64(x[i]);
+		r[i] = _uint32(u);
+		u = u >> 32;
+	    }
+	    u += Px3[7] - _uint64(y[7]) + _uint64(x[7]);
+	    r[7] = u & 0x7FFF_FFFF;
+	    u = (u >> 31) * 19;
+	    for i from 0 to 7 do
+	    {   u += r[i];
+		r[i] = _uint32(u);
+		u = u >> 32;
+	    }
+	}
+
+	proc Neg(r: @fe, x: @fe)
+	{
+	    Sub(r, Zero, x);
+	}
+
+	proc Reduce(r: @fe, x: @fe2l)
+	{   var i: _uint;
+	    var u: _uint64;
+
+	    u = 0;
+	    for i from 0 to 6 do
+	    {   u += x[i+8] * 38 + x[i];
+		x[i] = u & 0xFFFFFFFF;
+		u = u >> 32;
+	    }
+	    u += x[15] * 38 + x[7];
+	    x[7] = u & 0x7FFFFFFF;
+	    u = (u >> 31) * 19;
+	    for i from 0 to 7 do
+	    {   u += x[i];
+		r[i] = _uint32(u);
+		u = u >> 32;
+	    }
+	}
+
+	proc MulA24(r: @fe, x: @fe)
+	{   var i: _uint;
+	    var u: _uint64;
+
+	    u = 0;
+	    for i from 0 to 6 do
+	    {   u += A24 * x[i];		// double width result
+		r[i] = _uint32(u);
+		u = u >> 32;
+	    }
+	    u += A24 * x[7];
+	    r[7] = u & 0x7FFFFFFF;
+	    u = (u >> 31) * 19;
+	    for i from 0 to 7 do
+	    {   u += r[i];
+		r[i] = _uint32(u);
+		u = u >> 32;
+	    }
+	}
+
+	proc Mul(r: @fe, x: @fe, y: @fe)
+	{   var i, j: _uint;
+	    var u: _uint64;
+	    var t: fe2l;
+
+	    _zero(t);
+	    for i from 0 to 7 do
+	    {   for j from 0 to 7 do
+		{   u = x[i] * y[j];	// double width result
+		    t[i+j]   += _uint32(u);
+		    t[i+j+1] += _uint32(u >> 32);
+		}
+	    }
+	    Reduce(r, t);
+	}
+
+	proc Sqr(r: @fe, x: @fe)
+	{   var i, j: _uint;
+	    var u: _uint64;
+	    var t: fe2l;
+
+	    _zero(t);
+	    for i from 0 to 6 do
+	    {   for j from i+1 to 7 do
+		{	u = x[i] * x[j];	// double width result
+
+		    t[i+j]   += 2 * _uint32(u);
+		    t[i+j+1] += 2 * _uint32(u >> 32);
+		}
+	    }
+ 	    for i from 0 to 7 do
+	    {   u = x[i] * x[i];		// double width result
+		t[i*2]   += _uint32(u);
+		t[i*2+1] += _uint32(u >> 32);
+	    }
+	    Reduce(r, t);
+	}
+
+	proc RepSqr(r: @fe, x: @fe, n: _uint)
+        {   var i: _uint;
+
+	    Sqr(r, x);
+	    loop
+	    {   n -= 1;
+	      exit n == 0;
+		Sqr(r, r);
+	    }
+	}
+
+	proc Inv(r: @fe, x: @fe)
+	{   var i: _uint;
+	    var t0, t1, t2, t3: fe;
+
+	    Sqr(t0, x);			// t0 = x²
+	    RepSqr(t1, t0, 2);		// t1 = x⁸
+	    Mul(t1, x, t1);		// t1 = x⁹
+	    Mul(t0, t0, t1);		// t0 = x¹¹
+	    Sqr(t2, t0);		// t2 = x²²
+	    Mul(t1, t1, t2);		// t1 = x³¹
+	    RepSqr(t2, t1, 5);
+	    Mul(t1, t2, t1);
+	    RepSqr(t2, t1, 10);
+	    Mul(t2, t2, t1);
+	    RepSqr(t3, t2, 20);
+	    Mul(t2, t3, t2);
+	    RepSqr(t2, t2, 10);
+	    Mul(t1, t2, t1);
+	    RepSqr(t2, t1, 50);
+	    Mul(t2, t2, t1);
+	    RepSqr(t3, t2, 100);
+	    Mul(t2, t3, t2);
+	    RepSqr(t2, t2, 50);
+	    Mul(t1, t2, t1);
+	    RepSqr(t1, t1, 5);
+	    Mul(r, t1, t0);
+	}
+    }
+
+    package sops
+    {   alias fops as f;
+	alias fops.fe as fe;
+
+	proc Select(x: @fe, y: @fe, b: _uint32)
+	{   var i: _uint;
+	    var t: _uint32;
+
+	    b = ~b + 1;	// make full width mask
+	    for i from 0 to 7 do
+	    {   t = b & (x[i] ^ y[i]);
+		x[i] ^= t;
+		y[i] ^= t;
+	    }
+	}
+
+	proc Mul(r: @[32]_byte,
+		 e: @[32]_byte,	// pre-trimmed
+		 p: @[32]_byte)	// point, just the x part
+	{
+	    var x1, x2, z2, x3, z3, t0, t1: fe;
+	    var i: _uint;
+	    var swap, bit: _uint;
+
+	    bn.ImportLE(x1, p, 32);
+	    x2 = f.One;
+	    z2 = f.Zero;
+	    x3 = x1;
+	    z3 = f.One;
+	    swap = 0;
+	    i = 255;
+	    do
+	    {   i -= 1;
+		bit = (e[i/8] >> (i % 8)) & 1;
+		swap ^= bit;
+		Select(x2, x3, swap);
+		Select(z2, z3, swap);
+		swap = bit;
+		f.Sub(t0, x3, z3);
+		f.Sub(t1, x2, z2);
+		f.Add(x2, x2, z2);
+		f.Add(z2, x3, z3);
+		f.Mul(z3, t0, x2);
+		f.Mul(z2, z2, t1);
+		f.Sqr(t0, t1);
+		f.Sqr(t1, x2);
+		f.Add(x3, z3, z2);
+		f.Sub(z2, z3, z2);
+		f.Mul(x2, t1, t0);
+		f.Sub(t1, t1, t0);
+		f.Sqr(z2, z2);
+		f.MulA24(z3, t1);
+		f.Sqr(x3, x3);
+		f.Add(t0, t0, z3);
+		f.Mul(z3, x1, z2);
+		f.Mul(z2, t1, t0);
+	    } while i > 0;
+	    Select(x2, x3, swap);
+	    Select(z2, z3, swap);
+	    f.Inv(z2, z2);
+	    f.Mul(x2, x2, z2);
+	    bn.ExportLE(r, x2, 32);
+	}
+    }
+
+    proc GenPubKey(pvtk: @Key, pubk : @Key)
+    {
+	TrimKey(pvtk);
+	sops.Mul(pubk, pvtk, Gle);
+    }
+
+    proc GenShrKey(shrk: @Key, pubk: @Key, pvtk: @Key)
+    {
+	TrimKey(pvtk);
+	sops.Mul(shrk, pvtk, pubk);
+    }
+
+    /*
+     * This routine is used in the Diffie-Hellman key exchange.
+     * share = pvtk raised to the power pubk
+     */
+    proc Exchange(share: @Key, pvtk: @Key, pubk : @Key)
+    {
+	TrimKey(pvtk);
+	sops.Mul(share, pvtk, pubk);
+    }
+
+}

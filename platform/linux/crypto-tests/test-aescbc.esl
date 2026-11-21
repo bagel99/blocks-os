@@ -1,0 +1,175 @@
+import prt;
+var bde: fmt.pDesc;
+
+package fmt
+{
+    proc hexncvt(buf: @_memory, n: _uint, a: @[]_byte): _uint
+    {   var i: _uint = 0;
+	var k: _uint = 0;
+	while k < n do
+	{   buf[i] =   hexuchr[a[k]>>4];
+	    buf[i+1] = hexuchr[a[k]&0xF];
+	    i += 2;
+	    k += 1;
+	}
+	return i;
+    }
+
+    proc (bd: fmt.pDesc) hexnfmt(a: @[]_byte, spec: fmt.FmtSpec)
+    {	var w, tw, sw: _uint;
+	const MAXWIDTH = 64;
+	var tmp: [MAXWIDTH]_byte;
+	var buf: @_memory;
+	sw = _min(spec.width, MAXWIDTH);
+	w = hexncvt(tmp, sw/2, a);
+	buf, tw, _ = bd.padding(w, RIGHT, spec);
+	buf[0:w] = tmp[0:w];
+    }
+}
+
+proc DumpBlock(data: @[]_byte, len: _uint)
+{   var i: _uint;
+
+    for i from 0 to len-1 do
+    {	print bde, "[02X]", data[i];
+	if i % 32 == 31 then print bde, "\n";
+    }
+    print bde, "\n";
+}
+
+
+import aescbc;
+
+type Test:
+{   keysz: aes.KeySize;
+    len:   _uint16;
+    key:   @[]_byte;
+    iv:    @[]_byte;
+    plain: @[]_byte;
+    cipher:@[]_byte;
+};
+
+const tests: []Test =
+{
+  // FIPS SP800-38A Example F.2.1
+  {
+    .keysz = KEY128,
+    .key = {
+	0x2b,0x7e,0x15,0x16,0x28,0xae,0xd2,0xa6,0xab,0xf7,0x15,0x88,0x09,0xcf,0x4f,0x3c
+    },
+    .iv =  {
+	0x00,0x01,0x02,0x03,0x04,0x05,0x06,0x07,0x08,0x09,0x0a,0x0b,0x0c,0x0d,0x0e,0x0f
+    },
+    .len = 16*4,
+    .plain = {
+	0x6b,0xc1,0xbe,0xe2,0x2e,0x40,0x9f,0x96,0xe9,0x3d,0x7e,0x11,0x73,0x93,0x17,0x2a,
+	0xae,0x2d,0x8a,0x57,0x1e,0x03,0xac,0x9c,0x9e,0xb7,0x6f,0xac,0x45,0xaf,0x8e,0x51,
+	0x30,0xc8,0x1c,0x46,0xa3,0x5c,0xe4,0x11,0xe5,0xfb,0xc1,0x19,0x1a,0x0a,0x52,0xef,
+	0xf6,0x9f,0x24,0x45,0xdf,0x4f,0x9b,0x17,0xad,0x2b,0x41,0x7b,0xe6,0x6c,0x37,0x10
+    },
+    .cipher = {
+	0x76,0x49,0xab,0xac,0x81,0x19,0xb2,0x46,0xce,0xe9,0x8e,0x9b,0x12,0xe9,0x19,0x7d,
+	0x50,0x86,0xcb,0x9b,0x50,0x72,0x19,0xee,0x95,0xdb,0x11,0x3a,0x91,0x76,0x78,0xb2,
+	0x73,0xbe,0xd6,0xb8,0xe3,0xc1,0x74,0x3b,0x71,0x16,0xe6,0x9e,0x22,0x22,0x95,0x16,
+	0x3f,0xf1,0xca,0xa1,0x68,0x1f,0xac,0x09,0x12,0x0e,0xca,0x30,0x75,0x86,0xe1,0xa7
+    }
+  },
+/*
+Block#1
+InputBlock
+6bc0bce12a459991e134741a7f9e1925
+
+Block#2
+InputBlock
+d86421fb9f1a1eda505ee1375746972c
+
+Block#3
+InputBlock
+604ed7ddf32efdff7020d0238b7c2a5d
+
+Block#4
+InputBlock
+8521f2fd3c8eef2cdc3da7e5c44ea206
+*/
+  // RFC3602 Case #1: Encrypting 16 bytes (1 block) using AES-CBC with 128-bit key
+  { .keysz = KEY128,
+    .len = 16,
+    .key = {
+	0x06,0xa9,0x21,0x40,0x36,0xb8,0xa1,0x5b,0x51,0x2e,0x03,0xd5,0x34,0x12,0x00,0x06
+    },
+    .iv = {
+	0x3d,0xaf,0xba,0x42,0x9d,0x9e,0xb4,0x30,0xb4,0x22,0xda,0x80,0x2c,0x9f,0xac,0x41
+    },
+    .plain = 'Single block msg',
+    .cipher = {
+	0xe3,0x53,0x77,0x9c,0x10,0x79,0xae,0xb8,0x27,0x08,0x94,0x2d,0xbe,0x77,0x18,0x1a
+    }
+  },
+};
+/*
+// Case #1: Encrypting 16 bytes (1 block) using AES-CBC with 128-bit key
+Key       : 0x06a9214036b8a15b512e03d534120006
+IV        : 0x3dafba429d9eb430b422da802c9fac41
+Plaintext : "Single block msg"
+Ciphertext: 0xe353779c1079aeb82708942dbe77181a
+
+// Case #2: Encrypting 32 bytes (2 blocks) using AES-CBC with 128-bit key
+Key       : 0xc286696d887c9aa0611bbb3e2025a45a
+IV        : 0x562e17996d093d28ddb3ba695a2e6f58
+Plaintext : 0x000102030405060708090a0b0c0d0e0f
+              101112131415161718191a1b1c1d1e1f
+Ciphertext: 0xd296cd94c2cccf8a3a863028b5e1dc0a
+              7586602d253cfff91b8266bea6d61ab1
+
+// Case #3: Encrypting 48 bytes (3 blocks) using AES-CBC with 128-bit key
+Key       : 0x6c3ea0477630ce21a2ce334aa746c2cd
+IV        : 0xc782dc4c098c66cbd9cd27d825682c81
+Plaintext : "This is a 48-byte message (exactly 3 AES blocks)"
+Ciphertext: 0xd0a02b3836451753d493665d33f0e886
+              2dea54cdb293abc7506939276772f8d5
+              021c19216bad525c8579695d83ba2684
+
+// Case #4: Encrypting 64 bytes (4 blocks) using AES-CBC with 128-bit key
+Key       : 0x56e47a38c5598974bc46903dba290349
+IV        : 0x8ce82eefbea0da3c44699ed7db51b7d9
+Plaintext : 0xa0a1a2a3a4a5a6a7a8a9aaabacadaeaf
+              b0b1b2b3b4b5b6b7b8b9babbbcbdbebf
+              c0c1c2c3c4c5c6c7c8c9cacbcccdcecf
+              d0d1d2d3d4d5d6d7d8d9dadbdcdddedf
+Ciphertext: 0xc30e32ffedc0774e6aff6af0869f71aa
+              0f3af07a9a31a9c684db207eb0ef8e4e
+              35907aa632c3ffdf868bb7b29d3d46ad
+              83ce9f9a102ee99d49a53e87f4c3da55
+*/
+
+
+
+var buf: [1024]_byte;
+
+proc main(): _int
+{   var i, n: _uint;
+    var ctx: aescbc.State;
+
+    bde = prt.open(prt.fde, 256);
+    bde.setflush(true);
+
+    for i from 0 to tests?len-1 do
+    {   n = tests[i].len;
+	print bde, "Test [d] len=[d]\n", i+1, n;
+	ctx.Start(tests[i].key, tests[i].keysz, tests[i].iv);
+	ctx.Encrypt(buf, tests[i].plain, n);
+//    DumpBlock(buf, n);
+	if buf[0:n] != tests[i].cipher[0:n] then
+	{
+	    print bde, "Encrypt failed\n";
+	}
+	ctx.Start(tests[i].key, tests[i].keysz, tests[i].iv);
+	ctx.Decrypt(buf, tests[i].cipher, n);
+//    DumpBlock(buf, n);
+	if buf[0:n] != tests[i].plain[0:n] then
+	{
+	    print bde, "Decrypt failed\n";
+	}
+    }
+    return 0;
+}

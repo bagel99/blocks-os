@@ -1,0 +1,105 @@
+import prt;
+var bde: fmt.pDesc;
+
+package fmt
+{
+    proc hexncvt(buf: @_memory, n: _uint, a: @[]_byte): _uint
+    {   var i: _uint = 0;
+	var k: _uint = 0;
+	while k < n do
+	{   buf[i] =   hexuchr[a[k]>>4];
+	    buf[i+1] = hexuchr[a[k]&0xF];
+	    i += 2;
+	    k += 1;
+	}
+	return i;
+    }
+
+    proc (bd: fmt.pDesc) hexnfmt(a: @[]_byte, spec: fmt.FmtSpec)
+    {	var w, tw, sw: _uint;
+	const MAXWIDTH = 64;
+	var tmp: [MAXWIDTH]_byte;
+	var buf: @_memory;
+	sw = _min(spec.width, MAXWIDTH);
+	w = hexncvt(tmp, sw/2, a);
+	buf, tw, _ = bd.padding(w, RIGHT, spec);
+	buf[0:w] = tmp[0:w];
+    }
+}
+proc Hex1(x: _byte): _byte
+{
+    if x
+    is '0'..'9' then return x-'0';
+    is 'A'..'F' then return x-'A'+10;
+    is 'a'..'f' then return x-'a'+10;
+    return 0;	// error
+}
+
+proc FromHex(x: @[]_byte, n: _uint, b: @[]_byte)
+{   var i: _uint;
+
+    if n == 0 then return;
+    for i from 0 to n-1 do
+    {   b[i] = (Hex1(x[2*i]) << 4) | (Hex1(x[2*i+1]));
+    }
+}
+
+import x25519;
+
+alias x25519.Key as Key;
+
+type TestS:
+{
+    Apvtk:  @[]_byte;	// Alice private key
+    Apubk:  @[]_byte;	// Alice public key x
+    Bpvtk:  @[]_byte;	// Bob private key
+    Bpubk:  @[]_byte;	// Bob public key x
+    share:  @[]_byte;	// share secret key
+};
+
+const tests: []TestS =
+{
+  { // from RFC7748
+    .Apvtk = "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a",
+    .Apubk = "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a",
+    .Bpvtk = "5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb",
+    .Bpubk = "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f",
+    .share = "4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742"
+  },
+};
+
+proc main(): _int
+{   var i: _uint;
+    var errcnt: _int = 0;
+    var Apvt, Apub, Bpvt, Bpub, share, temp: Key;
+
+    bde = prt.open(prt.fde, 256);
+    bde.setflush(true);
+
+    for i from 0 to tests?len-1 do
+    {
+	print bde, "\nTest [d]\n\n", i+1;
+	FromHex(tests[i].Apubk, Key?len, Apub);
+	FromHex(tests[i].Apvtk, Key?len, Apvt);
+	FromHex(tests[i].Bpubk, Key?len, Bpub);
+	FromHex(tests[i].Bpvtk, Key?len, Bpvt);
+	FromHex(tests[i].Bpvtk, Key?len, Bpvt);
+	FromHex(tests[i].share, Key?len, share);
+	x25519.Exchange(temp, Apvt, Bpub);
+	    print bde, "temp:\t[64%hexn]\n", temp;
+	if temp != share then
+	{   print bde, "Exchange A failed\n";
+	    print bde, "bad:\t[64%hexn]\n", temp;
+	    print bde, "good:\t[64%hexn]\n", share;
+	    errcnt += 1;
+	}
+	x25519.Exchange(temp, Bpvt, Apub);
+	if temp != share then
+	{   print bde, "Exchange B failed\n";
+	    print bde, "bad:\t[64%hexn]\n", temp;
+	    print bde, "good:\t[64%hexn]\n", share;
+	    errcnt += 1;
+	}
+    }
+    return errcnt;
+}

@@ -1,0 +1,66 @@
+/*
+ * AES CBC mode
+ * References:
+ *  1. RFC 3602
+ *  2. NIST Special Publication 800-38A
+ */
+
+import aes;
+
+package aescbc
+{
+	const BlockSize = 16;	// must be 16, i.e. 128 bits
+
+	type State:
+	{   aes:    aes.Context;    // AES expanded key
+	    feedback: [BlockSize]_byte;
+	};
+	type pState: @State;
+
+	proc XORBlock(out: @[BlockSize]_byte,
+		      in1: @[BlockSize]_byte, in2: @[BlockSize]_byte)::inline
+	{   var i: _uint;
+	    for i from 0 to BlockSize-1 do
+		out[i] = in1[i] ^ in2[i];
+	}
+	proc (s: pState) Start(key: @[]_byte, keysz: aes.KeySize,
+			       iv: @[BlockSize]_byte)
+	{
+	    s.aes.LoadKey(keysz, key);
+	    s.feedback = iv@;
+	}
+
+	proc (s: pState) Encrypt(cipher: @[]_byte, plain: @[]_byte, len:_uint)
+	{   var i, n: _uint;
+	    var input: [BlockSize]_byte;
+
+	    assert len % BlockSize == 0;
+	    for n from 0 to len-1 by BlockSize do
+	    {
+//print bde, "aescbc.Encrypt n=[d]\n", n;
+//print bde, "plain= [32%hexn]\n", plain[n:16];
+		XORBlock(input, plain[n:BlockSize], s.feedback);
+//print bde, "input= [32%hexn]\n", input;
+		s.aes.Encrypt(input, cipher[n:BlockSize]);
+//print bde, "cipher=[32%hexn]\n", cipher[n:16];
+		s.feedback = cipher[n:BlockSize];
+	    }
+	}
+
+	proc (s: pState) Decrypt(plain: @[]_byte, cipher: @[]_byte, len:_uint)
+	{   var i, n: _uint;
+	    var output: [BlockSize]_byte;
+
+	    assert len % BlockSize == 0;
+	    for n from 0 to len-1 by BlockSize do
+	    {
+//print bde, "aescbc.Decrypt n=[d]\n", n;
+//print bde, "cipher=[32%hexn]\n", cipher[n:16];
+		s.aes.Decrypt(cipher[n:BlockSize], output);
+//print bde, "output=[32%hexn]\n", output[n:16];
+		XORBlock(plain[n:BlockSize], output, s.feedback);
+//print bde, "plain= [32%hexn]\n", plain[n:16];
+		s.feedback = cipher[n:BlockSize];
+	    }
+	}
+}
